@@ -1,3 +1,4 @@
 node_modules/
 dist/
+.pi/browser-snapshots-local/
 .DS_Store

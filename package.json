@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "snapshot:zhihu": "node scripts/capture-zhihu-snapshot.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.31",
