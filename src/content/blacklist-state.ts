@@ -1,6 +1,6 @@
 export const STORAGE_KEY = "cocoonBlacklistState";
-export const STORAGE_SCHEMA_VERSION = 2;
-export const LEGACY_STORAGE_SCHEMA_VERSION = 1;
+export const STORAGE_SCHEMA_VERSION = 3;
+export const LEGACY_STORAGE_SCHEMA_VERSIONS = [1, 2] as const;
 export const DEFAULT_TAG_ID = "default";
 export const MAX_TAG_CODE_POINTS = 30;
 export const MAX_IMAGE_BYTES = 500 * 1024;
@@ -17,11 +17,14 @@ export interface CardImage {
   readonly height: number;
 }
 
+export type BlockSource = "direct" | "upvoter";
+
 export interface BlacklistedAuthor {
   readonly userId: string;
   readonly authorNameAtCapture: string;
   readonly tagId: string;
   readonly blacklistedAt: string | null;
+  readonly blockSource: BlockSource;
   readonly cardImage?: CardImage;
 }
 
@@ -62,6 +65,13 @@ export interface CommitInput {
   readonly isNewTag: boolean;
   readonly blacklistedAt: string;
   readonly cardImage?: CardImage;
+}
+
+export interface UpvoterCommitInput {
+  readonly userId: string;
+  readonly authorNameAtCapture: string;
+  readonly tagId: string;
+  readonly blacklistedAt: string;
 }
 
 export type CommitPlan =
@@ -192,20 +202,36 @@ function parseTag(value: unknown): CocoonTag | null {
 function parseAuthor(
   value: unknown,
   validTagIds: ReadonlySet<string>,
-  legacy: boolean,
+  schemaVersion: 1 | 2 | 3,
 ): BlacklistedAuthor | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const { userId, authorNameAtCapture, tagId, cardImage, blacklistedAt } = value;
+  const {
+    userId,
+    authorNameAtCapture,
+    tagId,
+    cardImage,
+    blacklistedAt,
+    blockSource,
+  } = value;
+  const migratedFromV1 = schemaVersion === 1;
+  const parsedBlockSource = schemaVersion === STORAGE_SCHEMA_VERSION
+    ? blockSource
+    : "direct";
   if (
     !isNonEmptyTrimmedString(userId) ||
     typeof authorNameAtCapture !== "string" ||
     !isNonEmptyTrimmedString(tagId) ||
     !validTagIds.has(tagId) ||
     (cardImage !== undefined && !isValidCardImage(cardImage)) ||
-    (!legacy && blacklistedAt !== null && !isValidBlacklistTimestamp(blacklistedAt))
+    (!migratedFromV1 &&
+      blacklistedAt !== null &&
+      !isValidBlacklistTimestamp(blacklistedAt)) ||
+    (parsedBlockSource !== "direct" && parsedBlockSource !== "upvoter") ||
+    (parsedBlockSource === "upvoter" &&
+      (cardImage !== undefined || !isValidBlacklistTimestamp(blacklistedAt)))
   ) {
     return null;
   }
@@ -214,7 +240,8 @@ function parseAuthor(
     userId,
     authorNameAtCapture,
     tagId,
-    blacklistedAt: legacy ? null : (blacklistedAt as string | null),
+    blacklistedAt: migratedFromV1 ? null : (blacklistedAt as string | null),
+    blockSource: parsedBlockSource,
   };
   return cardImage === undefined ? author : { ...author, cardImage };
 }
@@ -228,14 +255,16 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
   if (
     !isRecord(value) ||
     (value.schemaVersion !== STORAGE_SCHEMA_VERSION &&
-      value.schemaVersion !== LEGACY_STORAGE_SCHEMA_VERSION) ||
+      !LEGACY_STORAGE_SCHEMA_VERSIONS.includes(
+        value.schemaVersion as (typeof LEGACY_STORAGE_SCHEMA_VERSIONS)[number],
+      )) ||
     !Array.isArray(value.tags) ||
     !Array.isArray(value.authors)
   ) {
     return { status: "malformed", state: fallback };
   }
 
-  const legacy = value.schemaVersion === LEGACY_STORAGE_SCHEMA_VERSION;
+  const sourceSchemaVersion = value.schemaVersion as 1 | 2 | 3;
   const tags: CocoonTag[] = [];
   const tagIds = new Set<string>();
   const tagNames = new Set<string>();
@@ -265,7 +294,7 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
   const userIds = new Set<string>();
   let totalImageBytes = 0;
   for (const valueAuthor of value.authors) {
-    const author = parseAuthor(valueAuthor, tagIds, legacy);
+    const author = parseAuthor(valueAuthor, tagIds, sourceSchemaVersion);
     if (!author || userIds.has(author.userId)) {
       return { status: "malformed", state: fallback };
     }
@@ -282,7 +311,7 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
   }
 
   return {
-    status: legacy ? "migrated" : "valid",
+    status: sourceSchemaVersion === STORAGE_SCHEMA_VERSION ? "valid" : "migrated",
     state: { schemaVersion: STORAGE_SCHEMA_VERSION, tags, authors },
   };
 }
@@ -333,6 +362,7 @@ export function planAuthorCommit(
     authorNameAtCapture: input.authorNameAtCapture,
     tagId: input.tag.tagId,
     blacklistedAt: input.blacklistedAt,
+    blockSource: "direct",
   };
   const withoutImage: BlacklistState = {
     schemaVersion: STORAGE_SCHEMA_VERSION,
@@ -366,6 +396,43 @@ export function planAuthorCommit(
     withImage,
     withoutImage,
     imageIncluded: true,
+  };
+}
+
+export function planUpvoterCommit(
+  state: BlacklistState,
+  input: UpvoterCommitInput,
+): CommitPlan {
+  if (state.authors.some((author) => author.userId === input.userId)) {
+    return { status: "duplicate", state };
+  }
+
+  if (
+    !isNonEmptyTrimmedString(input.userId) ||
+    typeof input.authorNameAtCapture !== "string" ||
+    !isNonEmptyTrimmedString(input.tagId) ||
+    !state.tags.some((tag) => tag.tagId === input.tagId) ||
+    !isValidBlacklistTimestamp(input.blacklistedAt)
+  ) {
+    return { status: "invalid", state };
+  }
+
+  const author: BlacklistedAuthor = {
+    userId: input.userId,
+    authorNameAtCapture: input.authorNameAtCapture,
+    tagId: input.tagId,
+    blacklistedAt: input.blacklistedAt,
+    blockSource: "upvoter",
+  };
+  const nextState: BlacklistState = {
+    ...state,
+    authors: [...state.authors, author],
+  };
+  return {
+    status: "ready",
+    withImage: nextState,
+    withoutImage: nextState,
+    imageIncluded: false,
   };
 }
 

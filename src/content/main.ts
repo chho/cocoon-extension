@@ -7,9 +7,13 @@ import {
 } from "./blacklist-state";
 import { createCardFilterController } from "./card-filter-controller";
 import { captureCardImage } from "./capture-card-image";
-import { createCommitController } from "./commit-controller";
+import {
+  createCommitController,
+  type CommitResult,
+} from "./commit-controller";
 import {
   createDrawerController,
+  type CommitTask,
   type DrawerTarget,
   type TagSelection,
 } from "./drawer-controller";
@@ -23,17 +27,52 @@ import { parseZhihuUserId } from "./parse-zhihu-user-id";
 import { createMemberUserIdResolver } from "./resolve-member-user-id";
 import { createTagDeletionController } from "./tag-deletion-controller";
 import { renderTagList } from "./tag-list";
+import {
+  REMOTE_PREFERENCES_STORAGE_KEY,
+  createDefaultRemotePreferences,
+  initializeRemotePreferences,
+  parseRemotePreferences,
+  updateRemotePreference,
+  type RemotePreferences,
+} from "./remote-preferences";
+import {
+  createRemotePreferenceController,
+  runAfterRemotePreferencesReady,
+} from "./remote-preference-controller";
+import {
+  createRemoteBlockCoordinator,
+  type CrossContextTryLockResult,
+} from "./remote-block-coordinator";
+import { runAuthorizedRemoteOperations } from "./remote-operation-orchestrator";
+import { createRemoteProgressSession } from "./remote-progress-panel";
+import {
+  createVoterBatchController,
+  type VoterBatchProgress,
+} from "./voter-batch-controller";
+import {
+  blockZhihuUser,
+  fetchCurrentZhihuUser,
+  fetchZhihuBlockedUserIds,
+  fetchZhihuVoters,
+  readXsrfToken,
+} from "./zhihu-remote-api";
+import {
+  resolveZhihuContentSource,
+  type ZhihuContentSource,
+} from "./zhihu-content-source";
 
 const CARD_SELECTOR = ".TopstoryItem";
 const CONTENT_SELECTOR = ".ContentItem[data-zop]";
 const AUTHOR_SELECTOR = ".AuthorInfo-name, .UserLink-link";
 const AUTHOR_PROFILE_LINK_SELECTOR =
   "a.AuthorInfo-name[href], a.UserLink-link[href], .AuthorInfo-name a[href]";
+const CONTENT_LINK_SELECTOR = "a[href]";
 const ENHANCED_CARD_CLASS = "cocoon-zhihu-card";
 const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
 const CLOSE_BUTTON_CLASS = "cocoon-zhihu-card-close";
 const DRAWER_CLASS = "cocoon-tag-drawer";
 const STORAGE_LOCK_NAME = "cocoon-blacklist-storage";
+const PREFERENCES_LOCK_NAME = "cocoon-remote-preferences-storage";
 const BATCH_SIZE = 20;
 
 interface ZhihuCardMetadata {
@@ -135,9 +174,67 @@ async function withStorageLock<T>(
   );
 }
 
+async function withRemoteBlockLock<T>(
+  name: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return navigator.locks.request(name, { mode: "exclusive" }, operation);
+}
+
+async function tryWithRemoteBlockUserLock<T>(
+  name: string,
+  operation: () => Promise<T>,
+): Promise<CrossContextTryLockResult<T>> {
+  return navigator.locks.request(
+    name,
+    { mode: "exclusive", ifAvailable: true },
+    async (lock): Promise<CrossContextTryLockResult<T>> => {
+      if (lock === null) {
+        return { acquired: false };
+      }
+      return { acquired: true, value: await operation() };
+    },
+  );
+}
+
 async function writeStoredState(state: BlacklistState): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
 }
+
+async function readStoredRemotePreferences(): Promise<
+  ReturnType<typeof parseRemotePreferences>
+> {
+  const values = await chrome.storage.local.get(
+    REMOTE_PREFERENCES_STORAGE_KEY,
+  );
+  return parseRemotePreferences(
+    values[REMOTE_PREFERENCES_STORAGE_KEY] as unknown,
+  );
+}
+
+async function withPreferencesLock<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  return navigator.locks.request(
+    PREFERENCES_LOCK_NAME,
+    { mode: "exclusive" },
+    operation,
+  );
+}
+
+async function writeStoredRemotePreferences(
+  preferences: RemotePreferences,
+): Promise<void> {
+  await chrome.storage.local.set({
+    [REMOTE_PREFERENCES_STORAGE_KEY]: preferences,
+  });
+}
+
+const remotePreferencesDependencies = {
+  withExclusiveLock: withPreferencesLock,
+  read: readStoredRemotePreferences,
+  write: writeStoredRemotePreferences,
+};
 
 async function initializeStorage(): Promise<void> {
   try {
@@ -155,6 +252,25 @@ async function initializeStorage(): Promise<void> {
     replaceRuntimeState(createInitialState());
   } finally {
     enqueueAllCards();
+  }
+}
+
+async function initializeRemotePreferenceStorage(): Promise<void> {
+  try {
+    const initialized = await initializeRemotePreferences(
+      remotePreferencesDependencies,
+    );
+    if (initialized.status === "malformed") {
+      console.error(
+        "[Cocoon] 知乎操作偏好格式无效，已安全回退为关闭。",
+      );
+    }
+    replaceRemotePreferences(initialized.preferences);
+  } catch {
+    console.error(
+      "[Cocoon] 无法初始化知乎操作偏好，已安全回退为关闭。",
+    );
+    replaceRemotePreferences(createDefaultRemotePreferences());
   }
 }
 
@@ -212,7 +328,56 @@ newTagInput.autocomplete = "off";
 newTagInput.placeholder = "新标签，按 Enter";
 newTagInput.setAttribute("aria-label", "新标签名称，按 Enter 创建并屏蔽作者");
 newTagForm.append(newTagLabel, newTagInput);
-drawer.append(drawerHeader, tagList, newTagForm);
+
+const remoteOptions = document.createElement("section");
+remoteOptions.className = "cocoon-remote-options";
+remoteOptions.setAttribute("aria-labelledby", "cocoon-remote-options-title");
+const remoteOptionsTitle = document.createElement("div");
+remoteOptionsTitle.id = "cocoon-remote-options-title";
+remoteOptionsTitle.className = "cocoon-remote-options-title";
+remoteOptionsTitle.textContent = "知乎操作";
+
+function createRemoteOption(
+  id: string,
+  text: string,
+): { readonly label: HTMLLabelElement; readonly input: HTMLInputElement } {
+  const label = document.createElement("label");
+  label.className = "cocoon-remote-option";
+  const input = document.createElement("input");
+  input.id = id;
+  input.className = "cocoon-remote-option-input";
+  input.type = "checkbox";
+  const labelText = document.createElement("span");
+  labelText.textContent = text;
+  label.append(input, labelText);
+  return { label, input };
+}
+
+const authorRemoteOption = createRemoteOption(
+  "cocoon-block-author-on-zhihu",
+  "同时在知乎拉黑该作者",
+);
+const voterRemoteOption = createRemoteOption(
+  "cocoon-block-content-voters",
+  "拉黑该内容的点赞者",
+);
+const voterAvailability = document.createElement("div");
+voterAvailability.id = "cocoon-voter-availability";
+voterAvailability.className = "cocoon-voter-availability";
+voterAvailability.textContent = "当前内容无法可靠识别，已停用点赞者操作";
+voterAvailability.hidden = true;
+voterRemoteOption.input.setAttribute(
+  "aria-describedby",
+  voterAvailability.id,
+);
+remoteOptions.append(
+  remoteOptionsTitle,
+  authorRemoteOption.label,
+  voterRemoteOption.label,
+  voterAvailability,
+);
+
+drawer.append(drawerHeader, tagList, newTagForm, remoteOptions);
 document.body.append(drawer);
 
 const drawerVisibility = createDrawerVisibilityController({
@@ -243,9 +408,59 @@ const drawerVisibility = createDrawerVisibilityController({
   },
 });
 
+function renderRemotePreferenceValues(
+  preferences: RemotePreferences,
+): void {
+  authorRemoteOption.input.checked = preferences.blockAuthorOnZhihu;
+  voterRemoteOption.input.checked = preferences.blockContentVoters;
+}
+
+const remotePreferenceController = createRemotePreferenceController({
+  initialPreferences: createDefaultRemotePreferences(),
+  async save(key, value) {
+    return updateRemotePreference(
+      remotePreferencesDependencies,
+      key,
+      value,
+    );
+  },
+  render: renderRemotePreferenceValues,
+  reportFailure() {
+    console.error(
+      "[Cocoon] 无法保存知乎操作偏好，已恢复最近持久化的设置。",
+    );
+  },
+});
+
+function replaceRemotePreferences(preferences: RemotePreferences): void {
+  remotePreferenceController.replacePersisted(preferences);
+}
+
+const remotePreferencesReady = initializeRemotePreferenceStorage();
+
+function setVoterOptionAvailability(target: HtmlDrawerTarget): void {
+  const available = target.voterSource !== null;
+  voterRemoteOption.input.disabled = !available;
+  voterRemoteOption.label.classList.toggle(
+    "cocoon-remote-option-disabled",
+    !available,
+  );
+  voterAvailability.hidden = available;
+}
+
+for (const [key, input] of [
+  ["blockAuthorOnZhihu", authorRemoteOption.input],
+  ["blockContentVoters", voterRemoteOption.input],
+] as const) {
+  input.addEventListener("change", () => {
+    void remotePreferenceController.setPreference(key, input.checked);
+  });
+}
+
 const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>({
-  show() {
+  show(target) {
     renderTagChoices();
+    setVoterOptionAvailability(target);
     drawerVisibility.open();
     positionDrawer();
   },
@@ -264,8 +479,17 @@ const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>(
       button.focus({ preventScroll: true });
     }
   },
+  getRemoteAuthorization(target) {
+    return {
+      blockAuthorOnZhihu: authorRemoteOption.input.checked,
+      blockContentVoters:
+        target.voterSource !== null &&
+        !voterRemoteOption.input.disabled &&
+        voterRemoteOption.input.checked,
+    };
+  },
   commit(task) {
-    void commitController.commit(task);
+    void handleDrawerCommit(task);
   },
 });
 
@@ -295,7 +519,7 @@ function positionDrawer(): void {
 function renderTagChoices(): void {
   renderTagList(tagList, currentState.tags, {
     selectTag(tag) {
-      submitDrawerSelection({ tag, isNewTag: false });
+      void submitDrawerSelection({ tag, isNewTag: false });
     },
     deleteTag(tagId, event) {
       void tagDeletionController.deleteTag(tagId, event);
@@ -303,14 +527,33 @@ function renderTagChoices(): void {
   });
 }
 
-function openDrawer(card: HTMLElement, button: HTMLButtonElement): void {
+function getVoterSource(card: HTMLElement): ZhihuContentSource | null {
+  const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
+  if (!content) {
+    return null;
+  }
+
+  const hrefs = Array.from(
+    content.querySelectorAll<HTMLAnchorElement>(CONTENT_LINK_SELECTOR),
+    (link) => link.getAttribute("href") ?? "",
+  );
+  return resolveZhihuContentSource(hrefs);
+}
+
+async function openDrawer(
+  card: HTMLElement,
+  button: HTMLButtonElement,
+): Promise<void> {
   const target: HtmlDrawerTarget = {
     targetId: getCardTargetId(card),
     card,
     button,
     authorNameAtClick: getAuthorName(card),
+    voterSource: getVoterSource(card),
   };
-  drawerController.open(target);
+  await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
+    drawerController.open(target);
+  });
 }
 
 function showTagValidationError(error: "empty" | "too-long" | "duplicate"): void {
@@ -323,8 +566,12 @@ function showTagValidationError(error: "empty" | "too-long" | "duplicate"): void
   newTagInput.reportValidity();
 }
 
-function submitDrawerSelection(selection: TagSelection): void {
-  drawerController.submit(selection);
+async function submitDrawerSelection(
+  selection: TagSelection,
+): Promise<void> {
+  await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
+    drawerController.submit(selection);
+  });
 }
 
 newTagInput.addEventListener("input", () => {
@@ -341,7 +588,7 @@ newTagForm.addEventListener("submit", (event) => {
     return;
   }
 
-  submitDrawerSelection({
+  void submitDrawerSelection({
     tag: {
       tagId: `tag-${crypto.randomUUID()}`,
       name: validation.normalized,
@@ -460,7 +707,7 @@ function enhanceCard(card: HTMLElement): void {
   closeButton.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openDrawer(card, closeButton);
+    void openDrawer(card, closeButton);
   });
 
   card.append(closeButton);
@@ -556,6 +803,158 @@ const commitController = createCommitController<HTMLElement, HTMLButtonElement>(
   },
 });
 
+const remoteBlockCoordinator = createRemoteBlockCoordinator({
+  withExclusiveLock: withStorageLock,
+  withCrossContextLock: withRemoteBlockLock,
+  tryWithCrossContextUserLock: tryWithRemoteBlockUserLock,
+  readState: readStoredState,
+  writeState: writeStoredState,
+  applyPersistedState: replaceRuntimeState,
+  now: () => new Date(),
+  async blockUser(userId, isStopped) {
+    return blockZhihuUser(fetch, userId, document.cookie, { isStopped });
+  },
+  reportMalformedStorage,
+  reportStorageFailure() {
+    console.error(
+      "[Cocoon] 无法读取或保存远程拉黑所需的本地状态。",
+    );
+  },
+});
+
+function reportRemoteFailure(scope: "作者" | "点赞者批量"): void {
+  console.warn(`[Cocoon] ${scope}知乎拉黑未完整完成。`);
+}
+
+function runRemoteOperations(
+  task: CommitTask<HTMLElement, HTMLButtonElement>,
+  committed: Extract<CommitResult, { status: "persisted" }>,
+): void {
+  let stopped = false;
+  let progressSession: ReturnType<typeof createRemoteProgressSession> | null =
+    null;
+
+  function getProgressSession(): ReturnType<
+    typeof createRemoteProgressSession
+  > {
+    if (progressSession) {
+      return progressSession;
+    }
+    progressSession = createRemoteProgressSession(document, {
+      showAuthor: task.remoteAuthorization.blockAuthorOnZhihu,
+      showVoters:
+        task.remoteAuthorization.blockContentVoters &&
+        task.target.voterSource !== null,
+      stop() {
+        stopped = true;
+      },
+    });
+    console.info(
+      "[Cocoon] 本地屏蔽已保存，知乎操作已作为独立任务启动。",
+    );
+    return progressSession;
+  }
+
+  runAuthorizedRemoteOperations(
+    task.remoteAuthorization,
+    task.target.voterSource,
+    {
+      blockAuthor() {
+        const authorProgress = getProgressSession();
+        authorProgress.updateAuthor("running");
+        void (async () => {
+          try {
+            const result = await remoteBlockCoordinator.block(
+              {
+                source: "direct",
+                userId: committed.userId,
+                expectedBlacklistedAt: committed.blacklistedAt,
+              },
+              () => stopped,
+            );
+            authorProgress.updateAuthor(result);
+            if (result.status === "failed") {
+              reportRemoteFailure("作者");
+            }
+          } catch {
+            authorProgress.updateAuthor({
+              status: "failed",
+              reason: "network",
+            });
+            reportRemoteFailure("作者");
+          }
+        })();
+      },
+
+      blockVoters(voterSource) {
+        const voterProgress = getProgressSession();
+        let latestProgress: VoterBatchProgress = {
+          phase: "preparing",
+          fetched: 0,
+          success: 0,
+          failed: 0,
+          skipped: 0,
+          unprocessed: 0,
+          dataComplete: false,
+        };
+        const voterBatchController = createVoterBatchController({
+          hasBlockAuthorization() {
+            return readXsrfToken(document.cookie) !== null;
+          },
+          async fetchCurrentUser(isStopped) {
+            return fetchCurrentZhihuUser(fetch, { isStopped });
+          },
+          async fetchBlockedUsers(isStopped) {
+            return fetchZhihuBlockedUserIds(fetch, { isStopped });
+          },
+          async fetchVoters(source, isStopped, onProgress) {
+            return fetchZhihuVoters(fetch, source, {
+              isStopped,
+              onProgress,
+            });
+          },
+          readState: readStoredState,
+          coordinator: remoteBlockCoordinator,
+          reportMalformedStorage,
+          reportProgress(progress) {
+            latestProgress = progress;
+            voterProgress.updateVoters(progress);
+          },
+        });
+
+        void (async () => {
+          try {
+            const result = await voterBatchController.run({
+              source: voterSource,
+              tagId: task.selection.tag.tagId,
+              directAuthorUserId: committed.userId,
+              isStopped: () => stopped,
+            });
+            if (result.phase === "failed" || !result.dataComplete) {
+              reportRemoteFailure("点赞者批量");
+            }
+          } catch {
+            voterProgress.updateVoters({
+              ...latestProgress,
+              phase: "failed",
+            });
+            reportRemoteFailure("点赞者批量");
+          }
+        })();
+      },
+    },
+  );
+}
+
+async function handleDrawerCommit(
+  task: CommitTask<HTMLElement, HTMLButtonElement>,
+): Promise<void> {
+  const result = await commitController.commit(task);
+  if (result.status === "persisted") {
+    runRemoteOperations(task, result);
+  }
+}
+
 const tagDeletionController = createTagDeletionController({
   withExclusiveLock: withStorageLock,
   readState: readStoredState,
@@ -567,17 +966,36 @@ const tagDeletionController = createTagDeletionController({
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || !(STORAGE_KEY in changes)) {
+  if (areaName !== "local") {
     return;
   }
 
-  const parsed = parseBlacklistState(changes[STORAGE_KEY]?.newValue as unknown);
-  if (parsed.status === "malformed") {
-    reportMalformedStorage();
+  if (STORAGE_KEY in changes) {
+    const parsed = parseBlacklistState(
+      changes[STORAGE_KEY]?.newValue as unknown,
+    );
+    if (parsed.status === "malformed") {
+      reportMalformedStorage();
+    }
+    replaceRuntimeState(parsed.state);
+    if (parsed.status === "missing" || parsed.status === "migrated") {
+      void initializeStorage();
+    }
   }
-  replaceRuntimeState(parsed.state);
-  if (parsed.status === "missing" || parsed.status === "migrated") {
-    void initializeStorage();
+
+  if (REMOTE_PREFERENCES_STORAGE_KEY in changes) {
+    const parsed = parseRemotePreferences(
+      changes[REMOTE_PREFERENCES_STORAGE_KEY]?.newValue as unknown,
+    );
+    if (parsed.status === "malformed") {
+      console.error(
+        "[Cocoon] 知乎操作偏好格式无效，已安全回退为关闭。",
+      );
+    }
+    replaceRemotePreferences(parsed.preferences);
+    if (parsed.status === "missing") {
+      void initializeRemotePreferenceStorage();
+    }
   }
 });
 

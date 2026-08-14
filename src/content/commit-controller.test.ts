@@ -59,8 +59,13 @@ function task(
       },
       button: { id: `button-${id}` },
       authorNameAtClick: `author-${id}`,
+      voterSource: null,
     },
     selection: selection ?? { tag: initial.tags[0], isNewTag: false },
+    remoteAuthorization: {
+      blockAuthorOnZhihu: false,
+      blockContentVoters: false,
+    },
   };
 }
 

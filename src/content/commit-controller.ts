@@ -9,7 +9,12 @@ import type { CommitTask } from "./drawer-controller";
 import { persistPlannedCommit } from "./persist-blacklist-state.ts";
 
 export type CommitResult =
-  | { readonly status: "persisted"; readonly state: BlacklistState }
+  | {
+      readonly status: "persisted";
+      readonly state: BlacklistState;
+      readonly userId: string;
+      readonly blacklistedAt: string;
+    }
   | { readonly status: "duplicate" }
   | {
       readonly status: "failed";
@@ -95,7 +100,12 @@ export function createCommitController<TCard, TButton>(
       dependencies.reportImageOmitted();
     }
     dependencies.applyPersistedState(persisted.state);
-    return { status: "persisted", state: persisted.state };
+    return {
+      status: "persisted",
+      state: persisted.state,
+      userId,
+      blacklistedAt,
+    };
   }
 
   return {

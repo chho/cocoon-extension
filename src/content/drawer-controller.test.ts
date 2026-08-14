@@ -22,6 +22,7 @@ function target(id: string): DrawerTarget<TestCard, TestButton> {
     card: { id },
     button: { id: `button-${id}` },
     authorNameAtClick: `author-${id}`,
+    voterSource: null,
   };
 }
 
@@ -47,6 +48,12 @@ function createHarness(onCommit?: () => void) {
     },
     restoreFocus(button) {
       restoredFocus.push(button);
+    },
+    getRemoteAuthorization() {
+      return {
+        blockAuthorOnZhihu: true,
+        blockContentVoters: false,
+      };
     },
     commit(task) {
       commits.push(task);
@@ -163,6 +170,10 @@ test("TAG-006/TAG-004/AC-019/020 existing and Enter-created tags each submit exa
   existingHarness.controller.submit(existingSelection);
   strictEqual(existingHarness.commits.length, 1);
   strictEqual(existingHarness.commits[0]?.selection.isNewTag, false);
+  deepStrictEqual(existingHarness.commits[0]?.remoteAuthorization, {
+    blockAuthorOnZhihu: true,
+    blockContentVoters: false,
+  });
 
   const newHarness = createHarness();
   const newSelection = {

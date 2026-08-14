@@ -25,6 +25,7 @@ function populatedState(): BlacklistState {
         authorNameAtCapture: "Move",
         tagId: "remove",
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
         cardImage: {
           dataUrl: "data:image/webp;base64,AA==",
           width: 2,
@@ -36,6 +37,7 @@ function populatedState(): BlacklistState {
         authorNameAtCapture: "Keep",
         tagId: "keep",
         blacklistedAt: null,
+        blockSource: "direct",
       },
     ],
   };
@@ -73,6 +75,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
             authorNameAtCapture: "Concurrent",
             tagId: "remove",
             blacklistedAt: TIMESTAMP,
+            blockSource: "direct",
           },
         ],
       };
@@ -108,6 +111,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
       authorNameAtCapture: "Concurrent",
       tagId: DEFAULT_TAG_ID,
       blacklistedAt: TIMESTAMP,
+      blockSource: "direct",
     },
   ]);
   strictEqual(runtime, stored);
@@ -174,7 +178,7 @@ test("default is protected by controller logic without any storage write", async
   strictEqual(applies, 0);
 });
 
-test("deleting from v1 atomically migrates schema and null timestamps", async () => {
+test("deleting from v1 atomically migrates schema v3, source, and null timestamps", async () => {
   let stored: unknown = {
     schemaVersion: 1,
     tags: [
@@ -209,7 +213,7 @@ test("deleting from v1 atomically migrates schema and null timestamps", async ()
   const result = await controller.deleteTag("remove", event.value);
   strictEqual(result.status, "persisted");
   deepStrictEqual(stored, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [
       {
@@ -217,6 +221,7 @@ test("deleting from v1 atomically migrates schema and null timestamps", async ()
         authorNameAtCapture: "Legacy",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: null,
+        blockSource: "direct",
       },
     ],
   });

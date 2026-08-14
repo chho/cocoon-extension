@@ -12,6 +12,7 @@ import {
   parseBlacklistState,
   planAuthorCommit,
   planTagDeletion,
+  planUpvoterCommit,
   resolveInitializedState,
   runtimeStateAfterPersistence,
   tagLabelKey,
@@ -47,7 +48,7 @@ function commitInput(
   };
 }
 
-test("initializes schema v2 with exactly one built-in default tag", () => {
+test("initializes schema v3 with exactly one built-in default tag", () => {
   const state = createInitialState();
   strictEqual(state.schemaVersion, STORAGE_SCHEMA_VERSION);
   deepStrictEqual(state.tags, [{ tagId: DEFAULT_TAG_ID, name: "default" }]);
@@ -65,6 +66,7 @@ test("uses a valid re-read to preserve state created during initialization", () 
         authorNameAtCapture: "Name",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
       },
     ],
   };
@@ -120,6 +122,7 @@ test("validates v2 state with only exact timestamps or migrated null values", ()
         authorNameAtCapture: "Display name",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
       },
     ],
   };
@@ -156,7 +159,7 @@ test("validates v2 state with only exact timestamps or migrated null values", ()
   deepStrictEqual(parsed.state.authors, []);
 });
 
-test("migrates valid schema v1 tags, authors, and images losslessly with null times", () => {
+test("SOURCE-004 migrates valid schema v1 fields with null times and direct source", () => {
   const image = imageWithBytes(100);
   const legacy = {
     schemaVersion: 1,
@@ -176,10 +179,59 @@ test("migrates valid schema v1 tags, authors, and images losslessly with null ti
   const parsed = parseBlacklistState(legacy);
   strictEqual(parsed.status, "migrated");
   deepStrictEqual(parsed.state, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tags: legacy.tags,
-    authors: [{ ...legacy.authors[0], blacklistedAt: null }],
+    authors: [
+      { ...legacy.authors[0], blacklistedAt: null, blockSource: "direct" },
+    ],
   });
+});
+
+test("SOURCE-004 migrates schema v2 losslessly and requires blockSource in v3", () => {
+  const v2 = {
+    schemaVersion: 2,
+    tags: createInitialState().tags,
+    authors: [
+      {
+        userId: "v2-user",
+        authorNameAtCapture: "V2 name",
+        tagId: DEFAULT_TAG_ID,
+        blacklistedAt: TIMESTAMP,
+        cardImage: imageWithBytes(100),
+      },
+    ],
+  };
+  const migrated = parseBlacklistState(v2);
+  strictEqual(migrated.status, "migrated");
+  deepStrictEqual(migrated.state.authors, [
+    { ...v2.authors[0], blockSource: "direct" },
+  ]);
+
+  strictEqual(
+    parseBlacklistState({
+      ...createInitialState(),
+      authors: [{ ...v2.authors[0] }],
+    }).status,
+    "malformed",
+  );
+});
+
+test("SOURCE-003 rejects a v3 upvoter record without a success timestamp", () => {
+  strictEqual(
+    parseBlacklistState({
+      ...createInitialState(),
+      authors: [
+        {
+          userId: "voter-user",
+          authorNameAtCapture: "Voter",
+          tagId: DEFAULT_TAG_ID,
+          blacklistedAt: null,
+          blockSource: "upvoter",
+        },
+      ],
+    }).status,
+    "malformed",
+  );
 });
 
 test("rejects invalid schemas, unknown tags, and non-WebP images safely", () => {
@@ -298,6 +350,7 @@ test("keeps old images and omits a new image when the total budget is exhausted"
     authorNameAtCapture: "Name",
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIMESTAMP,
+    blockSource: "direct" as const,
     cardImage: image,
   }));
   authors.push({
@@ -305,6 +358,7 @@ test("keeps old images and omits a new image when the total budget is exhausted"
     authorNameAtCapture: "Name",
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIMESTAMP,
+    blockSource: "direct",
     cardImage: imageWithBytes(
       MAX_TOTAL_IMAGE_BYTES - fullImages * MAX_IMAGE_BYTES,
     ),
@@ -338,6 +392,7 @@ test("deleting a tag atomically migrates authors and preserves every other field
         authorNameAtCapture: "Move",
         tagId: "remove",
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
         cardImage: image,
       },
       {
@@ -345,6 +400,7 @@ test("deleting a tag atomically migrates authors and preserves every other field
         authorNameAtCapture: "Keep",
         tagId: "keep",
         blacklistedAt: null,
+        blockSource: "direct",
       },
     ],
   };
@@ -356,6 +412,35 @@ test("deleting a tag atomically migrates authors and preserves every other field
     { ...state.authors[0], tagId: DEFAULT_TAG_ID },
     state.authors[1],
   ]);
+});
+
+test("SOURCE-001/002 plans minimal upvoter records with strict source and no image", () => {
+  const state = createInitialState();
+  const plan = planUpvoterCommit(state, {
+    userId: "voter-user",
+    authorNameAtCapture: "Voter name",
+    tagId: DEFAULT_TAG_ID,
+    blacklistedAt: TIMESTAMP,
+  });
+  strictEqual(plan.status, "ready");
+  if (plan.status !== "ready") return;
+  deepStrictEqual(plan.withoutImage.authors[0], {
+    userId: "voter-user",
+    authorNameAtCapture: "Voter name",
+    tagId: DEFAULT_TAG_ID,
+    blacklistedAt: TIMESTAMP,
+    blockSource: "upvoter",
+  });
+  strictEqual(plan.imageIncluded, false);
+  strictEqual(
+    planUpvoterCommit(plan.withoutImage, {
+      userId: "voter-user",
+      authorNameAtCapture: "Changed",
+      tagId: DEFAULT_TAG_ID,
+      blacklistedAt: "2027-01-01T00:00:00.000Z",
+    }).status,
+    "duplicate",
+  );
 });
 
 test("default deletion is protected in storage logic", () => {
@@ -375,6 +460,7 @@ test("only advances runtime state after persistence succeeds", () => {
         authorNameAtCapture: "Name",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
       },
     ],
   };

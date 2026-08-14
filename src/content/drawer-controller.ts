@@ -4,12 +4,19 @@ import {
   type DrawerState,
 } from "./drawer-state.ts";
 import type { CocoonTag } from "./blacklist-state";
+import type { ZhihuContentSource } from "./zhihu-content-source.ts";
 
 export interface DrawerTarget<TCard, TButton> {
   readonly targetId: string;
   readonly card: TCard;
   readonly button: TButton;
   readonly authorNameAtClick: string;
+  readonly voterSource: ZhihuContentSource | null;
+}
+
+export interface RemoteAuthorization {
+  readonly blockAuthorOnZhihu: boolean;
+  readonly blockContentVoters: boolean;
 }
 
 export interface TagSelection {
@@ -20,6 +27,7 @@ export interface TagSelection {
 export interface CommitTask<TCard, TButton> {
   readonly target: DrawerTarget<TCard, TButton>;
   readonly selection: TagSelection;
+  readonly remoteAuthorization: RemoteAuthorization;
 }
 
 export interface CancelInteraction {
@@ -33,6 +41,9 @@ export interface DrawerControllerDependencies<TCard, TButton> {
   readonly clearDraft: () => void;
   readonly focusInput: () => void;
   readonly restoreFocus: (button: TButton) => void;
+  readonly getRemoteAuthorization: (
+    target: DrawerTarget<TCard, TButton>,
+  ) => RemoteAuthorization;
   readonly commit: (task: CommitTask<TCard, TButton>) => void;
 }
 
@@ -94,7 +105,12 @@ export function createDrawerController<TCard, TButton>(
       }
       const submittedTarget = close(false);
       if (submittedTarget) {
-        dependencies.commit({ target: submittedTarget, selection });
+        dependencies.commit({
+          target: submittedTarget,
+          selection,
+          remoteAuthorization:
+            dependencies.getRemoteAuthorization(submittedTarget),
+        });
       }
     },
 

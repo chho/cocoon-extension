@@ -30,7 +30,7 @@ function legacyState(authorIds: readonly string[] = []) {
   };
 }
 
-test("MIG-001 migrates v1 to v2 in one locked write without losing fields", async () => {
+test("SOURCE-004 migrates v1 to v3 in one locked write without losing fields", async () => {
   let stored: unknown = legacyState(["legacy-user"]);
   const writes: BlacklistState[] = [];
   const result = await initializeBlacklistState({
@@ -49,12 +49,13 @@ test("MIG-001 migrates v1 to v2 in one locked write without losing fields", asyn
   strictEqual(result.status, "valid");
   strictEqual(writes.length, 1);
   deepStrictEqual(writes[0], {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tags: legacyState().tags,
     authors: [
       {
         ...legacyState(["legacy-user"]).authors[0],
         blacklistedAt: null,
+        blockSource: "direct",
       },
     ],
   });
@@ -83,18 +84,19 @@ test("MIG-001 re-reads under the lock so a concurrent v1 update is preserved", a
     writes[0]?.authors.map((author) => ({
       userId: author.userId,
       blacklistedAt: author.blacklistedAt,
+      blockSource: author.blockSource,
     })),
     [
-      { userId: "initial", blacklistedAt: null },
-      { userId: "concurrent", blacklistedAt: null },
+      { userId: "initial", blacklistedAt: null, blockSource: "direct" },
+      { userId: "concurrent", blacklistedAt: null, blockSource: "direct" },
     ],
   );
 });
 
-test("initialization does not overwrite a valid v2 state created before lock acquisition", async () => {
+test("initialization does not overwrite a valid v3 state created before lock acquisition", async () => {
   let stored: unknown = undefined;
   const concurrentState: BlacklistState = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [
       {
@@ -102,6 +104,7 @@ test("initialization does not overwrite a valid v2 state created before lock acq
         authorNameAtCapture: "Concurrent",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
       },
     ],
   };
