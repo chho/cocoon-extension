@@ -101,6 +101,8 @@ PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 pi
 - `/json/version`、`/json/list` 等 HTTP 发现接口返回 `404`，只表示该发现接口不可用，不能据此认定 CDP 不可用。
 - HTTP 发现接口返回 `404` 时，应读取现有 Chrome Profile 中的 `DevToolsActivePort`，连接其中记录的 Browser WebSocket。
 - 通过 Browser WebSocket 调用 `Target.getTargets` 查找现有标签页，再使用 `Target.attachToTarget` 和带 `sessionId` 的 CDP 命令（如 `Runtime.evaluate`）检查页面。
+- 同一次用户授权的浏览器检查必须优先建立一个长生命周期的 Browser WebSocket，并复用同一个目标页 `sessionId` 完成全部已规划检查；不得为每个查询分别启动短命进程、重复连接或重复 attach，避免反复触发 Chrome 的 “Allow” 提示。
+- 应先汇总需要执行的只读检查，再在单个 CDP 会话中批量完成。只有连接意外断开或目标会话失效时才允许重连；重连前应告知用户可能再次触发 Chrome 授权提示。
 - 仅当常规发现和 Browser WebSocket 直连都失败时，才能判定 CDP 不可用；此时应报告准确错误，不得回退到新浏览器实例。
 - 除非用户明确要求，不得导航、刷新或关闭用户已有标签页。
 - 浏览器验证报告必须区分真实观察结果与源码推断，不得把未执行的检查描述为已验证。
