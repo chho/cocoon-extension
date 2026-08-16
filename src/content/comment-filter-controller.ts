@@ -4,7 +4,7 @@ import {
 } from "./blacklist-state.ts";
 import { parseZhihuUserId } from "./parse-zhihu-user-id.ts";
 
-const COMMENTS_CONTAINER_SELECTOR = ".Comments-container";
+const COMMENTS_CONTAINER_SELECTOR = ".Comments-container, .Modal-content";
 const COMMENT_ROOT_SELECTOR = "div[data-id]";
 export const COMMENT_HIDDEN_CLASS = "cocoon-comment-blacklisted";
 

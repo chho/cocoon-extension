@@ -35,6 +35,9 @@ function fixture(): JSDOM {
         <div data-id="name-only" id="name-only">blocked-top</div>
       </div>
     </div>
+    <div data-id="outside-comment-boundary" id="outside-boundary">
+      <a href="/people/blocked-top">outside</a>
+    </div>
   </body>`);
 }
 
@@ -61,7 +64,10 @@ test("COMMENT-001/004/AC-062/065 uses only own-root exact links and fails open w
   const reply = dom.window.document.querySelector<HTMLElement>("#reply-visible");
   const ambiguous = dom.window.document.querySelector<HTMLElement>("#ambiguous");
   const nameOnly = dom.window.document.querySelector<HTMLElement>("#name-only");
-  if (!top || !reply || !ambiguous || !nameOnly) {
+  const outside = dom.window.document.querySelector<HTMLElement>(
+    "#outside-boundary",
+  );
+  if (!top || !reply || !ambiguous || !nameOnly || !outside) {
     throw new Error("Missing comment fixtures.");
   }
 
@@ -69,6 +75,7 @@ test("COMMENT-001/004/AC-062/065 uses only own-root exact links and fails open w
   strictEqual(resolveCommentAuthorUserId(reply), "visible-reply");
   strictEqual(resolveCommentAuthorUserId(ambiguous), null);
   strictEqual(resolveCommentAuthorUserId(nameOnly), null);
+  strictEqual(resolveCommentAuthorUserId(outside), null);
   strictEqual(resolveCommentAuthorUserId(top), "blocked-top");
 });
 
@@ -84,7 +91,12 @@ test("COMMENT-001/003/AC-062 filters direct and upvoter IDs with one CSS state o
   const top = dom.window.document.querySelector<HTMLElement>("#top-blocked");
   const reply = dom.window.document.querySelector<HTMLElement>("#reply-visible");
   const ambiguous = dom.window.document.querySelector<HTMLElement>("#ambiguous");
-  if (!top || !reply || !ambiguous) throw new Error("Missing fixtures.");
+  const outside = dom.window.document.querySelector<HTMLElement>(
+    "#outside-boundary",
+  );
+  if (!top || !reply || !ambiguous || !outside) {
+    throw new Error("Missing fixtures.");
+  }
   strictEqual(top.classList.contains(COMMENT_HIDDEN_CLASS), true);
   strictEqual(reply.classList.contains(COMMENT_HIDDEN_CLASS), true);
   strictEqual(
@@ -92,6 +104,7 @@ test("COMMENT-001/003/AC-062 filters direct and upvoter IDs with one CSS state o
     1,
   );
   strictEqual(ambiguous.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  strictEqual(outside.classList.contains(COMMENT_HIDDEN_CLASS), false);
   strictEqual(top.querySelector("p")?.textContent, "top body");
   strictEqual(top.isConnected, true);
 });
@@ -283,9 +296,12 @@ const MEMBER_HASH = "a".repeat(32);
 const OTHER_HASH = "b".repeat(32);
 const ALIAS_TIMESTAMP = "2026-08-14T12:00:00.000Z";
 
-function aliasCommentFixture(count = 1): JSDOM {
+function aliasCommentFixture(
+  count = 1,
+  containerClass = "Comments-container",
+): JSDOM {
   return new JSDOM(`<!doctype html><body>
-    <div class="Comments-container">
+    <div class="${containerClass}">
       ${Array.from({ length: count }, (_, index) => `
         <div data-id="hash-comment-${index}" id="hash-comment-${index}">
           <a href="/people/${MEMBER_HASH}">author</a>
@@ -322,34 +338,36 @@ async function settleAliasWork(): Promise<void> {
   }
 }
 
-test("BUG-008 direct comment token or member-hash matches never request an alias GET", () => {
-  for (const [profileId, blockedId] of [
-    ["canonical-token", "canonical-token"],
-    [MEMBER_HASH, MEMBER_HASH],
-  ] as const) {
-    const dom = aliasCommentFixture();
-    const link = dom.window.document.querySelector<HTMLAnchorElement>("a[href]");
-    const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
-    if (!link || !root) throw new Error("Missing direct alias fixture.");
-    link.href = `/people/${profileId}`;
-    const frames = createFrames();
-    let aliasRequests = 0;
-    const controller = createCommentFilterController({
-      schedule: frames.schedule,
-      async resolveHistoricalAlias() {
-        aliasRequests += 1;
-      },
-    });
-    controller.updateStableUserIds(new Set([blockedId]));
-    controller.scan(dom.window.document.body);
-    frames.flush();
-    strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
-    strictEqual(aliasRequests, 0);
+test("BUG-008/010 inline and modal direct matches never request an alias GET", () => {
+  for (const containerClass of ["Comments-container", "Modal-content"]) {
+    for (const [profileId, blockedId] of [
+      ["canonical-token", "canonical-token"],
+      [MEMBER_HASH, MEMBER_HASH],
+    ] as const) {
+      const dom = aliasCommentFixture(1, containerClass);
+      const link = dom.window.document.querySelector<HTMLAnchorElement>("a[href]");
+      const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+      if (!link || !root) throw new Error("Missing direct alias fixture.");
+      link.href = `/people/${profileId}`;
+      const frames = createFrames();
+      let aliasRequests = 0;
+      const controller = createCommentFilterController({
+        schedule: frames.schedule,
+        async resolveHistoricalAlias() {
+          aliasRequests += 1;
+        },
+      });
+      controller.updateStableUserIds(new Set([blockedId]));
+      controller.scan(dom.window.document.body);
+      frames.flush();
+      strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
+      strictEqual(aliasRequests, 0);
+    }
   }
 });
 
-test("BUG-008 two comment roots share one member GET and at most one atomic alias write", async () => {
-  const dom = aliasCommentFixture(2);
+test("BUG-008/010 modal comment roots share one member GET and one atomic alias write", async () => {
+  const dom = aliasCommentFixture(2, "Modal-content");
   const frames = createFrames();
   let stored = blockedAliasState();
   let fetches = 0;
@@ -407,7 +425,7 @@ test("BUG-008 two comment roots share one member GET and at most one atomic alia
   }
 });
 
-test("BUG-008 alias API null, unknown token, conflict, and storage failure keep comments visible", async () => {
+test("BUG-008/010 modal alias failures keep comments visible", async () => {
   const scenarios = [
     { name: "API null", resolved: null, initial: blockedAliasState() },
     { name: "unknown token", resolved: "unknown-token", initial: blockedAliasState() },
@@ -416,7 +434,7 @@ test("BUG-008 alias API null, unknown token, conflict, and storage failure keep 
   ] as const;
 
   for (const scenario of scenarios) {
-    const dom = aliasCommentFixture();
+    const dom = aliasCommentFixture(1, "Modal-content");
     const frames = createFrames();
     let stored: BlacklistState = scenario.initial;
     let applies = 0;
