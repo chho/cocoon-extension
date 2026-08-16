@@ -5,18 +5,24 @@ import { createCardFilterController } from "./card-filter-controller.ts";
 
 interface TestCard {
   readonly id: string;
-  readonly displayName: string;
-  readonly stableUserId: string | null;
+  readonly directIds: ReadonlySet<string>;
+  readonly resolvedUserId: string | null;
   hidden: boolean;
   prepared: number;
 }
 
 function card(
   id: string,
-  stableUserId: string | null,
-  displayName = "Same display name",
+  directIds: readonly string[],
+  resolvedUserId: string | null = null,
 ): TestCard {
-  return { id, stableUserId, displayName, hidden: false, prepared: 0 };
+  return {
+    id,
+    directIds: new Set(directIds),
+    resolvedUserId,
+    hidden: false,
+    prepared: 0,
+  };
 }
 
 function createHarness() {
@@ -27,9 +33,12 @@ function createHarness() {
     prepareCard(value) {
       value.prepared += 1;
     },
+    resolveDirectStableUserIds(value) {
+      return value.directIds;
+    },
     async resolveStableUserId(value) {
       resolutions.push(value.id);
-      return value.stableUserId;
+      return value.resolvedUserId;
     },
     setHidden(value, hidden) {
       value.hidden = hidden;
@@ -44,8 +53,7 @@ function createHarness() {
 
   async function flush(): Promise<void> {
     while (frames.length > 0) {
-      const frame = frames.shift();
-      frame?.();
+      frames.shift()?.();
       await Promise.resolve();
     }
     await Promise.resolve();
@@ -54,53 +62,50 @@ function createHarness() {
   return { controller, resolutions, failures, flush };
 }
 
-test("BL-002/007/AC-002/009 filters every matching stable ID without using display names", async () => {
+test("BUG-008 token and hash direct matches hide cards without a member GET", async () => {
   const harness = createHarness();
-  const firstMatch = card("match-a", "stable-blocked");
-  const secondMatch = card("match-b", "stable-blocked", "Other name");
-  const sameNameOtherId = card("visible", "stable-visible");
-  harness.controller.loadStableUserIds(new Set(["stable-blocked"]));
-
-  harness.controller.enqueue(firstMatch);
-  harness.controller.enqueue(secondMatch);
-  harness.controller.enqueue(sameNameOtherId);
+  const hash = "a".repeat(32);
+  const tokenCard = card("token", ["blocked-token"]);
+  const hashCard = card("hash", [hash]);
+  const visible = card("visible", ["visible-token"]);
+  harness.controller.loadStableUserIds(new Set(["blocked-token", hash]));
+  for (const value of [tokenCard, hashCard, visible]) {
+    harness.controller.enqueue(value);
+  }
   await harness.flush();
 
-  strictEqual(firstMatch.hidden, true);
-  strictEqual(secondMatch.hidden, true);
-  strictEqual(sameNameOtherId.hidden, false);
-  deepStrictEqual(harness.resolutions.sort(), ["match-a", "match-b", "visible"]);
+  strictEqual(tokenCard.hidden, true);
+  strictEqual(hashCard.hidden, true);
+  strictEqual(visible.hidden, false);
+  deepStrictEqual(harness.resolutions, ["visible"]);
   deepStrictEqual(harness.failures, []);
 });
 
-test("BL-004/AC-003 dynamically enqueued matching cards are filtered", async () => {
+test("metadata-only cards use the existing resolver when no direct identifier matches", async () => {
   const harness = createHarness();
-  harness.controller.loadStableUserIds(new Set(["stable-blocked"]));
-  const initial = card("initial", "stable-visible");
-  harness.controller.enqueue(initial);
+  const value = card("metadata-only", ["a".repeat(32)], "blocked-token");
+  harness.controller.loadStableUserIds(new Set(["blocked-token"]));
+  harness.controller.enqueue(value);
   await harness.flush();
-  strictEqual(initial.hidden, false);
-
-  const dynamicallyAdded = card("dynamic", "stable-blocked");
-  harness.controller.enqueue(dynamicallyAdded);
-  await harness.flush();
-  strictEqual(dynamicallyAdded.hidden, true);
-  strictEqual(dynamicallyAdded.prepared, 1);
+  strictEqual(value.hidden, true);
+  deepStrictEqual(harness.resolutions, ["metadata-only"]);
 });
 
-test("cards encountered before storage load are re-evaluated after load", async () => {
+test("dynamic cards and cards encountered before storage load are reevaluated", async () => {
   const harness = createHarness();
-  const earlyCard = card("early", "stable-blocked");
-  harness.controller.enqueue(earlyCard);
+  const early = card("early", ["blocked"]);
+  harness.controller.enqueue(early);
   await harness.flush();
+  strictEqual(early.hidden, false);
+  strictEqual(early.prepared, 1);
 
-  strictEqual(earlyCard.hidden, false);
-  strictEqual(harness.resolutions.length, 0);
-  strictEqual(earlyCard.prepared, 1);
-
-  harness.controller.loadStableUserIds(new Set(["stable-blocked"]));
+  harness.controller.loadStableUserIds(new Set(["blocked"]));
   await harness.flush();
-  strictEqual(earlyCard.hidden, true);
-  strictEqual(harness.resolutions.length, 1);
-  strictEqual(earlyCard.prepared, 2);
+  strictEqual(early.hidden, true);
+
+  const dynamic = card("dynamic", ["blocked"]);
+  harness.controller.enqueue(dynamic);
+  await harness.flush();
+  strictEqual(dynamic.hidden, true);
+  strictEqual(dynamic.prepared, 1);
 });

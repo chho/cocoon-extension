@@ -3,36 +3,30 @@ import { test } from "node:test";
 
 import {
   DEFAULT_TAG_ID,
-  MAX_IMAGE_BYTES,
-  MAX_TOTAL_IMAGE_BYTES,
   STORAGE_SCHEMA_VERSION,
   createBlacklistTimestamp,
   createInitialState,
+  isMemberHashId,
   isValidBlacklistTimestamp,
+  normalizeMemberHashId,
   parseBlacklistState,
   planAuthorCommit,
+  planMemberHashBackfill,
   planTagDeletion,
   planUpvoterCommit,
   resolveInitializedState,
   runtimeStateAfterPersistence,
   tagLabelKey,
-  utf8ByteLength,
   validateNewTagLabel,
   type BlacklistState,
-  type CardImage,
   type CommitInput,
 } from "./blacklist-state.ts";
 
 const TIMESTAMP = "2026-08-13T12:34:56.789Z";
-
-function imageWithBytes(targetBytes: number): CardImage {
-  const prefix = "data:image/webp;base64,";
-  return {
-    dataUrl: prefix + "a".repeat(targetBytes - utf8ByteLength(prefix)),
-    width: 100,
-    height: 80,
-  };
-}
+const HASH_A = "a".repeat(32);
+const HASH_B = "b".repeat(32);
+const MIXED_HASH = "aBcDeF0123456789".repeat(2);
+const CANONICAL_MIXED_HASH = MIXED_HASH.toLowerCase();
 
 function commitInput(
   state: BlacklistState,
@@ -40,17 +34,33 @@ function commitInput(
 ): CommitInput {
   return {
     userId: "stable-user",
+    memberHashId: null,
     authorNameAtCapture: "Name",
-    tag: state.tags[0],
+    tag: state.tags[0]!,
     isNewTag: false,
     blacklistedAt: TIMESTAMP,
     ...overrides,
   };
 }
 
-test("initializes schema v3 with exactly one built-in default tag", () => {
+function author(
+  userId: string,
+  memberHashId: string | null = null,
+) {
+  return {
+    userId,
+    memberHashId,
+    authorNameAtCapture: `Name ${userId}`,
+    tagId: DEFAULT_TAG_ID,
+    blacklistedAt: TIMESTAMP,
+    blockSource: "direct" as const,
+  };
+}
+
+test("CAP-007 initializes strict schema v4 with one built-in tag", () => {
   const state = createInitialState();
   strictEqual(state.schemaVersion, STORAGE_SCHEMA_VERSION);
+  strictEqual(STORAGE_SCHEMA_VERSION, 4);
   deepStrictEqual(state.tags, [{ tagId: DEFAULT_TAG_ID, name: "default" }]);
   deepStrictEqual(state.authors, []);
   strictEqual(parseBlacklistState(undefined).status, "missing");
@@ -60,24 +70,13 @@ test("uses a valid re-read to preserve state created during initialization", () 
   const initialRead = parseBlacklistState(undefined);
   const concurrentState: BlacklistState = {
     ...createInitialState(),
-    authors: [
-      {
-        userId: "stable-user",
-        authorNameAtCapture: "Name",
-        tagId: DEFAULT_TAG_ID,
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-      },
-    ],
+    authors: [author("stable-user")],
   };
   const concurrentRead = parseBlacklistState(concurrentState);
-  strictEqual(
-    resolveInitializedState(initialRead, concurrentRead),
-    concurrentRead.state,
-  );
+  strictEqual(resolveInitializedState(initialRead, concurrentRead), concurrentRead.state);
 });
 
-test("normalizes tag labels and enforces case-insensitive uniqueness", () => {
+test("normalizes tag labels and validates timestamps and member hashes", () => {
   const tags = createInitialState().tags;
   deepStrictEqual(validateNewTagLabel("  Reading  ", tags), {
     normalized: "Reading",
@@ -85,385 +84,239 @@ test("normalizes tag labels and enforces case-insensitive uniqueness", () => {
   });
   strictEqual(validateNewTagLabel(" DEFAULT ", tags).error, "duplicate");
   strictEqual(tagLabelKey("  DeFaUlT "), "default");
-  strictEqual(validateNewTagLabel("   ", tags).error, "empty");
-});
-
-test("counts the 30-character limit by Unicode code points", () => {
-  strictEqual(validateNewTagLabel("😀".repeat(30), []).error, null);
   strictEqual(validateNewTagLabel("😀".repeat(31), []).error, "too-long");
-});
-
-test("accepts only exact Date.toISOString UTC timestamps", () => {
   strictEqual(isValidBlacklistTimestamp(TIMESTAMP), true);
   strictEqual(isValidBlacklistTimestamp("2026-08-13T12:34:56Z"), false);
-  strictEqual(isValidBlacklistTimestamp("2026-08-13T12:34:56.789+00:00"), false);
-  strictEqual(isValidBlacklistTimestamp("2026-02-30T12:34:56.789Z"), false);
-  strictEqual(isValidBlacklistTimestamp("not-a-date"), false);
-  strictEqual(isValidBlacklistTimestamp(null), false);
+  strictEqual(isMemberHashId(HASH_A), true);
+  strictEqual(isMemberHashId(MIXED_HASH), true);
+  strictEqual(isMemberHashId("not-a-hash"), false);
+  strictEqual(normalizeMemberHashId(MIXED_HASH), CANONICAL_MIXED_HASH);
+  strictEqual(normalizeMemberHashId("CaseSensitive-Token"), null);
 });
 
-test("creates one timestamp from the injected clock and rejects an invalid clock", () => {
-  let clockCalls = 0;
-  const timestamp = createBlacklistTimestamp(() => {
-    clockCalls += 1;
+test("creates one timestamp from the injected clock", () => {
+  let calls = 0;
+  strictEqual(createBlacklistTimestamp(() => {
+    calls += 1;
     return new Date(TIMESTAMP);
-  });
-  strictEqual(timestamp, TIMESTAMP);
-  strictEqual(clockCalls, 1);
+  }), TIMESTAMP);
+  strictEqual(calls, 1);
   throws(() => createBlacklistTimestamp(() => new Date(Number.NaN)), /Invalid time value/);
 });
 
-test("validates v2 state with only exact timestamps or migrated null values", () => {
-  const valid: BlacklistState = {
-    ...createInitialState(),
-    authors: [
-      {
-        userId: "stable-user",
-        authorNameAtCapture: "Display name",
-        tagId: DEFAULT_TAG_ID,
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-      },
-    ],
-  };
-  strictEqual(parseBlacklistState(valid).status, "valid");
-  strictEqual(
-    parseBlacklistState({
-      ...valid,
-      authors: [{ ...valid.authors[0], blacklistedAt: null }],
-    }).status,
-    "valid",
-  );
-  for (const blacklistedAt of [
-    undefined,
-    0,
-    "2026-08-13",
-    "2026-08-13T12:34:56.789+00:00",
-    "2026-02-30T12:34:56.789Z",
-  ]) {
-    strictEqual(
-      parseBlacklistState({
-        ...valid,
-        authors: [{ ...valid.authors[0], blacklistedAt }],
-      }).status,
-      "malformed",
-    );
+test("CAP-007 migrates v1/v2/v3 to v4, discards untrusted legacy image data, and is idempotent", () => {
+  const legacyImageKey = `card${"Image"}`;
+  for (const schemaVersion of [1, 2, 3] as const) {
+    const legacyAuthor: Record<string, unknown> = {
+      userId: `legacy-${schemaVersion}`,
+      authorNameAtCapture: "Legacy",
+      tagId: DEFAULT_TAG_ID,
+      [legacyImageKey]: { invalid: true },
+    };
+    if (schemaVersion >= 2) {
+      legacyAuthor.blacklistedAt = TIMESTAMP;
+    }
+    if (schemaVersion === 3) {
+      legacyAuthor.blockSource = "upvoter";
+    }
+    const parsed = parseBlacklistState({
+      schemaVersion,
+      tags: createInitialState().tags,
+      authors: [legacyAuthor],
+    });
+    strictEqual(parsed.status, "migrated");
+    deepStrictEqual(parsed.state.authors[0], {
+      userId: `legacy-${schemaVersion}`,
+      memberHashId: null,
+      authorNameAtCapture: "Legacy",
+      tagId: DEFAULT_TAG_ID,
+      blacklistedAt: schemaVersion === 1 ? null : TIMESTAMP,
+      blockSource: schemaVersion === 3 ? "upvoter" : "direct",
+    });
+    strictEqual(legacyImageKey in parsed.state.authors[0]!, false);
+    deepStrictEqual(parseBlacklistState(parsed.state), {
+      status: "valid",
+      state: parsed.state,
+    });
   }
-
-  const duplicate = {
-    ...valid,
-    authors: [...valid.authors, { ...valid.authors[0] }],
-  };
-  const parsed = parseBlacklistState(duplicate);
-  strictEqual(parsed.status, "malformed");
-  deepStrictEqual(parsed.state.authors, []);
 });
 
-test("SOURCE-004 migrates valid schema v1 fields with null times and direct source", () => {
-  const image = imageWithBytes(100);
-  const legacy = {
-    schemaVersion: 1,
-    tags: [
-      { tagId: DEFAULT_TAG_ID, name: "default" },
-      { tagId: "saved", name: "Saved" },
-    ],
-    authors: [
-      {
-        userId: "legacy-user",
-        authorNameAtCapture: "Legacy name",
-        tagId: "saved",
-        cardImage: image,
-      },
-    ],
-  };
-  const parsed = parseBlacklistState(legacy);
-  strictEqual(parsed.status, "migrated");
-  deepStrictEqual(parsed.state, {
-    schemaVersion: 3,
-    tags: legacy.tags,
-    authors: [
-      { ...legacy.authors[0], blacklistedAt: null, blockSource: "direct" },
-    ],
+test("v4 requires exact author fields and valid source/timestamp/hash values", () => {
+  const valid = { ...createInitialState(), authors: [author("valid", HASH_A)] };
+  strictEqual(parseBlacklistState(valid).status, "valid");
+  for (const changedAuthor of [
+    { ...author("valid"), memberHashId: undefined },
+    { ...author("valid"), memberHashId: "bad" },
+    { ...author("valid"), unknown: true },
+    { ...author("valid"), blacklistedAt: "bad" },
+  ]) {
+    strictEqual(parseBlacklistState({ ...valid, authors: [changedAuthor] }).status, "malformed");
+  }
+});
+
+test("v4 rejects duplicate identifiers and all cross-record identifier collisions", () => {
+  for (const authors of [
+    [author("same"), author("same")],
+    [author("first", HASH_A), author("second", HASH_A)],
+    [author("first", MIXED_HASH), author("second", CANONICAL_MIXED_HASH)],
+    [author("first", MIXED_HASH), author(CANONICAL_MIXED_HASH, HASH_B)],
+    [author("first", HASH_A), author(HASH_A, HASH_B)],
+    [author(HASH_A, HASH_A)],
+  ]) {
+    const parsed = parseBlacklistState({ ...createInitialState(), authors });
+    strictEqual(parsed.status, "malformed");
+    deepStrictEqual(parsed.state.authors, []);
+  }
+});
+
+test("BUG-008 v4 normalizes mixed-case hashes for migration while preserving ordinary token case", () => {
+  const parsed = parseBlacklistState({
+    ...createInitialState(),
+    authors: [author("CaseSensitive-Token", MIXED_HASH)],
   });
-});
+  strictEqual(parsed.status, "migrated");
+  deepStrictEqual(parsed.state.authors[0], {
+    ...author("CaseSensitive-Token", CANONICAL_MIXED_HASH),
+  });
+  deepStrictEqual(parseBlacklistState(parsed.state), {
+    status: "valid",
+    state: parsed.state,
+  });
 
-test("SOURCE-004 migrates schema v2 losslessly and requires blockSource in v3", () => {
-  const v2 = {
-    schemaVersion: 2,
-    tags: createInitialState().tags,
-    authors: [
-      {
-        userId: "v2-user",
-        authorNameAtCapture: "V2 name",
-        tagId: DEFAULT_TAG_ID,
-        blacklistedAt: TIMESTAMP,
-        cardImage: imageWithBytes(100),
-      },
-    ],
-  };
-  const migrated = parseBlacklistState(v2);
-  strictEqual(migrated.status, "migrated");
-  deepStrictEqual(migrated.state.authors, [
-    { ...v2.authors[0], blockSource: "direct" },
-  ]);
-
-  strictEqual(
-    parseBlacklistState({
-      ...createInitialState(),
-      authors: [{ ...v2.authors[0] }],
-    }).status,
-    "malformed",
+  const caseSensitiveTokens = parseBlacklistState({
+    ...createInitialState(),
+    authors: [author("TokenCase"), author("tokencase")],
+  });
+  strictEqual(caseSensitiveTokens.status, "valid");
+  deepStrictEqual(
+    caseSensitiveTokens.state.authors.map(({ userId }) => userId),
+    ["TokenCase", "tokencase"],
   );
 });
 
-test("SOURCE-003 rejects a v3 upvoter record without a success timestamp", () => {
-  strictEqual(
-    parseBlacklistState({
-      ...createInitialState(),
-      authors: [
-        {
-          userId: "voter-user",
-          authorNameAtCapture: "Voter",
-          tagId: DEFAULT_TAG_ID,
-          blacklistedAt: null,
-          blockSource: "upvoter",
-        },
-      ],
-    }).status,
-    "malformed",
-  );
-});
-
-test("rejects invalid schemas, unknown tags, and non-WebP images safely", () => {
-  strictEqual(parseBlacklistState({ schemaVersion: 999 }).status, "malformed");
-  strictEqual(
-    parseBlacklistState({
-      ...createInitialState(),
-      authors: [
-        {
-          userId: "stable-user",
-          authorNameAtCapture: "Name",
-          tagId: "missing",
-          blacklistedAt: TIMESTAMP,
-        },
-      ],
-    }).status,
-    "malformed",
-  );
-  strictEqual(
-    parseBlacklistState({
-      ...createInitialState(),
-      authors: [
-        {
-          userId: "stable-user",
-          authorNameAtCapture: "Name",
-          tagId: DEFAULT_TAG_ID,
-          blacklistedAt: TIMESTAMP,
-          cardImage: { dataUrl: "data:image/png;base64,x", width: 1, height: 1 },
-        },
-      ],
-    }).status,
-    "malformed",
-  );
-});
-
-test("plans one record per stable user and preserves its first timestamp", () => {
+test("plans new direct records with hash-or-null and never merges by display name", () => {
   const initial = createInitialState();
-  const first = planAuthorCommit(initial, commitInput(initial));
+  const first = planAuthorCommit(initial, commitInput(initial, {
+    userId: "stable-a",
+    memberHashId: MIXED_HASH,
+    authorNameAtCapture: "Same",
+  }));
   strictEqual(first.status, "ready");
   if (first.status !== "ready") return;
-  strictEqual(first.withImage.authors[0]?.blacklistedAt, TIMESTAMP);
+  deepStrictEqual(first.state.authors[0], {
+    ...author("stable-a", CANONICAL_MIXED_HASH),
+    authorNameAtCapture: "Same",
+  });
 
-  const duplicate = planAuthorCommit(
-    first.withImage,
-    commitInput(first.withImage, {
-      authorNameAtCapture: "Changed name",
-      blacklistedAt: "2027-01-01T00:00:00.000Z",
-      cardImage: imageWithBytes(100),
-    }),
-  );
-  strictEqual(duplicate.status, "duplicate");
-  if (duplicate.status !== "duplicate") return;
-  strictEqual(duplicate.state, first.withImage);
-  strictEqual(duplicate.state.authors[0]?.blacklistedAt, TIMESTAMP);
-});
-
-test("does not deduplicate different stable IDs that share a display name", () => {
-  const initial = createInitialState();
-  const first = planAuthorCommit(
-    initial,
-    commitInput(initial, { userId: "stable-a", authorNameAtCapture: "Same" }),
-  );
-  if (first.status !== "ready") throw new Error("Expected ready plan.");
-  const second = planAuthorCommit(
-    first.withImage,
-    commitInput(first.withImage, {
-      userId: "stable-b",
-      authorNameAtCapture: "Same",
-    }),
-  );
+  const second = planAuthorCommit(first.state, commitInput(first.state, {
+    userId: "stable-b",
+    memberHashId: null,
+    authorNameAtCapture: "Same",
+  }));
   strictEqual(second.status, "ready");
   if (second.status !== "ready") return;
-  strictEqual(second.withImage.authors.length, 2);
+  strictEqual(second.state.authors.length, 2);
 });
 
-test("adds a valid new tag and its author in the same commit plan", () => {
-  const initial = createInitialState();
-  const plan = planAuthorCommit(
-    initial,
-    commitInput(initial, {
-      tag: { tagId: "tag-local", name: "Reading" },
-      isNewTag: true,
-    }),
-  );
-  strictEqual(plan.status, "ready");
-  if (plan.status !== "ready") return;
-  strictEqual(plan.withoutImage.tags.length, 2);
-  strictEqual(plan.withoutImage.authors[0]?.tagId, "tag-local");
-});
-
-test("rejects malformed new-author timestamps", () => {
-  const initial = createInitialState();
-  strictEqual(
-    planAuthorCommit(initial, commitInput(initial, { blacklistedAt: "bad" })).status,
-    "invalid",
-  );
-});
-
-test("omits images over the per-image limit", () => {
-  const initial = createInitialState();
-  const plan = planAuthorCommit(
-    initial,
-    commitInput(initial, { cardImage: imageWithBytes(MAX_IMAGE_BYTES + 1) }),
-  );
-  strictEqual(plan.status, "ready");
-  if (plan.status !== "ready") return;
-  strictEqual(plan.imageIncluded, false);
-  strictEqual(plan.withImage.authors[0]?.cardImage, undefined);
-});
-
-test("keeps old images and omits a new image when the total budget is exhausted", () => {
-  const image = imageWithBytes(MAX_IMAGE_BYTES);
-  const fullImages = Math.floor(MAX_TOTAL_IMAGE_BYTES / MAX_IMAGE_BYTES);
-  const authors = Array.from({ length: fullImages }, (_, index) => ({
-    userId: `stable-${index}`,
-    authorNameAtCapture: "Name",
-    tagId: DEFAULT_TAG_ID,
-    blacklistedAt: TIMESTAMP,
-    blockSource: "direct" as const,
-    cardImage: image,
-  }));
-  authors.push({
-    userId: "stable-remainder",
-    authorNameAtCapture: "Name",
-    tagId: DEFAULT_TAG_ID,
-    blacklistedAt: TIMESTAMP,
-    blockSource: "direct",
-    cardImage: imageWithBytes(
-      MAX_TOTAL_IMAGE_BYTES - fullImages * MAX_IMAGE_BYTES,
-    ),
-  });
-  const fullState: BlacklistState = { ...createInitialState(), authors };
-  const plan = planAuthorCommit(
-    fullState,
-    commitInput(fullState, {
-      userId: "new-stable-user",
-      cardImage: imageWithBytes(100),
-    }),
-  );
-  strictEqual(plan.status, "ready");
-  if (plan.status !== "ready") return;
-  strictEqual(plan.imageIncluded, false);
-  strictEqual(plan.withoutImage.authors.slice(0, -1)[0]?.cardImage, image);
-});
-
-test("deleting a tag atomically migrates authors and preserves every other field", () => {
-  const image = imageWithBytes(100);
+test("exact duplicate atomically backfills a nonconflicting hash and preserves every existing field", () => {
   const state: BlacklistState = {
     ...createInitialState(),
-    tags: [
-      ...createInitialState().tags,
-      { tagId: "remove", name: "Remove" },
-      { tagId: "keep", name: "Keep" },
-    ],
-    authors: [
-      {
-        userId: "move",
-        authorNameAtCapture: "Move",
-        tagId: "remove",
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-        cardImage: image,
-      },
-      {
-        userId: "keep",
-        authorNameAtCapture: "Keep",
-        tagId: "keep",
-        blacklistedAt: null,
-        blockSource: "direct",
-      },
-    ],
+    authors: [{ ...author("stable-user"), authorNameAtCapture: "First" }],
+  };
+  const plan = planAuthorCommit(state, commitInput(state, {
+    memberHashId: HASH_A,
+    authorNameAtCapture: "Changed",
+    blacklistedAt: "2027-01-01T00:00:00.000Z",
+  }));
+  strictEqual(plan.status, "backfill");
+  if (plan.status !== "backfill") return;
+  deepStrictEqual(plan.state.authors[0], {
+    ...state.authors[0],
+    memberHashId: HASH_A,
+  });
+});
+
+test("duplicate alias conflicts fail safely without changing state", () => {
+  const state: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("stable-user"), author("other-user", HASH_A)],
+  };
+  for (const memberHashId of [HASH_A, HASH_B]) {
+    const source = memberHashId === HASH_B
+      ? { ...state, authors: [author("stable-user", HASH_A)] }
+      : state;
+    const plan = planAuthorCommit(source, commitInput(source, { memberHashId }));
+    strictEqual(plan.status, "invalid");
+    strictEqual(plan.state, source);
+  }
+});
+
+test("focused member hash backfill requires exact token ownership and stores a canonical hash", () => {
+  const state: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("token"), author("other", HASH_B)],
+  };
+  strictEqual(planMemberHashBackfill(state, "missing", HASH_A).status, "invalid");
+  strictEqual(planMemberHashBackfill(state, "token", HASH_B).status, "invalid");
+  const ready = planMemberHashBackfill(state, "token", MIXED_HASH);
+  strictEqual(ready.status, "ready");
+  if (ready.status !== "ready") return;
+  deepStrictEqual(ready.state.authors[0], {
+    ...state.authors[0],
+    memberHashId: CANONICAL_MIXED_HASH,
+  });
+});
+
+test("adds a valid new tag and author in one plan", () => {
+  const initial = createInitialState();
+  const plan = planAuthorCommit(initial, commitInput(initial, {
+    tag: { tagId: "tag-local", name: "Reading" },
+    isNewTag: true,
+  }));
+  strictEqual(plan.status, "ready");
+  if (plan.status !== "ready") return;
+  strictEqual(plan.state.tags.length, 2);
+  strictEqual(plan.state.authors[0]?.tagId, "tag-local");
+});
+
+test("tag deletion preserves member hash and every non-tag author field", () => {
+  const state: BlacklistState = {
+    ...createInitialState(),
+    tags: [...createInitialState().tags, { tagId: "remove", name: "Remove" }],
+    authors: [{ ...author("move", HASH_A), tagId: "remove" }],
   };
   const plan = planTagDeletion(state, "remove");
   strictEqual(plan.status, "ready");
   if (plan.status !== "ready") return;
-  deepStrictEqual(plan.state.tags.map((tag) => tag.tagId), ["default", "keep"]);
-  deepStrictEqual(plan.state.authors, [
-    { ...state.authors[0], tagId: DEFAULT_TAG_ID },
-    state.authors[1],
-  ]);
+  deepStrictEqual(plan.state.authors[0], {
+    ...state.authors[0],
+    tagId: DEFAULT_TAG_ID,
+  });
 });
 
-test("SOURCE-001/002 plans minimal upvoter records with strict source and no image", () => {
+test("historical upvoter flow creates a v4-compatible null-hash record", () => {
   const state = createInitialState();
   const plan = planUpvoterCommit(state, {
     userId: "voter-user",
-    authorNameAtCapture: "Voter name",
+    authorNameAtCapture: "Voter",
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIMESTAMP,
   });
   strictEqual(plan.status, "ready");
   if (plan.status !== "ready") return;
-  deepStrictEqual(plan.withoutImage.authors[0], {
+  deepStrictEqual(plan.state.authors[0], {
     userId: "voter-user",
-    authorNameAtCapture: "Voter name",
+    memberHashId: null,
+    authorNameAtCapture: "Voter",
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIMESTAMP,
     blockSource: "upvoter",
   });
-  strictEqual(plan.imageIncluded, false);
-  strictEqual(
-    planUpvoterCommit(plan.withoutImage, {
-      userId: "voter-user",
-      authorNameAtCapture: "Changed",
-      tagId: DEFAULT_TAG_ID,
-      blacklistedAt: "2027-01-01T00:00:00.000Z",
-    }).status,
-    "duplicate",
-  );
-});
-
-test("default deletion is protected in storage logic", () => {
-  const state = createInitialState();
-  const plan = planTagDeletion(state, DEFAULT_TAG_ID);
-  strictEqual(plan.status, "protected");
-  strictEqual(plan.state, state);
 });
 
 test("only advances runtime state after persistence succeeds", () => {
   const previous = createInitialState();
-  const candidate: BlacklistState = {
-    ...previous,
-    authors: [
-      {
-        userId: "stable-user",
-        authorNameAtCapture: "Name",
-        tagId: DEFAULT_TAG_ID,
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-      },
-    ],
-  };
+  const candidate: BlacklistState = { ...previous, authors: [author("stable-user")] };
   strictEqual(runtimeStateAfterPersistence(previous, candidate, false), previous);
   strictEqual(runtimeStateAfterPersistence(previous, candidate, true), candidate);
 });

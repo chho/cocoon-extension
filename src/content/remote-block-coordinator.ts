@@ -116,7 +116,9 @@ export function createRemoteBlockCoordinator(
         return "malformed";
       }
       const existing = parsed.state.authors.find(
-        (author) => author.userId === request.userId,
+        (author) =>
+          author.userId === request.userId ||
+          author.memberHashId === request.userId,
       );
       if (request.source === "upvoter") {
         if (existing) {
@@ -167,7 +169,13 @@ export function createRemoteBlockCoordinator(
         dependencies.reportMalformedStorage();
         throw new Error("Stored blacklist state is malformed.");
       }
-      if (parsed.state.authors.some((author) => author.userId === request.userId)) {
+      if (
+        parsed.state.authors.some(
+          (author) =>
+            author.userId === request.userId ||
+            author.memberHashId === request.userId,
+        )
+      ) {
         return false;
       }
       const persistedTagId = parsed.state.tags.some(
@@ -184,8 +192,8 @@ export function createRemoteBlockCoordinator(
       if (plan.status !== "ready") {
         throw new Error("Unable to create an upvoter blacklist record.");
       }
-      await dependencies.writeState(plan.withoutImage);
-      dependencies.applyPersistedState(plan.withoutImage);
+      await dependencies.writeState(plan.state);
+      dependencies.applyPersistedState(plan.state);
       return true;
     });
   }

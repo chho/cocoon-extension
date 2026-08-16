@@ -10,6 +10,7 @@ import {
 import { createTagDeletionController } from "./tag-deletion-controller.ts";
 
 const TIMESTAMP = "2026-08-13T12:34:56.789Z";
+const MEMBER_HASH = "a".repeat(32);
 
 function populatedState(): BlacklistState {
   return {
@@ -22,18 +23,15 @@ function populatedState(): BlacklistState {
     authors: [
       {
         userId: "move",
+        memberHashId: MEMBER_HASH,
         authorNameAtCapture: "Move",
         tagId: "remove",
         blacklistedAt: TIMESTAMP,
         blockSource: "direct",
-        cardImage: {
-          dataUrl: "data:image/webp;base64,AA==",
-          width: 2,
-          height: 2,
-        },
       },
       {
         userId: "keep",
+        memberHashId: null,
         authorNameAtCapture: "Keep",
         tagId: "keep",
         blacklistedAt: null,
@@ -72,6 +70,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
           ...stored.authors,
           {
             userId: "concurrent",
+            memberHashId: null,
             authorNameAtCapture: "Concurrent",
             tagId: "remove",
             blacklistedAt: TIMESTAMP,
@@ -108,6 +107,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
     populatedState().authors[1],
     {
       userId: "concurrent",
+      memberHashId: null,
       authorNameAtCapture: "Concurrent",
       tagId: DEFAULT_TAG_ID,
       blacklistedAt: TIMESTAMP,
@@ -178,7 +178,7 @@ test("default is protected by controller logic without any storage write", async
   strictEqual(applies, 0);
 });
 
-test("deleting from v1 atomically migrates schema v3, source, and null timestamps", async () => {
+test("deleting from v1 atomically migrates schema v4, source, hash, and null timestamps", async () => {
   let stored: unknown = {
     schemaVersion: 1,
     tags: [
@@ -213,11 +213,12 @@ test("deleting from v1 atomically migrates schema v3, source, and null timestamp
   const result = await controller.deleteTag("remove", event.value);
   strictEqual(result.status, "persisted");
   deepStrictEqual(stored, {
-    schemaVersion: 3,
+    schemaVersion: 4,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [
       {
         userId: "legacy",
+        memberHashId: null,
         authorNameAtCapture: "Legacy",
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: null,

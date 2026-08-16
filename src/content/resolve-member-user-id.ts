@@ -1,3 +1,4 @@
+import { normalizeMemberHashId } from "./blacklist-state.ts";
 import { parseMemberUrlToken } from "./parse-zhihu-member-data.ts";
 
 export interface MemberFetchResponse {
@@ -58,19 +59,24 @@ export function createMemberUserIdResolver(
   }
 
   return async (memberHash: string): Promise<string | null> => {
-    const cachedUserId = successfulUserIds.get(memberHash);
+    const canonicalMemberHash = normalizeMemberHashId(memberHash);
+    if (canonicalMemberHash === null) {
+      return null;
+    }
+
+    const cachedUserId = successfulUserIds.get(canonicalMemberHash);
     if (cachedUserId) {
       return cachedUserId;
     }
 
-    const inFlightRequest = inFlightRequests.get(memberHash);
+    const inFlightRequest = inFlightRequests.get(canonicalMemberHash);
     if (inFlightRequest) {
       return inFlightRequest;
     }
 
-    const request = requestMemberUserId(memberHash);
-    inFlightRequests.set(memberHash, request);
-    void removeSettledRequest(memberHash, request);
+    const request = requestMemberUserId(canonicalMemberHash);
+    inFlightRequests.set(canonicalMemberHash, request);
+    void removeSettledRequest(canonicalMemberHash, request);
 
     return request;
   };

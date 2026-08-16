@@ -22,6 +22,9 @@ function target(id: string): DrawerTarget<TestCard, TestButton> {
     card: { id },
     button: { id: `button-${id}` },
     authorNameAtClick: `author-${id}`,
+    profileUserIdAtClick: null,
+    memberHashIdAtClick: null,
+    anchorBounds: null,
     voterSource: null,
   };
 }

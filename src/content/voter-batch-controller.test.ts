@@ -47,6 +47,7 @@ function createHarness(options: {
     ...createInitialState(),
     authors: (options.localBlocked ?? []).map((userId) => ({
       userId,
+      memberHashId: null,
       authorNameAtCapture: `Existing ${userId}`,
       tagId: "default",
       blacklistedAt: "2026-08-13T12:34:56.789Z",
@@ -108,7 +109,7 @@ function createHarness(options: {
 
 const source = { kind: "answer", questionId: "1", contentId: "2" } as const;
 
-test("VOTER-007 missing CSRF fails before relation, voter-list, or POST work", async () => {
+test("VOTER-013 missing CSRF automatically fails before relation, voter-list, or POST work", async () => {
   let blocks = 0;
   const harness = createHarness({
     hasAuthorization: false,
@@ -163,7 +164,7 @@ test("VOTER-005/SOURCE-005 filters current, direct, remote, and local users befo
   });
 });
 
-test("VOTER-003 progress uses unique valid voters from both sorts while skipped keeps invalid and duplicates", async () => {
+test("VOTER-012 internal progress uses unique valid voters while skipped keeps invalid and duplicates", async () => {
   const harness = createHarness({
     voterResult: voters(["one", "two", "three"], {
       fetched: 5,
@@ -215,7 +216,7 @@ test("VOTER-005 fails closed before list fetching when current user cannot be co
   deepStrictEqual(harness.counts(), { voterFetches: 0, relationFetches: 0 });
 });
 
-test("VOTER-007 ordinary per-user failures do not interrupt remaining users", async () => {
+test("VOTER-013 ordinary per-user failures do not interrupt remaining users", async () => {
   const calls: string[] = [];
   const harness = createHarness({
     voterResult: voters(["one", "two", "three", "four"]),
@@ -240,7 +241,7 @@ test("VOTER-007 ordinary per-user failures do not interrupt remaining users", as
   strictEqual(result.unprocessed, 0);
 });
 
-test("VOTER-007/009 keeps POST concurrency at three", async () => {
+test("VOTER-009/013 keeps POST concurrency at three", async () => {
   let active = 0;
   let maxActive = 0;
   const releases: Array<() => void> = [];
@@ -275,7 +276,7 @@ test("VOTER-007/009 keeps POST concurrency at three", async () => {
   strictEqual(maxActive, 3);
 });
 
-test("VOTER-007 authentication failure stops scheduling new users and preserves counts", async () => {
+test("VOTER-012/013 authentication failure stops new work and preserves internal counts", async () => {
   let calls = 0;
   const harness = createHarness({
     voterResult: voters(Array.from({ length: 10 }, (_, index) => `user-${index}`)),
@@ -302,7 +303,7 @@ test("VOTER-007 authentication failure stops scheduling new users and preserves 
   );
 });
 
-test("VOTER-008 user stop prevents new scheduling and reports unprocessed users", async () => {
+test("VOTER-013 lifecycle stop prevents new scheduling and reports unprocessed users", async () => {
   let stopped = false;
   let calls = 0;
   const harness = createHarness({
@@ -325,7 +326,7 @@ test("VOTER-008 user stop prevents new scheduling and reports unprocessed users"
   strictEqual(result.unprocessed, result.fetched - result.success);
 });
 
-test("VOTER-003 carries partial completeness into the final progress", async () => {
+test("VOTER-012 carries partial completeness into the final internal progress", async () => {
   const harness = createHarness({
     voterResult: voters(["one"], { complete: false, requestFailures: 1 }),
   });

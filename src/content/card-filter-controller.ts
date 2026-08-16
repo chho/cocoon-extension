@@ -1,5 +1,8 @@
+import { normalizeMemberHashId } from "./blacklist-state.ts";
+
 export interface CardFilterControllerDependencies<TCard extends object> {
   readonly prepareCard: (card: TCard) => void;
+  readonly resolveDirectStableUserIds: (card: TCard) => ReadonlySet<string>;
   readonly resolveStableUserId: (card: TCard) => Promise<string | null>;
   readonly setHidden: (card: TCard, hidden: boolean) => void;
   readonly reportFailure: (error: unknown) => void;
@@ -49,10 +52,21 @@ export function createCardFilterController<TCard extends object>(
 
     filtering.add(card);
     try {
+      const directIds = dependencies.resolveDirectStableUserIds(card);
+      if (
+        [...directIds].some((identifier) =>
+          stableUserIds.has(normalizeMemberHashId(identifier) ?? identifier)
+        )
+      ) {
+        dependencies.setHidden(card, true);
+        return;
+      }
+
       const userId = await dependencies.resolveStableUserId(card);
+      const canonicalUserId = normalizeMemberHashId(userId) ?? userId;
       dependencies.setHidden(
         card,
-        userId !== null && stableUserIds.has(userId),
+        canonicalUserId !== null && stableUserIds.has(canonicalUserId),
       );
     } catch (error) {
       dependencies.reportFailure(error);
@@ -86,11 +100,15 @@ export function createCardFilterController<TCard extends object>(
     enqueue,
     loadStableUserIds(userIds) {
       storageLoaded = true;
-      stableUserIds = new Set(userIds);
+      stableUserIds = new Set(
+        Array.from(userIds, (userId) => normalizeMemberHashId(userId) ?? userId),
+      );
       reevaluateEncountered();
     },
     replaceStableUserIds(userIds) {
-      stableUserIds = new Set(userIds);
+      stableUserIds = new Set(
+        Array.from(userIds, (userId) => normalizeMemberHashId(userId) ?? userId),
+      );
       if (storageLoaded) {
         reevaluateEncountered();
       }

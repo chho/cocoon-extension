@@ -1,16 +1,16 @@
 import {
   STORAGE_KEY,
   createInitialState,
+  normalizeMemberHashId,
   parseBlacklistState,
   validateNewTagLabel,
   type BlacklistState,
 } from "./blacklist-state";
+import { createAuthorAliasPersistenceController } from "./author-alias-persistence-controller";
+import { resolveProvenAuthorIdentity } from "./author-identity";
 import { createCardFilterController } from "./card-filter-controller";
-import { captureCardImage } from "./capture-card-image";
-import {
-  createCommitController,
-  type CommitResult,
-} from "./commit-controller";
+import { createCommentFilterController } from "./comment-filter-controller";
+import { createCommitController } from "./commit-controller";
 import {
   createDrawerController,
   type CommitTask,
@@ -25,6 +25,7 @@ import { initializeBlacklistState } from "./initialize-blacklist-state";
 import { parseAuthorMemberHashId } from "./parse-zhihu-member-data";
 import { parseZhihuUserId } from "./parse-zhihu-user-id";
 import { createMemberUserIdResolver } from "./resolve-member-user-id";
+import { applyBlacklistRuntimeState } from "./runtime-state-application";
 import { createTagDeletionController } from "./tag-deletion-controller";
 import { renderTagList } from "./tag-list";
 import {
@@ -43,12 +44,14 @@ import {
   createRemoteBlockCoordinator,
   type CrossContextTryLockResult,
 } from "./remote-block-coordinator";
-import { runAuthorizedRemoteOperations } from "./remote-operation-orchestrator";
-import { createRemoteProgressSession } from "./remote-progress-panel";
+import { createRemoteBackgroundRunner } from "./remote-background-runner";
+import { createRemoteOptionsView } from "./remote-options-view";
 import {
-  createVoterBatchController,
-  type VoterBatchProgress,
-} from "./voter-batch-controller";
+  HOVER_BLOCK_BUTTON_CLASS,
+  createHoverCardController,
+  type HoverAuthorActivation,
+} from "./hover-card-controller";
+import { createVoterBatchController } from "./voter-batch-controller";
 import {
   blockZhihuUser,
   fetchCurrentZhihuUser,
@@ -88,6 +91,33 @@ let currentState: BlacklistState = createInitialState();
 let visibilityFrameRequested = false;
 let nextTargetId = 1;
 let blockedOutsideClickTarget: EventTarget | null = null;
+let lifecycleEnded = false;
+
+window.addEventListener("pagehide", () => {
+  lifecycleEnded = true;
+});
+window.addEventListener("pageshow", () => {
+  lifecycleEnded = false;
+});
+
+const authorAliasPersistenceController =
+  createAuthorAliasPersistenceController({
+    resolveMemberUserId,
+    withExclusiveLock: withStorageLock,
+    readState: readStoredState,
+    writeState: writeStoredState,
+    applyPersistedState: replaceRuntimeState,
+  });
+
+const commentFilterController = createCommentFilterController({
+  schedule(callback) {
+    requestAnimationFrame(callback);
+  },
+  async resolveHistoricalAlias(memberHashId) {
+    await authorAliasPersistenceController.persistMemberHashAlias(memberHashId);
+  },
+  batchSize: BATCH_SIZE,
+});
 
 function getAuthorName(card: HTMLElement): string {
   const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
@@ -127,30 +157,48 @@ function getProfileLinkUserId(card: HTMLElement): string | null {
   return null;
 }
 
-async function getAuthorUserId(card: HTMLElement): Promise<string | null> {
-  const profileLinkUserId = getProfileLinkUserId(card);
-  if (profileLinkUserId) {
-    return profileLinkUserId;
-  }
-
+function getAuthorMemberHashId(card: HTMLElement): string | null {
   const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
   const extraModuleMetadata = content?.getAttribute("data-za-extra-module");
-  const memberHash = extraModuleMetadata
+  const memberHashId = extraModuleMetadata
     ? parseAuthorMemberHashId(extraModuleMetadata)
     : null;
-  if (!memberHash) {
-    return null;
-  }
+  return normalizeMemberHashId(memberHashId);
+}
 
-  return resolveMemberUserId(memberHash);
+function getDirectCardAuthorIds(card: HTMLElement): ReadonlySet<string> {
+  const identifiers = new Set<string>();
+  const profileUserId = getProfileLinkUserId(card);
+  const memberHashId = getAuthorMemberHashId(card);
+  if (profileUserId) {
+    identifiers.add(profileUserId);
+  }
+  if (memberHashId) {
+    identifiers.add(memberHashId);
+  }
+  return identifiers;
+}
+
+async function getAuthorUserId(card: HTMLElement): Promise<string | null> {
+  const identity = await resolveProvenAuthorIdentity(
+    {
+      profileUserId: getProfileLinkUserId(card),
+      memberHashId: getAuthorMemberHashId(card),
+    },
+    resolveMemberUserId,
+  );
+  return identity?.userId ?? null;
 }
 
 function replaceRuntimeState(state: BlacklistState): void {
-  currentState = state;
-  renderTagChoices();
-  filterController.loadStableUserIds(
-    new Set(state.authors.map((author) => author.userId)),
-  );
+  applyBlacklistRuntimeState(state, document.body, {
+    setCurrentState(nextState) {
+      currentState = nextState;
+    },
+    renderTagChoices,
+    cardFilter: filterController,
+    commentFilter: commentFilterController,
+  });
 }
 
 async function readStoredState(): Promise<ReturnType<typeof parseBlacklistState>> {
@@ -329,55 +377,19 @@ newTagInput.placeholder = "新标签，按 Enter";
 newTagInput.setAttribute("aria-label", "新标签名称，按 Enter 创建并屏蔽作者");
 newTagForm.append(newTagLabel, newTagInput);
 
-const remoteOptions = document.createElement("section");
-remoteOptions.className = "cocoon-remote-options";
-remoteOptions.setAttribute("aria-labelledby", "cocoon-remote-options-title");
-const remoteOptionsTitle = document.createElement("div");
-remoteOptionsTitle.id = "cocoon-remote-options-title";
-remoteOptionsTitle.className = "cocoon-remote-options-title";
-remoteOptionsTitle.textContent = "知乎操作";
-
-function createRemoteOption(
-  id: string,
-  text: string,
-): { readonly label: HTMLLabelElement; readonly input: HTMLInputElement } {
-  const label = document.createElement("label");
-  label.className = "cocoon-remote-option";
-  const input = document.createElement("input");
-  input.id = id;
-  input.className = "cocoon-remote-option-input";
-  input.type = "checkbox";
-  const labelText = document.createElement("span");
-  labelText.textContent = text;
-  label.append(input, labelText);
-  return { label, input };
+function saveRemotePreference(
+  key: "blockAuthorOnZhihu" | "blockContentVoters",
+  value: boolean,
+): void {
+  void remotePreferenceController.setPreference(key, value);
 }
 
-const authorRemoteOption = createRemoteOption(
-  "cocoon-block-author-on-zhihu",
-  "同时在知乎拉黑该作者",
-);
-const voterRemoteOption = createRemoteOption(
-  "cocoon-block-content-voters",
-  "拉黑该内容的点赞者",
-);
-const voterAvailability = document.createElement("div");
-voterAvailability.id = "cocoon-voter-availability";
-voterAvailability.className = "cocoon-voter-availability";
-voterAvailability.textContent = "当前内容无法可靠识别，已停用点赞者操作";
-voterAvailability.hidden = true;
-voterRemoteOption.input.setAttribute(
-  "aria-describedby",
-  voterAvailability.id,
-);
-remoteOptions.append(
-  remoteOptionsTitle,
-  authorRemoteOption.label,
-  voterRemoteOption.label,
-  voterAvailability,
+const remoteOptionsView = createRemoteOptionsView(
+  document,
+  saveRemotePreference,
 );
 
-drawer.append(drawerHeader, tagList, newTagForm, remoteOptions);
+drawer.append(drawerHeader, tagList, newTagForm, remoteOptionsView.element);
 document.body.append(drawer);
 
 const drawerVisibility = createDrawerVisibilityController({
@@ -411,8 +423,7 @@ const drawerVisibility = createDrawerVisibilityController({
 function renderRemotePreferenceValues(
   preferences: RemotePreferences,
 ): void {
-  authorRemoteOption.input.checked = preferences.blockAuthorOnZhihu;
-  voterRemoteOption.input.checked = preferences.blockContentVoters;
+  remoteOptionsView.renderPreferences(preferences);
 }
 
 const remotePreferenceController = createRemotePreferenceController({
@@ -439,22 +450,7 @@ function replaceRemotePreferences(preferences: RemotePreferences): void {
 const remotePreferencesReady = initializeRemotePreferenceStorage();
 
 function setVoterOptionAvailability(target: HtmlDrawerTarget): void {
-  const available = target.voterSource !== null;
-  voterRemoteOption.input.disabled = !available;
-  voterRemoteOption.label.classList.toggle(
-    "cocoon-remote-option-disabled",
-    !available,
-  );
-  voterAvailability.hidden = available;
-}
-
-for (const [key, input] of [
-  ["blockAuthorOnZhihu", authorRemoteOption.input],
-  ["blockContentVoters", voterRemoteOption.input],
-] as const) {
-  input.addEventListener("change", () => {
-    void remotePreferenceController.setPreference(key, input.checked);
-  });
+  remoteOptionsView.setVoterAvailable(target.voterSource !== null);
 }
 
 const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>({
@@ -480,13 +476,7 @@ const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>(
     }
   },
   getRemoteAuthorization(target) {
-    return {
-      blockAuthorOnZhihu: authorRemoteOption.input.checked,
-      blockContentVoters:
-        target.voterSource !== null &&
-        !voterRemoteOption.input.disabled &&
-        voterRemoteOption.input.checked,
-    };
+    return remoteOptionsView.getAuthorization(target.voterSource !== null);
   },
   commit(task) {
     void handleDrawerCommit(task);
@@ -499,7 +489,8 @@ function positionDrawer(): void {
     return;
   }
 
-  const buttonBounds = target.button.getBoundingClientRect();
+  const buttonBounds =
+    target.anchorBounds ?? target.button.getBoundingClientRect();
   const horizontalGap = 0;
   const viewportPadding = 8;
   const width = drawer.offsetWidth;
@@ -549,12 +540,43 @@ async function openDrawer(
     card,
     button,
     authorNameAtClick: getAuthorName(card),
+    profileUserIdAtClick: getProfileLinkUserId(card),
+    memberHashIdAtClick: getAuthorMemberHashId(card),
+    anchorBounds: null,
     voterSource: getVoterSource(card),
   };
   await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
     drawerController.open(target);
   });
 }
+
+async function openHoverDrawer(
+  activation: HoverAuthorActivation,
+): Promise<void> {
+  const target: HtmlDrawerTarget = {
+    targetId: `hover-${nextTargetId}`,
+    card: activation.root,
+    button: activation.button,
+    authorNameAtClick: activation.authorName,
+    profileUserIdAtClick: activation.userId,
+    memberHashIdAtClick: null,
+    anchorBounds: activation.anchorBounds,
+    voterSource: null,
+  };
+  nextTargetId += 1;
+  await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
+    drawerController.open(target);
+  });
+}
+
+const hoverCardController = createHoverCardController({
+  onActivate(activation) {
+    void openHoverDrawer(activation);
+  },
+  schedule(callback) {
+    requestAnimationFrame(callback);
+  },
+});
 
 function showTagValidationError(error: "empty" | "too-long" | "duplicate"): void {
   const messages = {
@@ -622,6 +644,14 @@ document.addEventListener(
   true,
 );
 
+function isDrawerTrigger(element: Element | null): boolean {
+  return Boolean(
+    element?.closest(
+      `.${CLOSE_BUTTON_CLASS}, .${HOVER_BLOCK_BUTTON_CLASS}`,
+    ),
+  );
+}
+
 document.addEventListener(
   "pointerdown",
   (event) => {
@@ -640,7 +670,7 @@ document.addEventListener(
     }
 
     const element = event.target instanceof Element ? event.target : null;
-    if (element?.closest(`.${CLOSE_BUTTON_CLASS}`)) {
+    if (isDrawerTrigger(element)) {
       return;
     }
 
@@ -676,8 +706,9 @@ document.addEventListener(
 
     if (
       !drawer.contains(event.target) &&
-      !(event.target instanceof Element &&
-        event.target.closest(`.${CLOSE_BUTTON_CLASS}`))
+      !isDrawerTrigger(
+        event.target instanceof Element ? event.target : null,
+      )
     ) {
       drawerController.cancel(event);
     }
@@ -739,6 +770,7 @@ function processPendingVisibility(): void {
 
 const filterController = createCardFilterController<HTMLElement>({
   prepareCard: enhanceCard,
+  resolveDirectStableUserIds: getDirectCardAuthorIds,
   resolveStableUserId: getAuthorUserId,
   setHidden: queueVisibility,
   reportFailure(error) {
@@ -777,8 +809,15 @@ function enqueueAllCards(): void {
 
 const commitController = createCommitController<HTMLElement, HTMLButtonElement>({
   withExclusiveLock: withStorageLock,
-  resolveStableUserId: getAuthorUserId,
-  captureCardImage,
+  async resolveAuthorIdentity(target) {
+    return resolveProvenAuthorIdentity(
+      {
+        profileUserId: target.profileUserIdAtClick,
+        memberHashId: target.memberHashIdAtClick,
+      },
+      resolveMemberUserId,
+    );
+  },
   now: () => new Date(),
   readState: readStoredState,
   writeState: writeStoredState,
@@ -789,15 +828,6 @@ const commitController = createCommitController<HTMLElement, HTMLButtonElement>(
     }
   },
   reportMalformedStorage,
-  reportCaptureFailure(error) {
-    console.warn(
-      "[Cocoon] 无法采集卡片图像，将保存最小黑名单记录。",
-      error,
-    );
-  },
-  reportImageOmitted() {
-    console.warn("[Cocoon] 无法保存卡片图像，已保存最小黑名单记录。");
-  },
   reportFailure(error) {
     console.error("[Cocoon] 屏蔽作者失败，未保留会话内黑名单。", error);
   },
@@ -822,136 +852,61 @@ const remoteBlockCoordinator = createRemoteBlockCoordinator({
   },
 });
 
-function reportRemoteFailure(scope: "作者" | "点赞者批量"): void {
-  console.warn(`[Cocoon] ${scope}知乎拉黑未完整完成。`);
-}
-
-function runRemoteOperations(
-  task: CommitTask<HTMLElement, HTMLButtonElement>,
-  committed: Extract<CommitResult, { status: "persisted" }>,
-): void {
-  let stopped = false;
-  let progressSession: ReturnType<typeof createRemoteProgressSession> | null =
-    null;
-
-  function getProgressSession(): ReturnType<
-    typeof createRemoteProgressSession
-  > {
-    if (progressSession) {
-      return progressSession;
-    }
-    progressSession = createRemoteProgressSession(document, {
-      showAuthor: task.remoteAuthorization.blockAuthorOnZhihu,
-      showVoters:
-        task.remoteAuthorization.blockContentVoters &&
-        task.target.voterSource !== null,
-      stop() {
-        stopped = true;
+const remoteBackgroundRunner = createRemoteBackgroundRunner<
+  HTMLElement,
+  HTMLButtonElement
+>({
+  async blockAuthor(_task, committed) {
+    return remoteBlockCoordinator.block(
+      {
+        source: "direct",
+        userId: committed.userId,
+        expectedBlacklistedAt: committed.blacklistedAt,
       },
-    });
-    console.info(
-      "[Cocoon] 本地屏蔽已保存，知乎操作已作为独立任务启动。",
+      () => lifecycleEnded,
     );
-    return progressSession;
-  }
-
-  runAuthorizedRemoteOperations(
-    task.remoteAuthorization,
-    task.target.voterSource,
-    {
-      blockAuthor() {
-        const authorProgress = getProgressSession();
-        authorProgress.updateAuthor("running");
-        void (async () => {
-          try {
-            const result = await remoteBlockCoordinator.block(
-              {
-                source: "direct",
-                userId: committed.userId,
-                expectedBlacklistedAt: committed.blacklistedAt,
-              },
-              () => stopped,
-            );
-            authorProgress.updateAuthor(result);
-            if (result.status === "failed") {
-              reportRemoteFailure("作者");
-            }
-          } catch {
-            authorProgress.updateAuthor({
-              status: "failed",
-              reason: "network",
-            });
-            reportRemoteFailure("作者");
-          }
-        })();
+  },
+  async blockVoters(task, committed, voterSource) {
+    const voterBatchController = createVoterBatchController({
+      hasBlockAuthorization() {
+        return readXsrfToken(document.cookie) !== null;
       },
-
-      blockVoters(voterSource) {
-        const voterProgress = getProgressSession();
-        let latestProgress: VoterBatchProgress = {
-          phase: "preparing",
-          fetched: 0,
-          success: 0,
-          failed: 0,
-          skipped: 0,
-          unprocessed: 0,
-          dataComplete: false,
-        };
-        const voterBatchController = createVoterBatchController({
-          hasBlockAuthorization() {
-            return readXsrfToken(document.cookie) !== null;
-          },
-          async fetchCurrentUser(isStopped) {
-            return fetchCurrentZhihuUser(fetch, { isStopped });
-          },
-          async fetchBlockedUsers(isStopped) {
-            return fetchZhihuBlockedUserIds(fetch, { isStopped });
-          },
-          async fetchVoters(source, isStopped, onProgress) {
-            return fetchZhihuVoters(fetch, source, {
-              isStopped,
-              onProgress,
-            });
-          },
-          readState: readStoredState,
-          coordinator: remoteBlockCoordinator,
-          reportMalformedStorage,
-          reportProgress(progress) {
-            latestProgress = progress;
-            voterProgress.updateVoters(progress);
-          },
+      async fetchCurrentUser(isStopped) {
+        return fetchCurrentZhihuUser(fetch, { isStopped });
+      },
+      async fetchBlockedUsers(isStopped) {
+        return fetchZhihuBlockedUserIds(fetch, { isStopped });
+      },
+      async fetchVoters(source, isStopped, onProgress) {
+        return fetchZhihuVoters(fetch, source, {
+          isStopped,
+          onProgress,
         });
-
-        void (async () => {
-          try {
-            const result = await voterBatchController.run({
-              source: voterSource,
-              tagId: task.selection.tag.tagId,
-              directAuthorUserId: committed.userId,
-              isStopped: () => stopped,
-            });
-            if (result.phase === "failed" || !result.dataComplete) {
-              reportRemoteFailure("点赞者批量");
-            }
-          } catch {
-            voterProgress.updateVoters({
-              ...latestProgress,
-              phase: "failed",
-            });
-            reportRemoteFailure("点赞者批量");
-          }
-        })();
       },
-    },
-  );
-}
+      readState: readStoredState,
+      coordinator: remoteBlockCoordinator,
+      reportMalformedStorage,
+      reportProgress() {},
+    });
+    return voterBatchController.run({
+      source: voterSource,
+      tagId: task.selection.tag.tagId,
+      directAuthorUserId: committed.userId,
+      isStopped: () => lifecycleEnded,
+    });
+  },
+  reportFailure(scope) {
+    const operation = scope === "author" ? "作者" : "点赞者批量";
+    console.warn(`[Cocoon] ${operation}知乎拉黑未完整完成。`);
+  },
+});
 
 async function handleDrawerCommit(
   task: CommitTask<HTMLElement, HTMLButtonElement>,
 ): Promise<void> {
   const result = await commitController.commit(task);
   if (result.status === "persisted") {
-    runRemoteOperations(task, result);
+    void remoteBackgroundRunner.run(task, result).completion;
   }
 }
 
@@ -1000,12 +955,35 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 findCards(document.body);
+commentFilterController.scan(document.body);
+hoverCardController.scan(document.body);
 void initializeStorage();
 
 const observer = new MutationObserver((mutations) => {
   for (const mutation of mutations) {
+    if (mutation.type !== "childList") {
+      continue;
+    }
+    hoverCardController.handleChildListMutation(
+      mutation.target,
+      mutation.addedNodes,
+      mutation.removedNodes,
+    );
+  }
+
+  for (const mutation of mutations) {
+    if (mutation.type === "attributes") {
+      commentFilterController.scan(mutation.target);
+      continue;
+    }
+
     for (const node of mutation.addedNodes) {
       findCards(node);
+      commentFilterController.scan(node);
+      hoverCardController.scan(node);
+    }
+    for (const node of mutation.removedNodes) {
+      commentFilterController.scan(node);
     }
   }
 });
@@ -1013,4 +991,6 @@ const observer = new MutationObserver((mutations) => {
 observer.observe(document.body, {
   childList: true,
   subtree: true,
+  attributes: true,
+  attributeFilter: ["href"],
 });

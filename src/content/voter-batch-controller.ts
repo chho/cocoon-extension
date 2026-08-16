@@ -158,7 +158,11 @@ export function createVoterBatchController(
         return progress;
       }
       const locallyBlocked = new Set(
-        parsed.state.authors.map((author) => author.userId),
+        parsed.state.authors.flatMap((author) =>
+          author.memberHashId === null
+            ? [author.userId]
+            : [author.userId, author.memberHashId]
+        ),
       );
       const queue = voters.users.filter((voter) => {
         const shouldSkip =

@@ -277,6 +277,7 @@ function directState(): BlacklistState {
     authors: [
       {
         userId: "direct-user",
+        memberHashId: null,
         authorNameAtCapture: "Direct",
         tagId: "default",
         blacklistedAt: TIMESTAMP,
@@ -337,6 +338,7 @@ test("SOURCE-002/003 persists only a successful upvoter with the selected tag an
   deepStrictEqual(harness.state().authors, [
     {
       userId: "voter-user",
+      memberHashId: null,
       authorNameAtCapture: "Voter",
       tagId: "chosen",
       blacklistedAt: TIMESTAMP,
@@ -611,15 +613,11 @@ test("SOURCE-005 direct storage commit wins while an upvoter POST holds the user
     authors: [
       {
         userId: "direct-race-user",
+        memberHashId: null,
         authorNameAtCapture: "Direct value",
         tagId: "direct-tag",
         blacklistedAt: TIMESTAMP,
         blockSource: "direct",
-        cardImage: {
-          dataUrl: "data:image/webp;base64,AAAA",
-          width: 10,
-          height: 5,
-        },
       },
     ],
   };
@@ -690,6 +688,7 @@ test("waiting for a shared POST slot repeats latest storage preflight", async ()
     authors: [
       {
         userId: waitingUser,
+        memberHashId: null,
         authorNameAtCapture: "Persisted elsewhere",
         tagId: "default",
         blacklistedAt: TIMESTAMP,

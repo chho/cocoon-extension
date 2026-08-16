@@ -1,12 +1,15 @@
 import {
   createBlacklistTimestamp,
+  normalizeMemberHashId,
   planAuthorCommit,
   type BlacklistState,
-  type CardImage,
   type ParsedBlacklistState,
 } from "./blacklist-state.ts";
-import type { CommitTask } from "./drawer-controller";
-import { persistPlannedCommit } from "./persist-blacklist-state.ts";
+import type { ProvenAuthorIdentity } from "./author-identity.ts";
+import type {
+  CommitTask,
+  DrawerTarget,
+} from "./drawer-controller.ts";
 
 export type CommitResult =
   | {
@@ -24,16 +27,15 @@ export type CommitResult =
 
 export interface CommitControllerDependencies<TCard, TButton> {
   readonly withExclusiveLock: <T>(operation: () => Promise<T>) => Promise<T>;
-  readonly resolveStableUserId: (card: TCard) => Promise<string | null>;
-  readonly captureCardImage: (card: TCard) => Promise<CardImage>;
+  readonly resolveAuthorIdentity: (
+    target: DrawerTarget<TCard, TButton>,
+  ) => Promise<ProvenAuthorIdentity | null>;
   readonly now: () => Date;
   readonly readState: () => Promise<ParsedBlacklistState>;
   readonly writeState: (state: BlacklistState) => Promise<void>;
   readonly applyPersistedState: (state: BlacklistState) => void;
   readonly requestFailureFocus: (button: TButton) => void;
   readonly reportMalformedStorage: () => void;
-  readonly reportCaptureFailure: (error: unknown) => void;
-  readonly reportImageOmitted: () => void;
   readonly reportFailure: (error: unknown) => void;
 }
 
@@ -46,64 +48,59 @@ export function createCommitController<TCard, TButton>(
 ): CommitController<TCard, TButton> {
   async function executeLocked(
     task: CommitTask<TCard, TButton>,
+    identity: ProvenAuthorIdentity,
   ): Promise<CommitResult> {
-    const userId = await dependencies.resolveStableUserId(task.target.card);
-    if (!userId) {
-      throw new Error("Unable to resolve a stable author ID.");
-    }
-
     const parsed = await dependencies.readState();
     if (parsed.status === "malformed") {
       dependencies.reportMalformedStorage();
     }
     const latestState = parsed.state;
-    if (latestState.authors.some((author) => author.userId === userId)) {
-      return { status: "duplicate" };
+    const canonicalIdentity: ProvenAuthorIdentity = {
+      userId: normalizeMemberHashId(identity.userId) ?? identity.userId,
+      memberHashId: normalizeMemberHashId(identity.memberHashId),
+    };
+    const existing = latestState.authors.find(
+      (author) => author.userId === canonicalIdentity.userId,
+    );
+
+    if (existing) {
+      const duplicatePlan = planAuthorCommit(latestState, {
+        ...canonicalIdentity,
+        authorNameAtCapture: task.target.authorNameAtClick,
+        tag: task.selection.tag,
+        isNewTag: task.selection.isNewTag,
+        blacklistedAt: "",
+      });
+      if (duplicatePlan.status === "backfill") {
+        await dependencies.writeState(duplicatePlan.state);
+        dependencies.applyPersistedState(duplicatePlan.state);
+        return { status: "duplicate" };
+      }
+      if (duplicatePlan.status === "duplicate") {
+        dependencies.applyPersistedState(latestState);
+        return { status: "duplicate" };
+      }
+      throw new Error("The author identity conflicts with stored aliases.");
     }
 
     const blacklistedAt = createBlacklistTimestamp(dependencies.now);
-    const preflight = planAuthorCommit(latestState, {
-      userId,
-      authorNameAtCapture: task.target.authorNameAtClick,
-      tag: task.selection.tag,
-      isNewTag: task.selection.isNewTag,
-      blacklistedAt,
-    });
-    if (preflight.status !== "ready") {
-      throw new Error("The selected tag is no longer valid.");
-    }
-
-    let cardImage: CardImage | undefined;
-    try {
-      cardImage = await dependencies.captureCardImage(task.target.card);
-    } catch (error) {
-      dependencies.reportCaptureFailure(error);
-    }
-
     const plan = planAuthorCommit(latestState, {
-      userId,
+      ...canonicalIdentity,
       authorNameAtCapture: task.target.authorNameAtClick,
       tag: task.selection.tag,
       isNewTag: task.selection.isNewTag,
       blacklistedAt,
-      cardImage,
     });
     if (plan.status !== "ready") {
       throw new Error("Unable to create a valid blacklist record.");
     }
-    if (cardImage && !plan.imageIncluded) {
-      dependencies.reportImageOmitted();
-    }
 
-    const persisted = await persistPlannedCommit(plan, dependencies.writeState);
-    if (persisted.omittedImageAfterWriteFailure) {
-      dependencies.reportImageOmitted();
-    }
-    dependencies.applyPersistedState(persisted.state);
+    await dependencies.writeState(plan.state);
+    dependencies.applyPersistedState(plan.state);
     return {
       status: "persisted",
-      state: persisted.state,
-      userId,
+      state: plan.state,
+      userId: canonicalIdentity.userId,
       blacklistedAt,
     };
   }
@@ -111,8 +108,12 @@ export function createCommitController<TCard, TButton>(
   return {
     async commit(task) {
       try {
+        const identity = await dependencies.resolveAuthorIdentity(task.target);
+        if (!identity) {
+          throw new Error("Unable to resolve a stable author ID.");
+        }
         return await dependencies.withExclusiveLock(async () =>
-          executeLocked(task),
+          executeLocked(task, identity)
         );
       } catch (error) {
         dependencies.reportFailure(error);

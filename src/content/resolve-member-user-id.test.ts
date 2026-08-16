@@ -7,6 +7,9 @@ import {
   type MemberFetchResponse,
 } from "./resolve-member-user-id.ts";
 
+const MEMBER_HASH = "abcdef0123456789".repeat(2);
+const UPPERCASE_MEMBER_HASH = MEMBER_HASH.toUpperCase();
+
 function response(
   ok: boolean,
   value: unknown,
@@ -19,32 +22,46 @@ function response(
   };
 }
 
-test("requests the encoded member endpoint and returns a valid trimmed ID", async () => {
+test("BUG-008 canonicalizes a mixed-case member hash in the GET path", async () => {
   const calls: Array<{
     input: string;
     init: { credentials: "same-origin" };
   }> = [];
   const fetchMember: MemberFetch = async (input, init) => {
     calls.push({ input, init });
-    return response(true, { url_token: "  example-user  " });
+    return response(true, { url_token: "  Example-User  " });
   };
   const resolveMemberUserId = createMemberUserIdResolver(fetchMember);
 
-  strictEqual(await resolveMemberUserId("hash/with spaces"), "example-user");
+  strictEqual(
+    await resolveMemberUserId(UPPERCASE_MEMBER_HASH),
+    "Example-User",
+  );
   deepStrictEqual(calls, [
     {
-      input: "/api/v4/members/hash%2Fwith%20spaces",
+      input: `/api/v4/members/${MEMBER_HASH}`,
       init: { credentials: "same-origin" },
     },
   ]);
 });
 
+test("rejects invalid member hashes without a request", async () => {
+  let fetchCount = 0;
+  const resolveMemberUserId = createMemberUserIdResolver(async () => {
+    fetchCount += 1;
+    return response(true, { url_token: "unexpected" });
+  });
+
+  strictEqual(await resolveMemberUserId("not-a-member-hash"), null);
+  strictEqual(fetchCount, 0);
+});
+
 test("returns null for a non-OK response", async () => {
   const resolveMemberUserId = createMemberUserIdResolver(async () =>
-    response(false, { url_token: "ignored" }),
+    response(false, { url_token: "ignored" })
   );
 
-  strictEqual(await resolveMemberUserId("member-hash"), null);
+  strictEqual(await resolveMemberUserId(MEMBER_HASH), null);
 });
 
 test("returns null when the fetch rejects", async () => {
@@ -52,7 +69,7 @@ test("returns null when the fetch rejects", async () => {
     throw new Error("network unavailable");
   });
 
-  strictEqual(await resolveMemberUserId("member-hash"), null);
+  strictEqual(await resolveMemberUserId(MEMBER_HASH), null);
 });
 
 test("returns null for invalid JSON or response schema", async () => {
@@ -63,26 +80,14 @@ test("returns null for invalid JSON or response schema", async () => {
     },
   }));
   const invalidSchemaResolver = createMemberUserIdResolver(async () =>
-    response(true, { url_token: 42 }),
+    response(true, { url_token: 42 })
   );
 
-  strictEqual(await invalidJsonResolver("invalid-json"), null);
-  strictEqual(await invalidSchemaResolver("invalid-schema"), null);
+  strictEqual(await invalidJsonResolver(MEMBER_HASH), null);
+  strictEqual(await invalidSchemaResolver(MEMBER_HASH), null);
 });
 
-test("caches a successful member ID", async () => {
-  let fetchCount = 0;
-  const resolveMemberUserId = createMemberUserIdResolver(async () => {
-    fetchCount += 1;
-    return response(true, { url_token: "cached-user" });
-  });
-
-  strictEqual(await resolveMemberUserId("member-hash"), "cached-user");
-  strictEqual(await resolveMemberUserId("member-hash"), "cached-user");
-  strictEqual(fetchCount, 1);
-});
-
-test("deduplicates concurrent requests for the same member hash", async () => {
+test("BUG-008 case variants share one resolver request and success cache key", async () => {
   let fetchCount = 0;
   let releaseResponse: ((value: MemberFetchResponse) => void) | undefined;
   const pendingResponse = new Promise<MemberFetchResponse>((resolve) => {
@@ -93,15 +98,20 @@ test("deduplicates concurrent requests for the same member hash", async () => {
     return pendingResponse;
   });
 
-  const firstRequest = resolveMemberUserId("member-hash");
-  const secondRequest = resolveMemberUserId("member-hash");
+  const firstRequest = resolveMemberUserId(UPPERCASE_MEMBER_HASH);
+  const secondRequest = resolveMemberUserId(MEMBER_HASH);
   strictEqual(fetchCount, 1);
 
-  releaseResponse?.(response(true, { url_token: "shared-user" }));
+  releaseResponse?.(response(true, { url_token: "CaseSensitive-Token" }));
   deepStrictEqual(
     await Promise.all([firstRequest, secondRequest]),
-    ["shared-user", "shared-user"],
+    ["CaseSensitive-Token", "CaseSensitive-Token"],
   );
+  strictEqual(
+    await resolveMemberUserId(UPPERCASE_MEMBER_HASH),
+    "CaseSensitive-Token",
+  );
+  strictEqual(fetchCount, 1);
 });
 
 test("removes a failed in-flight request so a later call retries", async () => {
@@ -115,7 +125,7 @@ test("removes a failed in-flight request so a later call retries", async () => {
     return response(true, { url_token: "recovered-user" });
   });
 
-  strictEqual(await resolveMemberUserId("member-hash"), null);
-  strictEqual(await resolveMemberUserId("member-hash"), "recovered-user");
+  strictEqual(await resolveMemberUserId(UPPERCASE_MEMBER_HASH), null);
+  strictEqual(await resolveMemberUserId(MEMBER_HASH), "recovered-user");
   strictEqual(fetchCount, 2);
 });

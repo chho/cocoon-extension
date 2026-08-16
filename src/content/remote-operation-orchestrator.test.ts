@@ -95,6 +95,9 @@ test("PREF-003/AC-044/045 saved preselection survives cancel and runs only on ta
     card: "card",
     button: "button",
     authorNameAtClick: "Author",
+    profileUserIdAtClick: null,
+    memberHashIdAtClick: null,
+    anchorBounds: null,
     voterSource: source,
   };
 

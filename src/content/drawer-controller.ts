@@ -6,11 +6,23 @@ import {
 import type { CocoonTag } from "./blacklist-state";
 import type { ZhihuContentSource } from "./zhihu-content-source.ts";
 
+export interface DrawerAnchorBounds {
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface DrawerTarget<TCard, TButton> {
   readonly targetId: string;
   readonly card: TCard;
   readonly button: TButton;
   readonly authorNameAtClick: string;
+  readonly profileUserIdAtClick: string | null;
+  readonly memberHashIdAtClick: string | null;
+  readonly anchorBounds: DrawerAnchorBounds | null;
   readonly voterSource: ZhihuContentSource | null;
 }
 
