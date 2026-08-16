@@ -8,7 +8,7 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 - 点击扩展图标，Popup 显示 `Hello`。
 - 进入知乎首页 `https://www.zhihu.com/` 后，为每张内容信息流卡片添加一个极简 `×` 按钮。
-- 点击 `×` 后打开本地标签抽屉；选择或创建标签后，将作者信息、标签和卡片图像记录到 `chrome.storage.local`，并使用稳定作者 ID 隐藏当前及后续出现的同作者卡片。
+- 点击 `×` 后打开本地标签抽屉；选择或创建标签后，将作者稳定标识、名称、标签、来源和首次屏蔽时间记录到 `chrome.storage.local`，并隐藏当前及后续出现的同作者卡片与评论；不采集或保存卡片图像。
 - 具体已交付能力、待开发需求和已知浏览器缺陷以 `docs/blacklist-spec.md` 的需求状态为准。
 
 ## 技术栈
@@ -81,19 +81,23 @@ npm run build
 3. 开启开发者模式。
 4. 加载或重新加载 `dist/` 目录，而不是项目根目录。
 5. 刷新知乎首页。
-6. 点击卡片右上角的 `×`，验证标签抽屉、存储记录、截图和作者卡片隐藏行为。
+6. 点击卡片右上角的 `×`，验证标签抽屉、无图存储记录，以及作者卡片和评论隐藏行为。
 
 修改 Manifest 或内容脚本后，必须同时重新加载扩展并刷新目标网页。
 
 ### Chrome DevTools 连接约定
 
-当 Pi 使用以下方式启动时：
+Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chrome DevTools 自动启动浏览器：
 
-```bash
-PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0 pi
+```json
+{
+  "browser": {
+    "autoLaunch": false
+  }
+}
 ```
 
-浏览器检查必须遵守：
+配置后直接运行 `pi`；不得再使用已弃用的 `PI_CHROME_DEVTOOLS_AUTO_LAUNCH` 环境变量。浏览器检查必须遵守：
 
 - 只连接用户已经运行且已登录的 Chrome，不得启动新的 Chrome、Chromium 或 Chrome for Testing 实例。
 - 不得创建临时浏览器 Profile，也不得通过 `bash`、`open`、`nohup` 或其他子进程绕过限制启动浏览器。

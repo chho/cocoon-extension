@@ -119,7 +119,7 @@ Chrome DevTools tools are available, but do not open or control a browser unless
 
 When browser validation is requested:
 - Reuse only the user's already-running Chrome DevTools endpoint and its existing pages.
-- Treat `PI_CHROME_DEVTOOLS_AUTO_LAUNCH=0` as a strict prohibition on launching browsers.
+- Treat the project policy and `browser.autoLaunch: false` in `~/.pi/agent/pi-chrome-devtools.json` as a strict prohibition on launching browsers.
 - Start with `chrome_devtools_list_pages`; do not call `chrome_devtools_navigate` merely to discover or select an existing page.
 - A `404` from `/json/version`, `/json/list`, or another HTTP discovery endpoint does not prove that CDP is unavailable.
 - If HTTP discovery returns `404`, read the existing Chrome profile's `DevToolsActivePort`, connect directly to its Browser WebSocket, call `Target.getTargets`, attach to the required existing page with `Target.attachToTarget`, and use session-scoped CDP commands such as `Runtime.evaluate`.
