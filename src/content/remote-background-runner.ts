@@ -70,7 +70,11 @@ export function createRemoteBackgroundRunner<TCard, TButton>(
                   committed,
                   source,
                 );
-                if (voterResult.phase === "failed" || !voterResult.dataComplete) {
+                if (
+                  voterResult.phase === "failed" ||
+                  voterResult.failed > 0 ||
+                  !voterResult.dataComplete
+                ) {
                   dependencies.reportFailure("voters");
                 }
               } catch {

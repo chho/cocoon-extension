@@ -88,13 +88,12 @@ function createNamedExclusiveLockManager() {
       }
 
       const release = createSignal();
-      const tail = release.promise;
-      tails.set(name, tail);
+      tails.set(name, release.promise);
       try {
         return { acquired: true, value: await operation() };
       } finally {
         release.resolve();
-        if (tails.get(name) === tail) {
+        if (tails.get(name) === release.promise) {
           tails.delete(name);
         }
       }
@@ -110,180 +109,146 @@ function createNamedExclusiveLockManager() {
   };
 }
 
+function directAuthor(userId: string, tagId = "default") {
+  return {
+    userId,
+    memberHashId: null,
+    authorNameAtCapture: `Direct ${userId}`,
+    tagId,
+    blacklistedAt: TIMESTAMP,
+    blockSource: "direct" as const,
+  };
+}
+
 function createHarness(
   initialState: BlacklistState,
-  blockResult: RemoteBlockResult = { status: "success", endpoint: "primary" },
-  failures: {
-    readonly tryLock?: boolean;
-    readonly readState?: boolean;
+  options: {
+    readonly blockResult?: RemoteBlockResult;
+    readonly blockUser?: (
+      userId: string,
+      isStopped: () => boolean,
+    ) => Promise<RemoteBlockResult>;
+    readonly failRead?: boolean;
+    readonly failSlotLock?: boolean;
+    readonly failStorageLock?: boolean;
+    readonly failTryLock?: boolean;
+    readonly failWrite?: boolean;
+    readonly failWriteAttempts?: number;
+    readonly holdFirstRead?: boolean;
+    readonly holdWrite?: boolean;
   } = {},
 ) {
   const lockManager = createNamedExclusiveLockManager();
   let stored = initialState;
   let runtime = initialState;
   let posts = 0;
+  let reads = 0;
   let writes = 0;
-  let releaseBlock: (() => void) | null = null;
-  let markBlockStarted: (() => void) | null = null;
-  let waitForRelease = false;
-  let blockStarted = Promise.resolve();
-  const coordinator = createRemoteBlockCoordinator({
+  let applies = 0;
+  let storageFailures = 0;
+  const readStarted = createSignal();
+  const releaseRead = createSignal();
+  const writeStarted = createSignal();
+  const releaseWrite = createSignal();
+
+  const dependencies = {
     async withExclusiveLock<T>(operation: () => Promise<T>): Promise<T> {
+      if (options.failStorageLock) {
+        throw new Error("The storage lock API failed.");
+      }
       return lockManager.withLock(STORAGE_LOCK_NAME, operation);
     },
     async withCrossContextLock<T>(
       name: string,
       operation: () => Promise<T>,
     ): Promise<T> {
+      if (options.failSlotLock) {
+        throw new Error("The remote slot lock API failed.");
+      }
       return lockManager.withLock(name, operation);
     },
     async tryWithCrossContextUserLock<T>(
       name: string,
       operation: () => Promise<T>,
     ): Promise<CrossContextTryLockResult<T>> {
-      if (failures.tryLock) {
+      if (options.failTryLock) {
         throw new Error("The user lock API failed.");
       }
       return lockManager.tryWithLock(name, operation);
     },
     async readState() {
-      if (failures.readState) {
+      reads += 1;
+      if (options.holdFirstRead && reads === 1) {
+        readStarted.resolve();
+        await releaseRead.promise;
+      }
+      if (options.failRead) {
         throw new Error("The storage read failed.");
       }
       return parseBlacklistState(stored);
     },
-    async writeState(state) {
+    async writeState(state: BlacklistState) {
       writes += 1;
+      if (options.holdWrite) {
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      if (
+        options.failWrite ||
+        writes <= (options.failWriteAttempts ?? 0)
+      ) {
+        throw new Error("storage unavailable");
+      }
       stored = state;
     },
-    applyPersistedState(state) {
+    applyPersistedState(state: BlacklistState) {
+      applies += 1;
       runtime = state;
     },
     now() {
       return new Date(TIMESTAMP);
     },
-    async blockUser() {
+    async blockUser(userId: string, isStopped: () => boolean) {
       posts += 1;
-      if (waitForRelease) {
-        markBlockStarted?.();
-        await new Promise<void>((resolve) => {
-          releaseBlock = resolve;
-        });
+      if (options.blockUser) {
+        return options.blockUser(userId, isStopped);
       }
-      return blockResult;
+      return options.blockResult ?? {
+        status: "success" as const,
+        endpoint: "primary" as const,
+      };
     },
     reportMalformedStorage() {},
-    reportStorageFailure() {},
-  });
+    reportStorageFailure() {
+      storageFailures += 1;
+    },
+  };
+  const coordinator = createRemoteBlockCoordinator(dependencies);
 
   return {
     coordinator,
-    state: () => stored,
-    runtime: () => runtime,
-    counts: () => ({ posts, writes }),
-    holdBlock() {
-      waitForRelease = true;
-      blockStarted = new Promise<void>((resolve) => {
-        markBlockStarted = resolve;
-      });
-    },
-    async waitUntilBlockStarts() {
-      await blockStarted;
-    },
-    releaseBlock() {
-      releaseBlock?.();
-    },
-    deleteTag(tagId: string) {
-      const plan = planTagDeletion(stored, tagId);
-      if (plan.status !== "ready") {
-        throw new Error("Expected a deletable tag.");
-      }
-      stored = plan.state;
-      runtime = plan.state;
-    },
-  };
-}
-
-function createSharedHarness(
-  initialState: BlacklistState,
-  blockUser: (
-    userId: string,
-    isStopped: () => boolean,
-  ) => Promise<RemoteBlockResult>,
-) {
-  const lockManager = createNamedExclusiveLockManager();
-  let stored = initialState;
-  let runtime = initialState;
-  let writes = 0;
-
-  function createCoordinator() {
-    return createRemoteBlockCoordinator({
-      async withExclusiveLock<T>(operation: () => Promise<T>): Promise<T> {
-        return lockManager.withLock(STORAGE_LOCK_NAME, operation);
-      },
-      async withCrossContextLock<T>(
-        name: string,
-        operation: () => Promise<T>,
-      ): Promise<T> {
-        return lockManager.withLock(name, operation);
-      },
-      async tryWithCrossContextUserLock<T>(
-        name: string,
-        operation: () => Promise<T>,
-      ): Promise<CrossContextTryLockResult<T>> {
-        return lockManager.tryWithLock(name, operation);
-      },
-      async readState() {
-        return parseBlacklistState(stored);
-      },
-      async writeState(state) {
-        writes += 1;
-        stored = state;
-      },
-      applyPersistedState(state) {
-        runtime = state;
-      },
-      now() {
-        return new Date(TIMESTAMP);
-      },
-      blockUser,
-      reportMalformedStorage() {},
-      reportStorageFailure() {},
-    });
-  }
-
-  return {
-    coordinators: [createCoordinator(), createCoordinator()] as const,
+    createCoordinator: () => createRemoteBlockCoordinator(dependencies),
     lockManager,
     state: () => stored,
     runtime: () => runtime,
-    writes: () => writes,
+    counts: () => ({ posts, writes, applies, storageFailures }),
+    readStarted: readStarted.promise,
+    releaseRead: releaseRead.resolve,
+    writeStarted: writeStarted.promise,
+    releaseWrite: releaseWrite.resolve,
     replaceState(state: BlacklistState) {
       stored = state;
       runtime = state;
     },
-    async writeStateFromOtherContext(state: BlacklistState): Promise<void> {
-      await lockManager.withLock(STORAGE_LOCK_NAME, async () => {
-        stored = state;
-        runtime = state;
-      });
-    },
   };
 }
 
-function directState(): BlacklistState {
+function upvoterRequest(userId = "voter-user") {
   return {
-    ...createInitialState(),
-    authors: [
-      {
-        userId: "direct-user",
-        memberHashId: null,
-        authorNameAtCapture: "Direct",
-        tagId: "default",
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-      },
-    ],
+    source: "upvoter" as const,
+    userId,
+    authorName: `Voter ${userId}`,
+    tagId: "default",
   };
 }
 
@@ -303,459 +268,774 @@ function userIdsBySlot(countPerSlot: number): readonly string[][] {
   return slots;
 }
 
-test("SOURCE-005 allows remote direct work only for the just-created direct record", async () => {
-  const harness = createHarness(directState());
-  const success = await harness.coordinator.block({
-    source: "direct",
-    userId: "direct-user",
-    expectedBlacklistedAt: TIMESTAMP,
-  });
-  strictEqual(success.status, "success");
-  deepStrictEqual(harness.counts(), { posts: 1, writes: 0 });
-
-  const stale = await createHarness(directState()).coordinator.block({
-    source: "direct",
-    userId: "direct-user",
-    expectedBlacklistedAt: "2027-01-01T00:00:00.000Z",
-  });
-  deepStrictEqual(stale, { status: "skipped", reason: "existing" });
-});
-
-test("SOURCE-002/003 persists only a successful upvoter with the selected tag and no image", async () => {
-  const state: BlacklistState = {
+test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v4 record", async () => {
+  const initial: BlacklistState = {
     ...createInitialState(),
     tags: [...createInitialState().tags, { tagId: "chosen", name: "Chosen" }],
   };
-  const harness = createHarness(state);
+  const harness = createHarness(initial);
+
   const result = await harness.coordinator.block({
-    source: "upvoter",
-    userId: "voter-user",
-    authorName: "Voter",
+    ...upvoterRequest(),
     tagId: "chosen",
   });
 
   deepStrictEqual(result, { status: "success", persistedUpvoter: true });
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 1,
+    applies: 1,
+    storageFailures: 0,
+  });
   deepStrictEqual(harness.state().authors, [
     {
       userId: "voter-user",
       memberHashId: null,
-      authorNameAtCapture: "Voter",
+      authorNameAtCapture: "Voter voter-user",
       tagId: "chosen",
       blacklistedAt: TIMESTAMP,
       blockSource: "upvoter",
     },
   ]);
+  strictEqual(harness.state().schemaVersion, 4);
+  strictEqual(isValidBlacklistTimestamp(harness.state().authors[0]?.blacklistedAt), true);
   strictEqual(harness.runtime(), harness.state());
-});
-
-test("SOURCE-003 migrates an upvoter to default when its tag is deleted during POST", async () => {
-  const state: BlacklistState = {
-    ...createInitialState(),
-    tags: [...createInitialState().tags, { tagId: "chosen", name: "Chosen" }],
-  };
-  const harness = createHarness(state);
-  harness.holdBlock();
-  const running = harness.coordinator.block({
-    source: "upvoter",
-    userId: "voter-user",
-    authorName: "Voter",
-    tagId: "chosen",
-  });
-
-  await harness.waitUntilBlockStarts();
-  harness.deleteTag("chosen");
-  harness.releaseBlock();
-
-  deepStrictEqual(await running, {
-    status: "success",
-    persistedUpvoter: true,
-  });
-  strictEqual(harness.counts().posts, 1);
-  strictEqual(harness.state().authors.length, 1);
-  const saved = harness.state().authors[0];
-  strictEqual(saved?.tagId, "default");
-  strictEqual(saved?.blockSource, "upvoter");
-  strictEqual(isValidBlacklistTimestamp(saved?.blacklistedAt), true);
-});
-
-test("SOURCE-002 does not persist a remotely failed upvoter", async () => {
-  const harness = createHarness(createInitialState(), {
-    status: "failed",
-    reason: "http",
-  });
-  const result = await harness.coordinator.block({
-    source: "upvoter",
-    userId: "failed-user",
-    authorName: "Failed",
-    tagId: "default",
-  });
-
-  deepStrictEqual(result, { status: "failed", reason: "http" });
-  deepStrictEqual(harness.state().authors, []);
-  deepStrictEqual(harness.counts(), { posts: 1, writes: 0 });
-});
-
-test("SOURCE-005 skips latest storage users before any POST and never overwrites fields", async () => {
-  const existing = directState();
-  const harness = createHarness(existing);
-  const result = await harness.coordinator.block({
-    source: "upvoter",
-    userId: "direct-user",
-    authorName: "Changed",
-    tagId: "default",
-  });
-
-  deepStrictEqual(result, { status: "skipped", reason: "existing" });
-  deepStrictEqual(harness.counts(), { posts: 0, writes: 0 });
-  deepStrictEqual(harness.state(), existing);
-});
-
-test("VOTER-010/SOURCE-005 concurrent requests in one coordinator share the in-flight operation", async () => {
-  const harness = createHarness(createInitialState());
-  harness.holdBlock();
-  const first = harness.coordinator.block({
-    source: "upvoter",
-    userId: "shared-user",
-    authorName: "Shared",
-    tagId: "default",
-  });
-  await harness.waitUntilBlockStarts();
-  const second = harness.coordinator.block({
-    source: "upvoter",
-    userId: "shared-user",
-    authorName: "Changed",
-    tagId: "default",
-  });
-  harness.releaseBlock();
-
-  deepStrictEqual(
-    [(await first).status, (await second).status],
-    ["success", "skipped"],
-  );
-  deepStrictEqual(harness.counts(), { posts: 1, writes: 1 });
-  strictEqual(harness.state().authors.length, 1);
-});
-
-test("failed users can be retried by a later batch without an attempted cache", async () => {
-  for (const reason of [
-    "network",
-    "http",
-    "rate-limit",
-    "authentication",
-  ] as const) {
-    const harness = createHarness(createInitialState(), {
-      status: "failed",
-      reason,
-    });
-    const request = {
-      source: "upvoter",
-      userId: `retry-${reason}`,
-      authorName: "Retry",
-      tagId: "default",
-    } as const;
-
-    deepStrictEqual(await harness.coordinator.block(request), {
-      status: "failed",
-      reason,
-    });
-    deepStrictEqual(await harness.coordinator.block(request), {
-      status: "failed",
-      reason,
-    });
-    strictEqual(harness.counts().posts, 2);
-  }
-});
-
-test("lock API failures stay network-classified while locked storage failures stay storage-classified", async () => {
-  const request = {
-    source: "upvoter",
-    userId: "classification-user",
-    authorName: "Classification",
-    tagId: "default",
-  } as const;
-  const lockFailure = createHarness(
-    createInitialState(),
-    { status: "success", endpoint: "primary" },
-    { tryLock: true },
-  );
-  deepStrictEqual(await lockFailure.coordinator.block(request), {
-    status: "failed",
-    reason: "network",
-  });
-  strictEqual(lockFailure.counts().posts, 0);
-
-  const storageFailure = createHarness(
-    createInitialState(),
-    { status: "success", endpoint: "primary" },
-    { readState: true },
-  );
-  deepStrictEqual(await storageFailure.coordinator.block(request), {
-    status: "failed",
-    reason: "storage",
-  });
-  strictEqual(storageFailure.counts().posts, 0);
-});
-
-test("SOURCE-005 try-locks the same user across coordinator instances and posts once", async () => {
-  const blockStarted = createSignal();
-  const releaseBlock = createSignal();
-  let posts = 0;
-  const harness = createSharedHarness(
-    createInitialState(),
-    async () => {
-      posts += 1;
-      blockStarted.resolve();
-      await releaseBlock.promise;
-      return { status: "success", endpoint: "primary" };
-    },
-  );
-  const request = {
-    source: "upvoter",
-    userId: "cross-context-user",
-    authorName: "Shared",
-    tagId: "default",
-  } as const;
-
-  const first = harness.coordinators[0].block(request);
-  await blockStarted.promise;
-  const second = harness.coordinators[1].block(request);
-  releaseBlock.resolve();
-  const results = await Promise.all([first, second]);
-
-  deepStrictEqual(results, [
-    { status: "success", persistedUpvoter: true },
-    { status: "skipped", reason: "concurrent" },
-  ]);
-  strictEqual(posts, 1);
-  strictEqual(harness.writes(), 1);
-  strictEqual(harness.state().authors.length, 1);
   strictEqual(
     harness.lockManager.requestedNames.some((name) =>
-      name.includes("cross-context-user")
+      name.startsWith("cocoon-remote-block-slot-") ||
+      name.startsWith("cocoon-remote-block-user-"),
     ),
     false,
   );
 });
 
-test("SOURCE-005 overlapping failed requests post once and a later batch can retry", async () => {
-  for (const reason of ["http", "network"] as const) {
-    const firstBlockStarted = createSignal();
-    const releaseFirstBlock = createSignal();
-    let posts = 0;
-    const harness = createSharedHarness(createInitialState(), async () => {
-      posts += 1;
-      if (posts === 1) {
-        firstBlockStarted.resolve();
-        await releaseFirstBlock.promise;
-      }
-      return { status: "failed", reason };
-    });
-    const request = {
-      source: "upvoter",
-      userId: `overlapping-failure-${reason}`,
-      authorName: "Retry",
-      tagId: "default",
-    } as const;
+test("REMOTE-002 direct requests retain the remote POST path without local writes", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("direct-user")],
+  };
+  const harness = createHarness(initial);
 
-    const first = harness.coordinators[0].block(request);
-    await firstBlockStarted.promise;
-    const userLockName = harness.lockManager.requestedNames.find((name) =>
-      name.startsWith("cocoon-remote-block-user-")
-    );
-    if (!userLockName) {
-      throw new Error("The cross-context user lock was not requested.");
+  const result = await harness.coordinator.block({
+    source: "direct",
+    userId: "direct-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+
+  deepStrictEqual(result, { status: "success", persistedUpvoter: false });
+  deepStrictEqual(harness.counts(), {
+    posts: 1,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+  strictEqual(
+    harness.lockManager.requestedNames.some((name) =>
+      name.startsWith("cocoon-remote-block-slot-"),
+    ),
+    true,
+  );
+});
+
+test("VOTER-014 falls back to default when the selected tag was deleted after scheduling", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    tags: [...createInitialState().tags, { tagId: "chosen", name: "Chosen" }],
+  };
+  const harness = createHarness(initial);
+  const holderReady = createSignal();
+  const releaseHolder = createSignal();
+  const holder = harness.lockManager.withLock(STORAGE_LOCK_NAME, async () => {
+    holderReady.resolve();
+    await releaseHolder.promise;
+    const deletion = planTagDeletion(harness.state(), "chosen");
+    if (deletion.status !== "ready") {
+      throw new Error("Expected selected tag deletion to succeed.");
     }
-    const second = harness.coordinators[1].block(request);
-    await harness.lockManager.waitForRequestCount(userLockName, 2);
-    releaseFirstBlock.resolve();
+    harness.replaceState(deletion.state);
+  });
+  await holderReady.promise;
 
-    deepStrictEqual(await Promise.all([first, second]), [
-      { status: "failed", reason },
-      { status: "skipped", reason: "concurrent" },
-    ]);
-    strictEqual(posts, 1);
+  const running = harness.coordinator.block({
+    ...upvoterRequest(),
+    tagId: "chosen",
+  });
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  releaseHolder.resolve();
+  await holder;
 
-    deepStrictEqual(await harness.coordinators[1].block(request), {
-      status: "failed",
-      reason,
+  deepStrictEqual(await running, {
+    status: "success",
+    persistedUpvoter: true,
+  });
+  strictEqual(harness.state().authors[0]?.tagId, "default");
+  strictEqual(harness.counts().posts, 0);
+});
+
+test("SOURCE-005 latest-state userId/memberHash duplicate skips without overwriting a direct record", async () => {
+  const direct = {
+    ...directAuthor("canonical-user"),
+    memberHashId: "a".repeat(32),
+  };
+  const existing: BlacklistState = {
+    ...createInitialState(),
+    authors: [direct],
+  };
+  const harness = createHarness(existing);
+
+  const result = await harness.coordinator.block({
+    ...upvoterRequest(direct.memberHashId),
+    authorName: "Changed name",
+  });
+
+  deepStrictEqual(result, { status: "skipped", reason: "existing" });
+  deepStrictEqual(harness.state(), existing);
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("VOTER-014 a direct commit winning the storage race is reported skipped", async () => {
+  const harness = createHarness(createInitialState());
+  const holderReady = createSignal();
+  const releaseHolder = createSignal();
+  const directState: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("race-user")],
+  };
+  const holder = harness.lockManager.withLock(STORAGE_LOCK_NAME, async () => {
+    holderReady.resolve();
+    await releaseHolder.promise;
+    harness.replaceState(directState);
+  });
+  await holderReady.promise;
+
+  const running = harness.coordinator.block(upvoterRequest("race-user"));
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  releaseHolder.resolve();
+  await holder;
+
+  deepStrictEqual(await running, { status: "skipped", reason: "existing" });
+  deepStrictEqual(harness.state(), directState);
+  strictEqual(harness.counts().writes, 0);
+  strictEqual(harness.counts().posts, 0);
+});
+
+test("VOTER-014 same-context upvoter lock waiting cannot suppress an authorized direct POST", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("same-race-user")],
+  };
+  const harness = createHarness(initial, { holdFirstRead: true });
+
+  const upvoter = harness.coordinator.block(upvoterRequest("same-race-user"));
+  await harness.readStarted;
+  const direct = harness.coordinator.block({
+    source: "direct",
+    userId: "same-race-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+  harness.releaseRead();
+
+  deepStrictEqual(await Promise.all([upvoter, direct]), [
+    { status: "skipped", reason: "existing" },
+    { status: "success", persistedUpvoter: false },
+  ]);
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  deepStrictEqual(harness.counts(), {
+    posts: 1,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("VOTER-014 cross-context upvoter lock waiting cannot suppress an authorized direct POST", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("cross-race-user")],
+  };
+  const harness = createHarness(initial, { holdFirstRead: true });
+  const otherCoordinator = harness.createCoordinator();
+
+  const upvoter = harness.coordinator.block(upvoterRequest("cross-race-user"));
+  await harness.readStarted;
+  const direct = otherCoordinator.block({
+    source: "direct",
+    userId: "cross-race-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+  harness.releaseRead();
+
+  deepStrictEqual(await Promise.all([upvoter, direct]), [
+    { status: "skipped", reason: "existing" },
+    { status: "success", persistedUpvoter: false },
+  ]);
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  deepStrictEqual(harness.counts(), {
+    posts: 1,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("VOTER-014 same-context direct POST overlap still lets the upvoter reach its storage re-read", async () => {
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("same-overlap-user")],
+  };
+  const harness = createHarness(initial, {
+    async blockUser() {
+      blockStarted.resolve();
+      await releaseBlock.promise;
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+
+  const direct = harness.coordinator.block({
+    source: "direct",
+    userId: "same-overlap-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+  await blockStarted.promise;
+  const upvoter = harness.coordinator.block(upvoterRequest("same-overlap-user"));
+  releaseBlock.resolve();
+
+  deepStrictEqual(await Promise.all([direct, upvoter]), [
+    { status: "success", persistedUpvoter: false },
+    { status: "skipped", reason: "existing" },
+  ]);
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  strictEqual(harness.counts().posts, 1);
+  strictEqual(harness.counts().writes, 0);
+});
+
+test("VOTER-014 cross-context direct POST overlap still lets the upvoter reach its storage re-read", async () => {
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("cross-overlap-user")],
+  };
+  const harness = createHarness(initial, {
+    async blockUser() {
+      blockStarted.resolve();
+      await releaseBlock.promise;
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+  const otherCoordinator = harness.createCoordinator();
+
+  const direct = harness.coordinator.block({
+    source: "direct",
+    userId: "cross-overlap-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+  await blockStarted.promise;
+  const upvoter = otherCoordinator.block(upvoterRequest("cross-overlap-user"));
+  releaseBlock.resolve();
+
+  deepStrictEqual(await Promise.all([direct, upvoter]), [
+    { status: "success", persistedUpvoter: false },
+    { status: "skipped", reason: "existing" },
+  ]);
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  strictEqual(harness.counts().posts, 1);
+  strictEqual(harness.counts().writes, 0);
+});
+
+test("SOURCE-005 same-context upvoters serialize to one write and one existing skip", async () => {
+  const harness = createHarness(createInitialState(), { holdWrite: true });
+  const first = harness.coordinator.block(upvoterRequest("shared-user"));
+  await harness.writeStarted;
+  const second = harness.coordinator.block(upvoterRequest("shared-user"));
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  harness.releaseWrite();
+
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "success", persistedUpvoter: true },
+    { status: "skipped", reason: "existing" },
+  ]);
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 1,
+    applies: 1,
+    storageFailures: 0,
+  });
+});
+
+test("SOURCE-005 cross-context upvoters serialize through the global storage lock", async () => {
+  const harness = createHarness(createInitialState(), { holdWrite: true });
+  const otherCoordinator = harness.createCoordinator();
+  const first = harness.coordinator.block(upvoterRequest("cross-context-user"));
+  await harness.writeStarted;
+  const second = otherCoordinator.block(upvoterRequest("cross-context-user"));
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  harness.releaseWrite();
+
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "success", persistedUpvoter: true },
+    { status: "skipped", reason: "existing" },
+  ]);
+  strictEqual(harness.counts().writes, 1);
+  strictEqual(harness.counts().posts, 0);
+  strictEqual(
+    harness.lockManager.requestedNames.some((name) =>
+      name.startsWith("cocoon-remote-block-user-"),
+    ),
+    false,
+  );
+});
+
+test("SOURCE-005 a waiting upvoter persists after the first concurrent write fails", async () => {
+  const harness = createHarness(createInitialState(), {
+    failWriteAttempts: 1,
+    holdWrite: true,
+  });
+  const first = harness.coordinator.block(upvoterRequest("retry-user"));
+  await harness.writeStarted;
+  const second = harness.coordinator.block(upvoterRequest("retry-user"));
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  harness.releaseWrite();
+
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "failed", reason: "storage" },
+    { status: "success", persistedUpvoter: true },
+  ]);
+  strictEqual(harness.state().authors[0]?.userId, "retry-user");
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 2,
+    applies: 1,
+    storageFailures: 1,
+  });
+});
+
+test("ERR-001 upvoter storage failure does not apply runtime state or report success", async () => {
+  const initial = createInitialState();
+  const harness = createHarness(initial, { failWrite: true });
+
+  const result = await harness.coordinator.block(upvoterRequest("failed-user"));
+
+  deepStrictEqual(result, { status: "failed", reason: "storage" });
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 1,
+    applies: 0,
+    storageFailures: 1,
+  });
+});
+
+test("VOTER-014 lifecycle stop before persistence performs no POST, write, or runtime apply", async () => {
+  const harness = createHarness(createInitialState());
+
+  const result = await harness.coordinator.block(
+    upvoterRequest("stopped-user"),
+    () => true,
+  );
+
+  deepStrictEqual(result, { status: "stopped" });
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("VOTER-014 lifecycle stop while waiting for the storage lock prevents the local write", async () => {
+  const initial = createInitialState();
+  const harness = createHarness(initial);
+  const holderReady = createSignal();
+  const releaseHolder = createSignal();
+  const holder = harness.lockManager.withLock(STORAGE_LOCK_NAME, async () => {
+    holderReady.resolve();
+    await releaseHolder.promise;
+  });
+  await holderReady.promise;
+  let stopped = false;
+
+  const running = harness.coordinator.block(
+    upvoterRequest("stopped-lock-waiter"),
+    () => stopped,
+  );
+  await harness.lockManager.waitForRequestCount(STORAGE_LOCK_NAME, 2);
+  stopped = true;
+  releaseHolder.resolve();
+  await holder;
+
+  deepStrictEqual(await running, { status: "stopped" });
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("VOTER-014 lifecycle stop after the lock-time read prevents the local write", async () => {
+  const initial = createInitialState();
+  const harness = createHarness(initial, { holdFirstRead: true });
+  let stopped = false;
+
+  const running = harness.coordinator.block(
+    upvoterRequest("stopped-before-write"),
+    () => stopped,
+  );
+  await harness.readStarted;
+  stopped = true;
+  harness.releaseRead();
+
+  deepStrictEqual(await running, { status: "stopped" });
+  deepStrictEqual(harness.state(), initial);
+  deepStrictEqual(harness.runtime(), initial);
+  deepStrictEqual(harness.counts(), {
+    posts: 0,
+    writes: 0,
+    applies: 0,
+    storageFailures: 0,
+  });
+});
+
+test("ERR-001 upvoter storage lock and read exceptions stay storage-classified", async () => {
+  for (const options of [
+    { failStorageLock: true },
+    { failRead: true },
+  ] as const) {
+    const harness = createHarness(createInitialState(), options);
+
+    deepStrictEqual(
+      await harness.coordinator.block(upvoterRequest("storage-error-user")),
+      { status: "failed", reason: "storage" },
+    );
+    deepStrictEqual(harness.counts(), {
+      posts: 0,
+      writes: 0,
+      applies: 0,
+      storageFailures: 1,
     });
-    strictEqual(posts, 2);
   }
 });
 
-test("SOURCE-005 direct storage commit wins while an upvoter POST holds the user try-lock", async () => {
-  const blockStarted = createSignal();
-  const releaseBlock = createSignal();
-  let posts = 0;
-  const initialState: BlacklistState = {
+test("REMOTE-005 direct remote failures remain failures without changing local state", async () => {
+  const initial: BlacklistState = {
     ...createInitialState(),
-    tags: [
-      ...createInitialState().tags,
-      { tagId: "direct-tag", name: "Direct tag" },
-    ],
+    authors: [directAuthor("direct-user")],
   };
-  const harness = createSharedHarness(initialState, async () => {
-    posts += 1;
-    blockStarted.resolve();
-    await releaseBlock.promise;
-    return { status: "success", endpoint: "primary" };
+  const harness = createHarness(initial, {
+    blockResult: { status: "failed", reason: "http" },
   });
-  const upvoter = harness.coordinators[0].block({
-    source: "upvoter",
-    userId: "direct-race-user",
-    authorName: "Upvoter value",
-    tagId: "default",
-  });
-  await blockStarted.promise;
 
-  const directState: BlacklistState = {
-    ...initialState,
-    authors: [
-      {
-        userId: "direct-race-user",
-        memberHashId: null,
-        authorNameAtCapture: "Direct value",
-        tagId: "direct-tag",
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
-      },
-    ],
-  };
-  await harness.writeStateFromOtherContext(directState);
-  const direct = harness.coordinators[1].block({
+  const result = await harness.coordinator.block({
     source: "direct",
-    userId: "direct-race-user",
+    userId: "direct-user",
     expectedBlacklistedAt: TIMESTAMP,
   });
-  const userLockName = harness.lockManager.requestedNames.find((name) =>
-    name.startsWith("cocoon-remote-block-user-")
+
+  deepStrictEqual(result, { status: "failed", reason: "http" });
+  strictEqual(harness.counts().posts, 1);
+  strictEqual(harness.counts().writes, 0);
+});
+
+test("SOURCE-005 stale expectedBlacklistedAt blocks a direct POST", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("stale-direct-user")],
+  };
+  const harness = createHarness(initial);
+
+  deepStrictEqual(
+    await harness.coordinator.block({
+      source: "direct",
+      userId: "stale-direct-user",
+      expectedBlacklistedAt: "2027-01-01T00:00:00.000Z",
+    }),
+    { status: "skipped", reason: "existing" },
   );
-  if (!userLockName) {
-    throw new Error("The cross-context user lock was not requested.");
-  }
-  await harness.lockManager.waitForRequestCount(userLockName, 2);
+  strictEqual(harness.counts().posts, 0);
+  deepStrictEqual(harness.state(), initial);
+});
+
+test("SOURCE-005 same-context direct requests retain in-flight deduplication", async () => {
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("same-direct-user")],
+  };
+  const harness = createHarness(initial, {
+    async blockUser() {
+      blockStarted.resolve();
+      await releaseBlock.promise;
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+  const request = {
+    source: "direct" as const,
+    userId: "same-direct-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  };
+
+  const first = harness.coordinator.block(request);
+  await blockStarted.promise;
+  const second = harness.coordinator.block(request);
   releaseBlock.resolve();
 
-  deepStrictEqual(await Promise.all([upvoter, direct]), [
+  deepStrictEqual(await Promise.all([first, second]), [
     { status: "success", persistedUpvoter: false },
     { status: "skipped", reason: "concurrent" },
   ]);
-  strictEqual(posts, 1);
-  deepStrictEqual(harness.state(), directState);
-  deepStrictEqual(harness.runtime(), directState);
+  strictEqual(harness.counts().posts, 1);
 });
 
-test("waiting for a shared POST slot repeats latest storage preflight", async () => {
+test("SOURCE-005 cross-context direct requests retain the hashed user try-lock", async () => {
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("cross-direct-user")],
+  };
+  const harness = createHarness(initial, {
+    async blockUser() {
+      blockStarted.resolve();
+      await releaseBlock.promise;
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+  const otherCoordinator = harness.createCoordinator();
+  const request = {
+    source: "direct" as const,
+    userId: "cross-direct-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  };
+
+  const first = harness.coordinator.block(request);
+  await blockStarted.promise;
+  const second = otherCoordinator.block(request);
+  releaseBlock.resolve();
+
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "success", persistedUpvoter: false },
+    { status: "skipped", reason: "concurrent" },
+  ]);
+  strictEqual(harness.counts().posts, 1);
+  const userLockNames = harness.lockManager.requestedNames.filter((name) =>
+    name.startsWith("cocoon-remote-block-user-"),
+  );
+  strictEqual(userLockNames.length, 2);
+  strictEqual(
+    userLockNames.some((name) => name.includes("cross-direct-user")),
+    false,
+  );
+});
+
+test("SOURCE-005 direct preflight is rechecked after waiting for a shared POST slot", async () => {
   const [sameSlot] = userIdsBySlot(2);
   const [occupyingUser, waitingUser] = sameSlot;
   if (!occupyingUser || !waitingUser) {
     throw new Error("Unable to find users in the same lock slot.");
   }
-  const firstBlockStarted = createSignal();
-  const releaseFirstBlock = createSignal();
-  let posts = 0;
-  const harness = createSharedHarness(createInitialState(), async (userId) => {
-    posts += 1;
-    if (userId === occupyingUser) {
-      firstBlockStarted.resolve();
-      await releaseFirstBlock.promise;
-    }
-    return { status: "failed", reason: "http" };
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor(occupyingUser), directAuthor(waitingUser)],
+  };
+  const harness = createHarness(initial, {
+    async blockUser(userId) {
+      if (userId === occupyingUser) {
+        blockStarted.resolve();
+        await releaseBlock.promise;
+      }
+      return { status: "success", endpoint: "primary" };
+    },
   });
-  const first = harness.coordinators[0].block({
-    source: "upvoter",
+  const otherCoordinator = harness.createCoordinator();
+  const first = harness.coordinator.block({
+    source: "direct",
     userId: occupyingUser,
-    authorName: "Occupying",
-    tagId: "default",
+    expectedBlacklistedAt: TIMESTAMP,
   });
-  await firstBlockStarted.promise;
+  await blockStarted.promise;
   const slotName = harness.lockManager.requestedNames.find((name) =>
-    name.startsWith("cocoon-remote-block-slot-")
+    name.startsWith("cocoon-remote-block-slot-"),
   );
   if (!slotName) {
-    throw new Error("The first POST slot was not requested.");
+    throw new Error("The first direct POST slot was not requested.");
   }
 
-  const second = harness.coordinators[1].block({
-    source: "upvoter",
+  const second = otherCoordinator.block({
+    source: "direct",
     userId: waitingUser,
-    authorName: "Waiting",
-    tagId: "default",
+    expectedBlacklistedAt: TIMESTAMP,
   });
   await harness.lockManager.waitForRequestCount(slotName, 2);
   harness.replaceState({
-    ...createInitialState(),
+    ...initial,
     authors: [
+      directAuthor(occupyingUser),
       {
-        userId: waitingUser,
-        memberHashId: null,
-        authorNameAtCapture: "Persisted elsewhere",
-        tagId: "default",
-        blacklistedAt: TIMESTAMP,
-        blockSource: "direct",
+        ...directAuthor(waitingUser),
+        blacklistedAt: "2027-01-01T00:00:00.000Z",
       },
     ],
   });
-  releaseFirstBlock.resolve();
+  releaseBlock.resolve();
 
-  deepStrictEqual(await second, { status: "skipped", reason: "existing" });
-  strictEqual((await first).status, "failed");
-  strictEqual(posts, 1);
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "success", persistedUpvoter: false },
+    { status: "skipped", reason: "existing" },
+  ]);
+  strictEqual(harness.counts().posts, 1);
 });
 
-test("a stop requested while waiting for a shared slot prevents a new POST", async () => {
+test("SOURCE-005 lifecycle stop while waiting for a direct POST slot prevents the POST", async () => {
   const [sameSlot] = userIdsBySlot(2);
   const [occupyingUser, waitingUser] = sameSlot;
   if (!occupyingUser || !waitingUser) {
     throw new Error("Unable to find users in the same lock slot.");
   }
-  const firstBlockStarted = createSignal();
-  const releaseFirstBlock = createSignal();
-  let posts = 0;
+  const blockStarted = createSignal();
+  const releaseBlock = createSignal();
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor(occupyingUser), directAuthor(waitingUser)],
+  };
+  const harness = createHarness(initial, {
+    async blockUser(userId) {
+      if (userId === occupyingUser) {
+        blockStarted.resolve();
+        await releaseBlock.promise;
+      }
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+  const otherCoordinator = harness.createCoordinator();
   let stopped = false;
-  const harness = createSharedHarness(createInitialState(), async (userId) => {
-    posts += 1;
-    if (userId === occupyingUser) {
-      firstBlockStarted.resolve();
-      await releaseFirstBlock.promise;
-    }
-    return { status: "failed", reason: "http" };
-  });
-  const first = harness.coordinators[0].block({
-    source: "upvoter",
+  const first = harness.coordinator.block({
+    source: "direct",
     userId: occupyingUser,
-    authorName: "Occupying",
-    tagId: "default",
+    expectedBlacklistedAt: TIMESTAMP,
   });
-  await firstBlockStarted.promise;
+  await blockStarted.promise;
   const slotName = harness.lockManager.requestedNames.find((name) =>
-    name.startsWith("cocoon-remote-block-slot-")
+    name.startsWith("cocoon-remote-block-slot-"),
   );
   if (!slotName) {
-    throw new Error("The first POST slot was not requested.");
+    throw new Error("The first direct POST slot was not requested.");
   }
 
-  const second = harness.coordinators[1].block(
+  const second = otherCoordinator.block(
     {
-      source: "upvoter",
+      source: "direct",
       userId: waitingUser,
-      authorName: "Waiting",
-      tagId: "default",
+      expectedBlacklistedAt: TIMESTAMP,
     },
     () => stopped,
   );
   await harness.lockManager.waitForRequestCount(slotName, 2);
   stopped = true;
-  releaseFirstBlock.resolve();
+  releaseBlock.resolve();
 
-  deepStrictEqual(await second, { status: "stopped" });
-  strictEqual((await first).status, "failed");
-  strictEqual(posts, 1);
+  deepStrictEqual(await Promise.all([first, second]), [
+    { status: "success", persistedUpvoter: false },
+    { status: "stopped" },
+  ]);
+  strictEqual(harness.counts().posts, 1);
 });
 
-test("VOTER-009 caps POSTs across two coordinator instances at three shared slots", async () => {
-  const usersBySlot = userIdsBySlot(2);
-  const userIds = usersBySlot.flatMap((users) => users);
+test("ERR-001 direct lock and slot failures remain network-classified while storage failures remain storage-classified", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("classified-direct-user")],
+  };
+  const request = {
+    source: "direct" as const,
+    userId: "classified-direct-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  };
+  const scenarios = [
+    {
+      options: { failTryLock: true },
+      expected: { status: "failed", reason: "network" },
+      storageFailures: 0,
+    },
+    {
+      options: { failSlotLock: true },
+      expected: { status: "failed", reason: "network" },
+      storageFailures: 0,
+    },
+    {
+      options: { failStorageLock: true },
+      expected: { status: "failed", reason: "storage" },
+      storageFailures: 1,
+    },
+    {
+      options: { failRead: true },
+      expected: { status: "failed", reason: "storage" },
+      storageFailures: 1,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const harness = createHarness(initial, scenario.options);
+    deepStrictEqual(await harness.coordinator.block(request), scenario.expected);
+    strictEqual(harness.counts().storageFailures, scenario.storageFailures);
+    strictEqual(harness.counts().posts, 0);
+  }
+});
+
+test("SOURCE-005 a failed direct operation clears in-flight coordination so retry works", async () => {
+  let attempts = 0;
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [directAuthor("retry-direct-user")],
+  };
+  const harness = createHarness(initial, {
+    async blockUser() {
+      attempts += 1;
+      return attempts === 1
+        ? { status: "failed", reason: "http" }
+        : { status: "success", endpoint: "primary" };
+    },
+  });
+  const request = {
+    source: "direct" as const,
+    userId: "retry-direct-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  };
+
+  deepStrictEqual(await harness.coordinator.block(request), {
+    status: "failed",
+    reason: "http",
+  });
+  deepStrictEqual(await harness.coordinator.block(request), {
+    status: "success",
+    persistedUpvoter: false,
+  });
+  strictEqual(harness.counts().posts, 2);
+});
+
+test("REMOTE-005 direct requests retain three shared remote POST slots", async () => {
+  const userIds = userIdsBySlot(2).flatMap((users) => users);
+  const state: BlacklistState = {
+    ...createInitialState(),
+    authors: userIds.map((userId) => directAuthor(userId)),
+  };
+  const lockManager = createNamedExclusiveLockManager();
   const firstThreeStarted = createSignal();
   const fourthStarted = createSignal();
   const allStarted = createSignal();
@@ -763,32 +1043,60 @@ test("VOTER-009 caps POSTs across two coordinator instances at three shared slot
   let active = 0;
   let starts = 0;
   let maximumActive = 0;
-  const harness = createSharedHarness(createInitialState(), async () => {
-    active += 1;
-    starts += 1;
-    maximumActive = Math.max(maximumActive, active);
-    if (starts === 3) {
-      firstThreeStarted.resolve();
-    }
-    if (starts === 4) {
-      fourthStarted.resolve();
-    }
-    if (starts === userIds.length) {
-      allStarted.resolve();
-    }
-    await new Promise<void>((resolve) => {
-      releases.push(resolve);
-    });
-    active -= 1;
-    return { status: "failed", reason: "http" };
-  });
 
+  function createCoordinator() {
+    return createRemoteBlockCoordinator({
+      async withExclusiveLock<T>(operation: () => Promise<T>): Promise<T> {
+        return lockManager.withLock(STORAGE_LOCK_NAME, operation);
+      },
+      async withCrossContextLock<T>(
+        name: string,
+        operation: () => Promise<T>,
+      ): Promise<T> {
+        return lockManager.withLock(name, operation);
+      },
+      async tryWithCrossContextUserLock<T>(
+        name: string,
+        operation: () => Promise<T>,
+      ): Promise<CrossContextTryLockResult<T>> {
+        return lockManager.tryWithLock(name, operation);
+      },
+      async readState() {
+        return parseBlacklistState(state);
+      },
+      async writeState() {
+        throw new Error("Direct requests must not write state.");
+      },
+      applyPersistedState() {
+        throw new Error("Direct requests must not apply state.");
+      },
+      now() {
+        return new Date(TIMESTAMP);
+      },
+      async blockUser() {
+        active += 1;
+        starts += 1;
+        maximumActive = Math.max(maximumActive, active);
+        if (starts === 3) firstThreeStarted.resolve();
+        if (starts === 4) fourthStarted.resolve();
+        if (starts === userIds.length) allStarted.resolve();
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        active -= 1;
+        return { status: "success", endpoint: "primary" };
+      },
+      reportMalformedStorage() {},
+      reportStorageFailure() {},
+    });
+  }
+
+  const coordinators = [createCoordinator(), createCoordinator()] as const;
   const operations = userIds.map((userId, index) =>
-    harness.coordinators[index % harness.coordinators.length].block({
-      source: "upvoter",
+    coordinators[index % coordinators.length].block({
+      source: "direct",
       userId,
-      authorName: "Name",
-      tagId: "default",
+      expectedBlacklistedAt: TIMESTAMP,
     }),
   );
   await firstThreeStarted.promise;
@@ -798,14 +1106,10 @@ test("VOTER-009 caps POSTs across two coordinator instances at three shared slot
   releases.shift()?.();
   await fourthStarted.promise;
   strictEqual(maximumActive, 3);
-
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  for (const release of releases.splice(0)) release();
   await allStarted.promise;
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  for (const release of releases.splice(0)) release();
   await Promise.all(operations);
+
   strictEqual(maximumActive, 3);
 });

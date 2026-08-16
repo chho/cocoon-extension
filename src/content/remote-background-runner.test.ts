@@ -38,7 +38,7 @@ const committed = {
   blacklistedAt: "2026-08-14T00:00:00.000Z",
 } as const;
 
-test("UI-007/VOTER-011/AC-057/060 runs both remote jobs silently without progress, result, toast, or stop UI", async () => {
+test("UI-007/VOTER-014 runs the author remote job and voter local job without progress, toast, or stop UI", async () => {
   const dom = new JSDOM("<!doctype html><body><main>feed</main></body>");
   const before = dom.window.document.body.innerHTML;
   const calls: string[] = [];
@@ -86,7 +86,7 @@ test("UI-007/VOTER-011/AC-057/060 runs both remote jobs silently without progres
   strictEqual(dom.window.document.querySelector("[class*=remote-progress]"), null);
 });
 
-test("UI-008/VOTER-012/AC-058 reports only scoped failure while preserving internal batch result", async () => {
+test("UI-008/VOTER-014 reports scoped local voter failure while preserving internal batch result", async () => {
   const failures: string[] = [];
   const runner = createRemoteBackgroundRunner<string, string>({
     async blockAuthor() {
@@ -94,13 +94,13 @@ test("UI-008/VOTER-012/AC-058 reports only scoped failure while preserving inter
     },
     async blockVoters() {
       return {
-        phase: "failed",
+        phase: "complete",
         fetched: 4,
         success: 1,
         failed: 1,
-        skipped: 0,
-        unprocessed: 2,
-        dataComplete: false,
+        skipped: 2,
+        unprocessed: 0,
+        dataComplete: true,
       };
     },
     reportFailure(scope) {
@@ -111,13 +111,13 @@ test("UI-008/VOTER-012/AC-058 reports only scoped failure while preserving inter
   const result = await runner.run(task(), committed).completion;
   deepStrictEqual(failures, ["author", "voters"]);
   deepStrictEqual(result.voters, {
-    phase: "failed",
+    phase: "complete",
     fetched: 4,
     success: 1,
     failed: 1,
-    skipped: 0,
-    unprocessed: 2,
-    dataComplete: false,
+    skipped: 2,
+    unprocessed: 0,
+    dataComplete: true,
   });
 });
 

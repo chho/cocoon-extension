@@ -31,18 +31,19 @@ function voters(
 
 function createHarness(options: {
   readonly voterResult?: VoterFetchResult;
-  readonly currentUserResult?: { readonly status: "success"; readonly userId: string } | { readonly status: "failed"; readonly reason: "invalid-response" };
-  readonly remoteBlocked?: readonly string[];
+  readonly currentUserResult?:
+    | { readonly status: "success"; readonly userId: string }
+    | { readonly status: "failed"; readonly reason: "invalid-response" };
   readonly localBlocked?: readonly string[];
-  readonly hasAuthorization?: boolean;
   readonly block?: (
     request: UserBlockRequest,
     isStopped: () => boolean,
   ) => Promise<CoordinatedBlockResult>;
 } = {}) {
   const progress: VoterBatchProgress[] = [];
+  const requests: UserBlockRequest[] = [];
+  let currentUserFetches = 0;
   let voterFetches = 0;
-  let relationFetches = 0;
   const localState = {
     ...createInitialState(),
     authors: (options.localBlocked ?? []).map((userId) => ({
@@ -56,6 +57,7 @@ function createHarness(options: {
   };
   const coordinator: RemoteBlockCoordinator = {
     async block(request, isStopped = () => false) {
+      requests.push(request);
       return options.block?.(request, isStopped) ?? {
         status: "success",
         persistedUpvoter: true,
@@ -63,21 +65,11 @@ function createHarness(options: {
     },
   };
   const controller = createVoterBatchController({
-    hasBlockAuthorization() {
-      return options.hasAuthorization ?? true;
-    },
     async fetchCurrentUser() {
+      currentUserFetches += 1;
       return options.currentUserResult ?? {
         status: "success",
         userId: "current-user",
-      };
-    },
-    async fetchBlockedUsers() {
-      relationFetches += 1;
-      return {
-        userIds: new Set(options.remoteBlocked ?? []),
-        complete: true,
-        fatalReason: null,
       };
     },
     async fetchVoters(_source, _isStopped, onProgress) {
@@ -103,136 +95,104 @@ function createHarness(options: {
   return {
     controller,
     progress,
-    counts: () => ({ voterFetches, relationFetches }),
+    requests,
+    counts: () => ({ currentUserFetches, voterFetches }),
   };
 }
 
 const source = { kind: "answer", questionId: "1", contentId: "2" } as const;
 
-test("VOTER-013 missing CSRF automatically fails before relation, voter-list, or POST work", async () => {
-  let blocks = 0;
-  const harness = createHarness({
-    hasAuthorization: false,
-    voterResult: voters(["one"]),
-    async block() {
-      blocks += 1;
-      return { status: "success", persistedUpvoter: true };
-    },
-  });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
-  });
-
-  strictEqual(result.phase, "failed");
-  deepStrictEqual(harness.counts(), { voterFetches: 0, relationFetches: 0 });
-  strictEqual(blocks, 0);
-});
-
-test("VOTER-005/SOURCE-005 filters current, direct, remote, and local users before POST", async () => {
-  const blocked: string[] = [];
-  const harness = createHarness({
-    voterResult: voters(
-      ["current-user", "direct-author", "remote", "local", "eligible"],
-      { fetched: 7, invalid: 1, duplicates: 1 },
-    ),
-    remoteBlocked: ["remote"],
-    localBlocked: ["local"],
-    async block(request) {
-      blocked.push(request.userId);
-      return { status: "success", persistedUpvoter: true };
-    },
-  });
-  const result = await harness.controller.run({
+async function runBatch(
+  harness: ReturnType<typeof createHarness>,
+  isStopped: () => boolean = () => false,
+): Promise<VoterBatchProgress> {
+  return harness.controller.run({
     source,
     tagId: "default",
     directAuthorUserId: "direct-author",
-    isStopped: () => false,
+    isStopped,
   });
+}
 
-  deepStrictEqual(blocked, ["eligible"]);
-  deepStrictEqual(result, {
-    phase: "complete",
-    fetched: 5,
-    success: 1,
-    failed: 0,
-    skipped: 6,
-    unprocessed: 0,
-    dataComplete: true,
-  });
-});
-
-test("VOTER-012 internal progress uses unique valid voters while skipped keeps invalid and duplicates", async () => {
+test("VOTER-014 runs without CSRF authorization or a Zhihu blocked-user relationship GET", async () => {
   const harness = createHarness({
-    voterResult: voters(["one", "two", "three"], {
-      fetched: 5,
-      invalid: 1,
-      duplicates: 1,
-    }),
-  });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
+    voterResult: voters(["already-blocked-at-zhihu"]),
   });
 
-  deepStrictEqual(result, {
-    phase: "complete",
-    fetched: 3,
-    success: 3,
-    failed: 0,
-    skipped: 2,
-    unprocessed: 0,
-    dataComplete: true,
-  });
+  const result = await runBatch(harness);
+
+  deepStrictEqual(harness.counts(), { currentUserFetches: 1, voterFetches: 1 });
+  deepStrictEqual(harness.requests, [
+    {
+      source: "upvoter",
+      userId: "already-blocked-at-zhihu",
+      authorName: "Name already-blocked-at-zhihu",
+      tagId: "default",
+    },
+  ]);
+  strictEqual(result.success, 1);
   strictEqual(
-    harness.progress.some(
-      (progress) => progress.phase === "fetching" && progress.fetched === 3,
-    ),
+    harness.progress.some((entry) => entry.phase === "persisting"),
     true,
   );
-  strictEqual(
-    harness.progress.some((progress) => progress.fetched === 5),
-    false,
-  );
 });
 
-test("VOTER-005 fails closed before list fetching when current user cannot be confirmed", async () => {
+test("VOTER-014 skips current user, direct author, and local records while persisting eligible users", async () => {
   const harness = createHarness({
-    currentUserResult: { status: "failed", reason: "invalid-response" },
-    voterResult: voters(["eligible"]),
-  });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
+    voterResult: voters(
+      ["current-user", "direct-author", "local", "eligible"],
+      { fetched: 6, invalid: 1, duplicates: 1 },
+    ),
+    localBlocked: ["local"],
   });
 
-  strictEqual(result.phase, "failed");
-  deepStrictEqual(harness.counts(), { voterFetches: 0, relationFetches: 0 });
+  const result = await runBatch(harness);
+
+  deepStrictEqual(
+    harness.requests.map((request) => request.userId),
+    ["eligible"],
+  );
+  deepStrictEqual(result, {
+    phase: "complete",
+    fetched: 4,
+    success: 1,
+    failed: 0,
+    skipped: 5,
+    unprocessed: 0,
+    dataComplete: true,
+  });
 });
 
-test("VOTER-013 ordinary per-user failures do not interrupt remaining users", async () => {
+test("VOTER-014 counts a coordinator race as skipped instead of successful", async () => {
+  const harness = createHarness({
+    voterResult: voters(["race-user", "new-user"]),
+    async block(request) {
+      return request.userId === "race-user"
+        ? { status: "skipped", reason: "existing" }
+        : { status: "success", persistedUpvoter: true };
+    },
+  });
+
+  const result = await runBatch(harness);
+
+  strictEqual(result.success, 1);
+  strictEqual(result.skipped, 1);
+  strictEqual(result.failed, 0);
+});
+
+test("VOTER-014 storage failure is counted failed and other local writes continue", async () => {
   const calls: string[] = [];
   const harness = createHarness({
     voterResult: voters(["one", "two", "three", "four"]),
     async block(request) {
       calls.push(request.userId);
       return request.userId === "two"
-        ? { status: "failed", reason: "http" }
+        ? { status: "failed", reason: "storage" }
         : { status: "success", persistedUpvoter: true };
     },
   });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
-  });
+
+  const result = await runBatch(harness);
 
   strictEqual(calls.length, 4);
   strictEqual(result.phase, "complete");
@@ -241,7 +201,20 @@ test("VOTER-013 ordinary per-user failures do not interrupt remaining users", as
   strictEqual(result.unprocessed, 0);
 });
 
-test("VOTER-009/013 keeps POST concurrency at three", async () => {
+test("VOTER-014 fails closed before the voter list when current user cannot be confirmed", async () => {
+  const harness = createHarness({
+    currentUserResult: { status: "failed", reason: "invalid-response" },
+    voterResult: voters(["eligible"]),
+  });
+
+  const result = await runBatch(harness);
+
+  strictEqual(result.phase, "failed");
+  deepStrictEqual(harness.counts(), { currentUserFetches: 1, voterFetches: 0 });
+  strictEqual(harness.requests.length, 0);
+});
+
+test("VOTER-014 keeps local persistence worker concurrency at three", async () => {
   let active = 0;
   let maxActive = 0;
   const releases: Array<() => void> = [];
@@ -257,12 +230,8 @@ test("VOTER-009/013 keeps POST concurrency at three", async () => {
       return { status: "success", persistedUpvoter: true };
     },
   });
-  const running = harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
-  });
+
+  const running = runBatch(harness);
   while (releases.length < 3) {
     await Promise.resolve();
   }
@@ -271,39 +240,13 @@ test("VOTER-009/013 keeps POST concurrency at three", async () => {
     releases.shift()?.();
     await Promise.resolve();
   }
+
   const result = await running;
   strictEqual(result.success, 6);
   strictEqual(maxActive, 3);
 });
 
-test("VOTER-012/013 authentication failure stops new work and preserves internal counts", async () => {
-  let calls = 0;
-  const harness = createHarness({
-    voterResult: voters(Array.from({ length: 10 }, (_, index) => `user-${index}`)),
-    async block() {
-      calls += 1;
-      return calls === 1
-        ? { status: "failed", reason: "authentication" }
-        : { status: "success", persistedUpvoter: true };
-    },
-  });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
-  });
-
-  strictEqual(result.phase, "failed");
-  strictEqual(calls <= 3, true);
-  strictEqual(result.failed, 1);
-  strictEqual(
-    result.success + result.failed + result.skipped + result.unprocessed,
-    result.fetched,
-  );
-});
-
-test("VOTER-013 lifecycle stop prevents new scheduling and reports unprocessed users", async () => {
+test("VOTER-014 lifecycle stop prevents new scheduling and reports unprocessed users", async () => {
   let stopped = false;
   let calls = 0;
   const harness = createHarness({
@@ -314,28 +257,20 @@ test("VOTER-013 lifecycle stop prevents new scheduling and reports unprocessed u
       return { status: "success", persistedUpvoter: true };
     },
   });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => stopped,
-  });
+
+  const result = await runBatch(harness, () => stopped);
 
   strictEqual(result.phase, "stopped");
   strictEqual(calls <= 3, true);
   strictEqual(result.unprocessed, result.fetched - result.success);
 });
 
-test("VOTER-012 carries partial completeness into the final internal progress", async () => {
+test("VOTER-014 retains partial voter-list completeness in final internal progress", async () => {
   const harness = createHarness({
     voterResult: voters(["one"], { complete: false, requestFailures: 1 }),
   });
-  const result = await harness.controller.run({
-    source,
-    tagId: "default",
-    directAuthorUserId: "author",
-    isStopped: () => false,
-  });
+
+  const result = await runBatch(harness);
 
   strictEqual(result.phase, "complete");
   strictEqual(result.dataComplete, false);

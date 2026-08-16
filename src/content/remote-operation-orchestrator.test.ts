@@ -28,7 +28,6 @@ test("AC-037 both disabled options issue no voter-list GET or remote POST", () =
       },
       blockVoters() {
         voterListGets += 1;
-        posts += 1;
       },
     },
   );
@@ -41,7 +40,7 @@ test("AC-037 both disabled options issue no voter-list GET or remote POST", () =
   strictEqual(posts, 0);
 });
 
-test("PREF-003/AC-044/045 saved preselection survives cancel and runs only on tag submit", async () => {
+test("VOTER-014 both enabled options allow only the directly selected author to produce a POST", async () => {
   let persisted = createDefaultRemotePreferences();
   const preferences = createRemotePreferenceController({
     initialPreferences: persisted,
@@ -84,7 +83,6 @@ test("PREF-003/AC-044/045 saved preselection survives cancel and runs only on ta
           },
           blockVoters() {
             voterListGets += 1;
-            posts += 1;
           },
         },
       );
@@ -123,5 +121,5 @@ test("PREF-003/AC-044/045 saved preselection survives cancel and runs only on ta
 
   strictEqual(commits.length, 1);
   strictEqual(voterListGets, 1);
-  strictEqual(posts, 2);
+  strictEqual(posts, 1);
 });

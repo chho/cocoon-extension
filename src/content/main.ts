@@ -55,9 +55,7 @@ import { createVoterBatchController } from "./voter-batch-controller";
 import {
   blockZhihuUser,
   fetchCurrentZhihuUser,
-  fetchZhihuBlockedUserIds,
   fetchZhihuVoters,
-  readXsrfToken,
 } from "./zhihu-remote-api";
 import {
   resolveZhihuContentSource,
@@ -846,9 +844,7 @@ const remoteBlockCoordinator = createRemoteBlockCoordinator({
   },
   reportMalformedStorage,
   reportStorageFailure() {
-    console.error(
-      "[Cocoon] 无法读取或保存远程拉黑所需的本地状态。",
-    );
+    console.error("[Cocoon] 无法读取或保存屏蔽操作所需的本地状态。");
   },
 });
 
@@ -868,14 +864,8 @@ const remoteBackgroundRunner = createRemoteBackgroundRunner<
   },
   async blockVoters(task, committed, voterSource) {
     const voterBatchController = createVoterBatchController({
-      hasBlockAuthorization() {
-        return readXsrfToken(document.cookie) !== null;
-      },
       async fetchCurrentUser(isStopped) {
         return fetchCurrentZhihuUser(fetch, { isStopped });
-      },
-      async fetchBlockedUsers(isStopped) {
-        return fetchZhihuBlockedUserIds(fetch, { isStopped });
       },
       async fetchVoters(source, isStopped, onProgress) {
         return fetchZhihuVoters(fetch, source, {
@@ -896,8 +886,11 @@ const remoteBackgroundRunner = createRemoteBackgroundRunner<
     });
   },
   reportFailure(scope) {
-    const operation = scope === "author" ? "作者" : "点赞者批量";
-    console.warn(`[Cocoon] ${operation}知乎拉黑未完整完成。`);
+    if (scope === "author") {
+      console.warn("[Cocoon] 作者知乎拉黑未完整完成。");
+      return;
+    }
+    console.warn("[Cocoon] 点赞者本地处理或保存未完整完成。");
   },
 });
 

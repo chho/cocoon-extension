@@ -1,22 +1,18 @@
 import type { ParsedBlacklistState } from "./blacklist-state.ts";
+import type { RemoteBlockCoordinator } from "./remote-block-coordinator.ts";
 import type {
-  CoordinatedBlockResult,
-  RemoteBlockCoordinator,
-} from "./remote-block-coordinator.ts";
-import type {
-  BlockedUsersResult,
   CurrentUserResult,
   VoterFetchResult,
   VoterFetchProgress,
 } from "./zhihu-remote-api.ts";
 import type { ZhihuContentSource } from "./zhihu-content-source.ts";
 
-const BLOCK_CONCURRENCY = 3;
+const PERSIST_CONCURRENCY = 3;
 
 export type VoterBatchPhase =
   | "preparing"
   | "fetching"
-  | "blocking"
+  | "persisting"
   | "complete"
   | "stopped"
   | "failed";
@@ -39,13 +35,9 @@ export interface VoterBatchRequest {
 }
 
 export interface VoterBatchControllerDependencies {
-  readonly hasBlockAuthorization: () => boolean;
   readonly fetchCurrentUser: (
     isStopped: () => boolean,
   ) => Promise<CurrentUserResult>;
-  readonly fetchBlockedUsers: (
-    isStopped: () => boolean,
-  ) => Promise<BlockedUsersResult>;
   readonly fetchVoters: (
     source: ZhihuContentSource,
     isStopped: () => boolean,
@@ -73,13 +65,6 @@ function initialProgress(): VoterBatchProgress {
   };
 }
 
-function isFatalBlockResult(result: CoordinatedBlockResult): boolean {
-  return result.status === "failed" &&
-    (result.reason === "authentication" ||
-      result.reason === "csrf" ||
-      result.reason === "rate-limit");
-}
-
 export function createVoterBatchController(
   dependencies: VoterBatchControllerDependencies,
 ): VoterBatchController {
@@ -92,27 +77,12 @@ export function createVoterBatchController(
       };
       report({});
 
-      if (!dependencies.hasBlockAuthorization()) {
-        report({ phase: "failed" });
-        return progress;
-      }
-
       const currentUser = await dependencies.fetchCurrentUser(request.isStopped);
       if (request.isStopped()) {
         report({ phase: "stopped" });
         return progress;
       }
       if (currentUser.status !== "success") {
-        report({ phase: "failed" });
-        return progress;
-      }
-
-      const blockedUsers = await dependencies.fetchBlockedUsers(request.isStopped);
-      if (request.isStopped()) {
-        report({ phase: "stopped" });
-        return progress;
-      }
-      if (blockedUsers.fatalReason !== null) {
         report({ phase: "failed" });
         return progress;
       }
@@ -168,7 +138,6 @@ export function createVoterBatchController(
         const shouldSkip =
           voter.userId === currentUser.userId ||
           voter.userId === request.directAuthorUserId ||
-          blockedUsers.userIds.has(voter.userId) ||
           locallyBlocked.has(voter.userId);
         if (shouldSkip) {
           skipped += 1;
@@ -181,15 +150,14 @@ export function createVoterBatchController(
       let stoppedAfterStart = 0;
       let success = 0;
       let failed = 0;
-      let fatal = false;
       report({
-        phase: "blocking",
+        phase: "persisting",
         skipped,
         unprocessed: queue.length,
       });
 
       async function worker(): Promise<void> {
-        while (!request.isStopped() && !fatal) {
+        while (!request.isStopped()) {
           const index = nextIndex;
           if (index >= queue.length) {
             return;
@@ -205,7 +173,7 @@ export function createVoterBatchController(
               authorName: voter.authorName,
               tagId: request.tagId,
             },
-            () => request.isStopped() || fatal,
+            request.isStopped,
           );
           if (result.status === "success") {
             success += 1;
@@ -215,9 +183,6 @@ export function createVoterBatchController(
             stoppedAfterStart += 1;
           } else {
             failed += 1;
-            if (isFatalBlockResult(result)) {
-              fatal = true;
-            }
           }
           report({ success, failed, skipped });
         }
@@ -225,16 +190,12 @@ export function createVoterBatchController(
 
       await Promise.all(
         Array.from(
-          { length: Math.min(BLOCK_CONCURRENCY, queue.length) },
+          { length: Math.min(PERSIST_CONCURRENCY, queue.length) },
           async () => worker(),
         ),
       );
       const unprocessed = queue.length - started + stoppedAfterStart;
-      const phase = request.isStopped()
-        ? "stopped"
-        : fatal
-          ? "failed"
-          : "complete";
+      const phase = request.isStopped() ? "stopped" : "complete";
       report({ phase, success, failed, skipped, unprocessed });
       return progress;
     },

@@ -78,11 +78,18 @@ export interface RemoteBlockCoordinator {
   ): Promise<CoordinatedBlockResult>;
 }
 
-type PreflightResult = "ready" | "existing" | "invalid-tag" | "malformed";
+type DirectBlockRequest = Extract<UserBlockRequest, { source: "direct" }>;
+type UpvoterBlockRequest = Extract<UserBlockRequest, { source: "upvoter" }>;
+type PreflightResult = "ready" | "existing" | "malformed";
 
 type SlotResult =
   | { readonly status: "preflight"; readonly result: CoordinatedBlockResult }
   | { readonly status: "remote"; readonly result: RemoteBlockResult };
+
+type UpvoterPersistenceResult = Extract<
+  CoordinatedBlockResult,
+  { status: "success" | "skipped" | "stopped" }
+>;
 
 export function stableRemoteBlockHash32(value: string): number {
   let hash = 0x811c9dc5;
@@ -108,7 +115,9 @@ export function createRemoteBlockCoordinator(
 ): RemoteBlockCoordinator {
   const inFlight = new Map<string, Promise<CoordinatedBlockResult>>();
 
-  async function preflight(request: UserBlockRequest): Promise<PreflightResult> {
+  async function preflight(
+    request: DirectBlockRequest,
+  ): Promise<PreflightResult> {
     return dependencies.withExclusiveLock(async () => {
       const parsed = await dependencies.readState();
       if (parsed.status === "malformed") {
@@ -120,14 +129,6 @@ export function createRemoteBlockCoordinator(
           author.userId === request.userId ||
           author.memberHashId === request.userId,
       );
-      if (request.source === "upvoter") {
-        if (existing) {
-          return "existing";
-        }
-        return parsed.state.tags.some((tag) => tag.tagId === request.tagId)
-          ? "ready"
-          : "invalid-tag";
-      }
       return existing?.blockSource === "direct" &&
         existing.blacklistedAt === request.expectedBlacklistedAt
         ? "ready"
@@ -136,7 +137,7 @@ export function createRemoteBlockCoordinator(
   }
 
   async function checkPreflight(
-    request: UserBlockRequest,
+    request: DirectBlockRequest,
   ): Promise<CoordinatedBlockResult | null> {
     let result: PreflightResult;
     try {
@@ -152,31 +153,22 @@ export function createRemoteBlockCoordinator(
     if (result === "existing") {
       return { status: "skipped", reason: "existing" };
     }
-    if (result === "invalid-tag") {
-      dependencies.reportStorageFailure(
-        new Error("The selected upvoter tag is not available."),
-      );
-    }
     return { status: "failed", reason: "storage" };
   }
 
   async function persistUpvoter(
-    request: Extract<UserBlockRequest, { source: "upvoter" }>,
-  ): Promise<boolean> {
+    request: UpvoterBlockRequest,
+    isStopped: () => boolean,
+  ): Promise<UpvoterPersistenceResult> {
     return dependencies.withExclusiveLock(async () => {
+      if (isStopped()) {
+        return { status: "stopped" };
+      }
+
       const parsed = await dependencies.readState();
       if (parsed.status === "malformed") {
         dependencies.reportMalformedStorage();
         throw new Error("Stored blacklist state is malformed.");
-      }
-      if (
-        parsed.state.authors.some(
-          (author) =>
-            author.userId === request.userId ||
-            author.memberHashId === request.userId,
-        )
-      ) {
-        return false;
       }
       const persistedTagId = parsed.state.tags.some(
         (tag) => tag.tagId === request.tagId,
@@ -189,17 +181,24 @@ export function createRemoteBlockCoordinator(
         tagId: persistedTagId,
         blacklistedAt: createBlacklistTimestamp(dependencies.now),
       });
+      if (plan.status === "duplicate") {
+        return { status: "skipped", reason: "existing" };
+      }
       if (plan.status !== "ready") {
         throw new Error("Unable to create an upvoter blacklist record.");
       }
+      if (isStopped()) {
+        return { status: "stopped" };
+      }
+
       await dependencies.writeState(plan.state);
       dependencies.applyPersistedState(plan.state);
-      return true;
+      return { status: "success", persistedUpvoter: true };
     });
   }
 
   async function runInBlockSlot(
-    request: UserBlockRequest,
+    request: DirectBlockRequest,
     isStopped: () => boolean,
   ): Promise<SlotResult> {
     return dependencies.withCrossContextLock(
@@ -232,8 +231,24 @@ export function createRemoteBlockCoordinator(
     );
   }
 
-  async function executeUserLocked(
-    request: UserBlockRequest,
+  async function executeUpvoter(
+    request: UpvoterBlockRequest,
+    isStopped: () => boolean,
+  ): Promise<CoordinatedBlockResult> {
+    if (isStopped()) {
+      return { status: "stopped" };
+    }
+
+    try {
+      return await persistUpvoter(request, isStopped);
+    } catch (error) {
+      dependencies.reportStorageFailure(error);
+      return { status: "failed", reason: "storage" };
+    }
+  }
+
+  async function executeDirectUserLocked(
+    request: DirectBlockRequest,
     isStopped: () => boolean,
   ): Promise<CoordinatedBlockResult> {
     if (isStopped()) {
@@ -265,21 +280,11 @@ export function createRemoteBlockCoordinator(
     if (remote.status === "failed") {
       return { status: "failed", reason: remote.reason };
     }
-    if (request.source === "direct") {
-      return { status: "success", persistedUpvoter: false };
-    }
-
-    try {
-      const persistedUpvoter = await persistUpvoter(request);
-      return { status: "success", persistedUpvoter };
-    } catch (error) {
-      dependencies.reportStorageFailure(error);
-      return { status: "failed", reason: "storage" };
-    }
+    return { status: "success", persistedUpvoter: false };
   }
 
-  async function execute(
-    request: UserBlockRequest,
+  async function executeDirect(
+    request: DirectBlockRequest,
     isStopped: () => boolean,
   ): Promise<CoordinatedBlockResult> {
     if (isStopped()) {
@@ -288,7 +293,7 @@ export function createRemoteBlockCoordinator(
     try {
       const locked = await dependencies.tryWithCrossContextUserLock(
         userLockName(request.userId),
-        async () => executeUserLocked(request, isStopped),
+        async () => executeDirectUserLocked(request, isStopped),
       );
       return locked.acquired
         ? locked.value
@@ -300,13 +305,17 @@ export function createRemoteBlockCoordinator(
 
   return {
     async block(request, isStopped = () => false) {
+      if (request.source === "upvoter") {
+        return executeUpvoter(request, isStopped);
+      }
+
       const existingRequest = inFlight.get(request.userId);
       if (existingRequest) {
         await existingRequest;
         return { status: "skipped", reason: "concurrent" };
       }
 
-      const operation = execute(request, isStopped);
+      const operation = executeDirect(request, isStopped);
       inFlight.set(request.userId, operation);
       try {
         return await operation;
