@@ -5,7 +5,7 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | `ACTIVE` |
-| 规格版本 | `0.44.0` |
+| 规格版本 | `0.46.0` |
 | 最后更新 | `2026-08-16` |
 | 当前交付阶段 | `DELIVERED` |
 | 适用页面 | `https://www.zhihu.com/` |
@@ -414,6 +414,34 @@ Developer 已将回答 `upvoters` 与文章 `likers` 列表结果改为仅写入
 
 Reviewer 首轮发现并阻止了点赞者任务与直接作者任务共享用户去重域、可能静默跳过已授权单作者远程 POST 的高风险竞态；修复后点赞者只通过全局 storage 锁串行持久化，直接作者保留独立远程协调。最终 `196` 项测试、类型检查、构建、Manifest 引用和 diff 检查通过，Reviewer 对 `VOTER-014` 给出 `PASS`。用户真实浏览器网络与过滤验收待进行。
 
+## v0.45.0 知乎插件化范围
+
+本轮只重构扩展内部架构，不增加 YouTube 或其他网站支持，不改变任何已交付知乎产品行为、storage 数据、远程请求语义、UI、权限或页面范围。
+
+| ID | 状态 | 需求 |
+| --- | --- | --- |
+| `ARCH-001` | `DELIVERED` | 建立构建时站点插件机制。站点插件统一放在 `src/plugins/<pluginId>/`，每个插件包含经过严格校验的本地 descriptor 与 TypeScript 入口；registry 使用 Vite 静态 eager discovery 将本地插件编译进自包含内容脚本。不得运行时下载代码、从 URL 动态导入、使用 `eval()`/`new Function()` 或执行用户提供脚本。 |
+| `ARCH-002` | `DELIVERED` | `src/content/main.ts` 只负责创建无站点业务语义的启动上下文、根据当前 URL 选择插件并调用其 `mount()`。零匹配或多匹配时必须 fail closed，不注册站点 DOM observer、storage listener 或网络操作；插件模块导入阶段不得产生 DOM、storage 或网络副作用。 |
+| `ARCH-003` | `DELIVERED` | 将当前知乎首页全部内容脚本接线迁入 `src/plugins/zhihu/` 并作为首个内置插件挂载。现有卡片按钮、标签抽屉、storage v4、卡片与两类评论过滤、悬浮入口、单作者远程拉黑、点赞者本地入库、锁、批处理、日志、无截图和失败安全行为必须保持不变。现有 storage key 与数据 schema 不迁移。 |
+| `ARCH-004` | `DELIVERED` | 知乎插件 descriptor 是其插件 ID 和 Manifest 页面匹配范围的单一来源。构建必须扫描 descriptor、拒绝缺失入口、非法或重复 ID、空/重复页面范围，并据此生成 `dist/manifest.json` 的内容脚本 matches；`public/manifest.json` 继续提供 Manifest 基础字段，最终产物仍只匹配 `https://www.zhihu.com/`。descriptor 与 runtime 插件必须共享同一份元数据，避免手工双写。 |
+| `ARCH-005` | `DELIVERED` | 继续输出稳定且自包含的 `assets/content.js`。知乎插件样式迁入插件目录并通过内容入口构建为稳定 CSS 资源；Manifest 中引用的 JS/CSS 必须存在，不得生成内容脚本依赖的外部 ESM shared chunk。Popup 的 HTML、`Hello` 行为和样式保持不变。 |
+| `ARCH-006` | `DELIVERED` | 插件契约必须为后续站点声明稳定 ID、匹配范围和可选能力提供严格 TypeScript 类型；当前知乎插件明确声明卡片过滤、评论过滤、悬浮入口、单作者账号级操作和点赞者扩展能力。能力声明只描述已挂载实现，不得自动扩大 Manifest 范围或权限。 |
+| `ARCH-007` | `DELIVERED` | 本轮不得增加 Chrome 权限、host permissions、站点范围、第三方请求、遥测或服务端；仍只使用 `storage` 权限和知乎精确首页匹配。插件 registry、descriptor 解析、URL 选择和 Manifest 生成必须具有纯函数自动化测试，既有完整测试继续通过。 |
+
+`ARCH-001`～`ARCH-007` 的验收条件（不是独立需求）：
+
+- 只保留知乎插件时，构建产物仍为 MV3，权限只有 `storage`，内容脚本只匹配精确 `https://www.zhihu.com/`，且所有 Manifest 引用存在。
+- registry 测试覆盖一个匹配、零匹配、多匹配、重复插件 ID、descriptor/入口不一致及非法页面范围；失败路径不得 mount 任意插件。
+- 导入站点插件模块不触碰 DOM、storage 或网络；只有成功选择后调用一次 `mount()`。
+- 现有知乎 196 项基线测试及新增架构测试、类型检查和构建全部通过；用户后续重新加载 `dist/` 验收知乎既有行为。
+- 本轮不声称已经支持 YouTube；新增站点必须另行确认稳定身份、DOM 契约、storage 命名空间、Manifest 范围和独立验收需求。
+
+### v0.46.0 交付结论
+
+现有知乎内容脚本已经迁入 `src/plugins/zhihu/`，`src/content/main.ts` 只执行通用 registry 启动。Vite 通过 eager 本地 discovery 编译插件，构建根据严格 descriptor 生成 Manifest matches，并保持稳定自包含的 `assets/content.js` 与 `assets/content.css`。scanner、runtime discovery 与 content bundle 的插件约定模块集合在 clean build 和 watch rebuild 中保持双向一致；插件树中的符号链接被 fail closed 拒绝，防止外部或未声明代码绕过 Manifest 范围进入 bundle。
+
+Reviewer 三轮独立审查先后发现并推动修复 watch 模式新增插件时 Manifest/runtime 漂移，以及 symlink 插件被 Vite 打包但被 scanner 忽略的高风险边界。修复后 `223` 项测试、类型检查、构建、Manifest/资源、自包含 bundle 和 diff 检查全部通过，Reviewer 对 `ARCH-001`～`ARCH-007` 给出 `PASS`。现有 storage key/schema、权限、知乎页面范围、DOM/网络行为和样式保持不变；用户真实浏览器回归验收待进行。
+
 ## 已确认的技术行为
 
 ### 1. 卡片隐藏方式
@@ -800,3 +828,6 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 | `0.41.0` | `2026-08-16` | 记录评论弹窗未过滤缺陷 | 用户在已打开的评论弹窗中复现屏蔽后评论仍可见。经授权 CDP 脱敏检查确认弹窗使用 `.Modal-content` 而非 `.Comments-container`，其中评论根仍为 `div[data-id]` 且根自身身份无歧义；目标页面身份是 member hash，storage 同名记录只有 token 且未补写 hash，现有过滤器因未发现容器而没有启动 alias 流程。新增 `BUG-010`，要求支持两种评论边界并复用 `BUG-008` 双标识安全语义，状态为 `READY_FOR_DEV`。 |
 | `0.42.0` | `2026-08-16` | 完成评论弹窗过滤修复 | 评论过滤边界扩展为 `.Comments-container` 与 `.Modal-content`，继续只处理边界内 `div[data-id]` 并按根自身唯一精确身份匹配；弹窗 member hash 复用现有成员 GET 证明、并发去重、原子 alias 补写和失败可见语义。新增弹窗直接命中、共享请求/单次写入、失败路径及边界外节点回归，完整 185 项测试、类型检查、构建、Manifest 与 diff 检查通过，Reviewer `PASS`，`BUG-010` 标为 `DELIVERED`；用户已完成真实浏览器验收并确认通过。 |
 | `0.43.0` | `2026-08-16` | 完成点赞者本地屏蔽 | `VOTER-014` 将回答/文章点赞者改为只写入 Cocoon 本地 storage，彻底移除点赞者账号级拉黑 POST、CSRF 前置条件和知乎账号黑名单关系过滤；保留列表 GET 上限、去重、失败安全、storage 原子写入及直接作者远程拉黑。修复首轮审查发现的直接作者 POST 竞态后，196 项测试、类型检查、构建、Manifest 与 diff 检查通过，Reviewer `PASS`，状态标为 `DELIVERED`；用户已完成真实浏览器验收并确认通过。 |
+| `0.44.0` | `2026-08-16` | 记录用户验收结果 | 用户确认 `BUG-010` 评论弹窗过滤和 `VOTER-014` 点赞者本地屏蔽均已通过真实浏览器验收；需求保持 `DELIVERED`。 |
+| `0.45.0` | `2026-08-16` | 新增知乎插件化需求 | 用户要求按构建时站点插件架构迁移现有知乎实现，新增 `ARCH-001`～`ARCH-007` 并标为 `READY_FOR_DEV`；本轮只做行为保持重构，不增加 YouTube、权限、页面范围或 storage 迁移。 |
+| `0.46.0` | `2026-08-16` | 完成知乎插件化交付 | 完成自动 discovery、严格 registry、知乎 mount 迁移、descriptor 驱动 Manifest、插件 CSS 构建和自包含内容 bundle；三轮 Reviewer 审查推动修复 watch 缓存漂移与 symlink 绕过后，223 项测试、类型检查、构建、Manifest/资源和 diff 检查通过，`ARCH-001`～`ARCH-007` 标为 `DELIVERED`。用户真实浏览器回归待进行。 |
