@@ -24,14 +24,22 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 .
 ├── popup/popup.html             # Popup HTML 入口
 ├── public/
-│   ├── manifest.json            # Manifest 源文件
-│   └── content/content.css      # 注入知乎页面的样式
+│   └── manifest.json            # Manifest 基础字段源文件（不手写 content_scripts）
 ├── src/
-│   ├── content/main.ts          # 知乎内容脚本
+│   ├── content/
+│   │   ├── main.ts              # 无站点业务语义的内容脚本启动入口
+│   │   └── *.ts                 # 现有知乎纯逻辑/控制器（迁移期由插件复用）
+│   ├── core/plugin/             # 严格插件契约、descriptor 校验、registry 与 eager discovery
+│   ├── plugins/zhihu/
+│   │   ├── plugin.json          # 知乎插件 ID 与 Manifest matches 的单一来源
+│   │   ├── plugin.ts            # 插件能力声明与挂载入口
+│   │   ├── runtime.ts           # 知乎 DOM/storage/network 挂载接线
+│   │   └── plugin.css           # 知乎内容样式，构建为稳定 assets/content.css
 │   └── popup/
 │       ├── main.ts              # Popup TypeScript 入口
 │       └── popup.css            # Popup 样式
 ├── scripts/
+│   ├── build/plugin-manifest.ts # 插件扫描与最终 Manifest 组合
 │   ├── capture-zhihu-snapshot.mjs # 本地知乎原始最小快照采集
 │   └── lib/                     # 快照转换纯函数及测试
 ├── docs/
@@ -46,14 +54,16 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 ```bash
 npm install
+npm test
 npm run typecheck
 npm run build
 npm run dev
 npm run snapshot:zhihu
 ```
 
+- `npm test`：运行现有内容逻辑、插件 registry、构建扫描/Manifest 组合和快照纯函数测试。
 - `npm run typecheck`：执行 TypeScript 类型检查。
-- `npm run build`：先进行类型检查，再构建到 `dist/`。
+- `npm run build`：先进行类型检查，再扫描本地插件 descriptor、构建并生成 `dist/manifest.json`。
 - `npm run dev`：监听源码变化并持续重新构建。
 - `npm run snapshot:zhihu`：显式连接现有 Chrome，生成包含真实作者标识的本地最小知乎快照。
 
@@ -126,11 +136,21 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 ## 构建约束
 
-- `public/manifest.json` 是 Manifest 源文件；`dist/manifest.json` 是自动生成的副本。
+- `public/manifest.json` 只提供 Manifest 基础字段（名称、版本、Action、权限等），不得手写 `content_scripts`；`dist/manifest.json` 由构建扫描 `src/plugins/*/plugin.json` 后组合生成，不是基础文件的直接副本。
 - 不要直接修改 `dist/` 中的任何文件。
-- Manifest 直接引用 `assets/content.js`，因此内容脚本输出文件名必须保持稳定。
-- 新增构建入口时，需要同步更新 `vite.config.ts`。
-- `package.json` 和 `public/manifest.json` 的版本号应保持一致。
+- 最终 Manifest 固定引用自包含的 `assets/content.js` 和稳定的 `assets/content.css`；内容入口不得依赖外部 shared/dynamic ESM chunk。Popup 的 JS/CSS 保持独立。
+- 新增构建入口时，需要同步更新 `vite.config.ts`；新增站点插件不应新增内容入口，而应由 eager registry 编入同一个内容 bundle。
+- `package.json` 和 `public/manifest.json` 的版本号应保持一致；最终 Manifest 版本必须继续来自该基础文件。
+- `scripts/build/plugin-manifest.ts` 必须严格拒绝缺失配对入口、非法/重复 ID、非法/空/重复 matches、跨插件重复 matches、额外 descriptor 字段和孤立 `plugin.ts`/`plugin.json`。
+
+## 站点插件架构
+
+- 站点插件遵循 `src/plugins/<id>/plugin.ts` + `plugin.json` 约定；目录名、descriptor ID 和 runtime metadata 必须一致。
+- `plugin.json` 是插件 ID 与 Chrome match patterns 的单一来源。`plugin.ts` 必须导入同一 JSON，不得复制 ID 或页面范围；能力声明只描述实现，不会授予 Chrome 权限或扩大 Manifest 范围。
+- `src/core/plugin/discovery.ts` 只使用 Vite `import.meta.glob(..., { eager: true })` 静态发现本地插件，使所有插件代码进入自包含内容脚本；禁止运行时 URL import、远程/用户代码、`eval()` 和 `new Function()`。
+- registry 的 descriptor 解析、runtime 一致性检查和 URL 选择保持纯函数可测试。当前 URL 必须恰好匹配一个插件；零匹配、多匹配或无效 registry 均安全停止且不得挂载任何站点行为。
+- 插件模块导入必须无浏览器副作用；只有成功选择后才可且只可调用一次 `mount()`，并由所选插件注册 DOM observer、storage listener、锁和网络接线。
+- 当前只有知乎插件，不表示或暗示已支持 YouTube 或其他网站。增加站点前必须另行确认身份、DOM、storage 命名空间、Manifest 范围和验收需求。
 
 ## Chrome Extension 规则
 
@@ -142,6 +162,8 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 内容脚本运行在 isolated world，但共享页面 DOM；Console 日志仍可在页面开发者工具中查看。
 
 ## 知乎内容脚本约定
+
+知乎页面接线位于 `src/plugins/zhihu/runtime.ts`，只允许在知乎插件成功选择后的 `mount()` 内执行；迁移期纯逻辑 helper 可继续位于 `src/content/`。
 
 当前依赖的知乎 DOM 特征：
 
