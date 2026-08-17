@@ -1,7 +1,13 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
+import { createExtensionBuildPlugin } from "./scripts/build/extension-build-plugin.ts";
+
 export default defineConfig({
+  publicDir: false,
+  plugins: [
+    createExtensionBuildPlugin({ projectRoot: import.meta.dirname }),
+  ],
   build: {
     outDir: "dist",
     emptyOutDir: true,

@@ -7,13 +7,5 @@
     "default_popup": "popup/popup.html",
     "default_title": "Cocoon"
   },
-  "permissions": ["storage"],
-  "content_scripts": [
-    {
-      "matches": ["https://www.zhihu.com/"],
-      "js": ["assets/content.js"],
-      "css": ["content/content.css"],
-      "run_at": "document_idle"
-    }
-  ]
+  "permissions": ["storage"]
 }
