@@ -75,6 +75,10 @@ const DRAWER_CLASS = "cocoon-tag-drawer";
 const STORAGE_LOCK_NAME = "cocoon-blacklist-storage";
 const PREFERENCES_LOCK_NAME = "cocoon-remote-preferences-storage";
 const BATCH_SIZE = 20;
+export const COMMENT_MUTATION_ATTRIBUTE_FILTER = Object.freeze([
+  "href",
+  "data-id",
+]);
 
 interface ZhihuCardMetadata {
   readonly authorName?: string;
@@ -986,6 +990,6 @@ observer.observe(document.body, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ["href"],
+  attributeFilter: [...COMMENT_MUTATION_ATTRIBUTE_FILTER],
 });
 }

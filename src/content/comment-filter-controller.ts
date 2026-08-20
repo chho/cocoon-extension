@@ -18,22 +18,52 @@ export function resolveCommentAuthorUserId(
     return null;
   }
 
-  const ownUserIds = new Set<string>();
+  const ownProfileEvidence = new Map<string, {
+    hasImageLink: boolean;
+    hasTextLink: boolean;
+  }>();
   for (const link of commentRoot.querySelectorAll<HTMLAnchorElement>("a[href]")) {
     if (link.closest(COMMENT_ROOT_SELECTOR) !== commentRoot) {
       continue;
     }
     const href = link.getAttribute("href");
     const userId = href ? parseZhihuUserId(href) : null;
-    if (userId) {
-      ownUserIds.add(normalizeMemberHashId(userId) ?? userId);
-      if (ownUserIds.size > 1) {
-        return null;
-      }
+    if (!userId) {
+      continue;
     }
+    const stableUserId = normalizeMemberHashId(userId) ?? userId;
+    const evidence = ownProfileEvidence.get(stableUserId) ?? {
+      hasImageLink: false,
+      hasTextLink: false,
+    };
+    const hasImage = link.querySelector("img") !== null;
+    evidence.hasImageLink ||= hasImage;
+    evidence.hasTextLink ||= !hasImage && link.textContent.trim().length > 0;
+    ownProfileEvidence.set(stableUserId, evidence);
   }
 
-  return ownUserIds.size === 1 ? [...ownUserIds][0] : null;
+  if (ownProfileEvidence.size === 1) {
+    return ownProfileEvidence.keys().next().value ?? null;
+  }
+
+  const semanticCandidates = Array.from(ownProfileEvidence).filter(
+    ([, evidence]) => evidence.hasImageLink && evidence.hasTextLink,
+  );
+  if (semanticCandidates.length !== 1) {
+    return null;
+  }
+
+  const mainUserId = semanticCandidates[0]?.[0];
+  if (
+    !mainUserId ||
+    Array.from(ownProfileEvidence).some(
+      ([userId, evidence]) => userId !== mainUserId && evidence.hasImageLink,
+    )
+  ) {
+    return null;
+  }
+
+  return mainUserId;
 }
 
 export interface CommentFilterControllerDependencies {

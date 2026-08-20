@@ -14,6 +14,7 @@ import {
   resolveCommentAuthorUserId,
 } from "./comment-filter-controller.ts";
 import { createMemberUserIdResolver } from "./resolve-member-user-id.ts";
+import { COMMENT_MUTATION_ATTRIBUTE_FILTER } from "../plugins/zhihu/runtime.ts";
 
 function fixture(): JSDOM {
   return new JSDOM(`<!doctype html><body>
@@ -294,7 +295,246 @@ test("COMMENT-003/004/AC-064 state refresh re-filters open roots and fails open"
 
 const MEMBER_HASH = "a".repeat(32);
 const OTHER_HASH = "b".repeat(32);
+const MENTION_HASH = "c".repeat(32);
 const ALIAS_TIMESTAMP = "2026-08-14T12:00:00.000Z";
+
+type ProfileLinkKind = "image" | "text" | "empty";
+
+interface ProfileLinkFixture {
+  readonly userId: string;
+  readonly kind: ProfileLinkKind;
+}
+
+interface CommentEvidenceFixtureOptions {
+  readonly mainLinks: readonly ProfileLinkFixture[];
+  readonly mentionLinks?: readonly ProfileLinkFixture[];
+  readonly mentionsBeforeMain?: boolean;
+  readonly rootCount?: number;
+  readonly containerClass?: "Comments-container" | "Modal-content";
+}
+
+function profileLink(userId: string, kind: ProfileLinkKind): ProfileLinkFixture {
+  return { userId, kind };
+}
+
+function semanticProfileLinks(userId: string): readonly ProfileLinkFixture[] {
+  return [profileLink(userId, "image"), profileLink(userId, "text")];
+}
+
+function renderProfileLinks(links: readonly ProfileLinkFixture[]): string {
+  return links.map(({ userId, kind }, linkIndex) => {
+    const content = kind === "image"
+      ? "<img>"
+      : kind === "text"
+      ? `profile ${linkIndex}`
+      : "   ";
+    return `<a href="/people/${userId}">${content}</a>`;
+  }).join("");
+}
+
+function commentEvidenceFixture({
+  mainLinks,
+  mentionLinks = [],
+  mentionsBeforeMain = false,
+  rootCount = 1,
+  containerClass = "Modal-content",
+}: CommentEvidenceFixtureOptions): JSDOM {
+  const mainMarkup = renderProfileLinks(mainLinks);
+  const mentionMarkup = `<p>${renderProfileLinks(mentionLinks)}</p>`;
+  const ownProfileMarkup = mentionsBeforeMain
+    ? `${mentionMarkup}${mainMarkup}`
+    : `${mainMarkup}${mentionMarkup}`;
+
+  return new JSDOM(`<!doctype html><body>
+    <div class="${containerClass}">
+      ${Array.from({ length: rootCount }, (_, rootIndex) => `
+        <div data-id="comment-${rootIndex}" id="comment-${rootIndex}">
+          ${ownProfileMarkup}
+        </div>`).join("")}
+    </div>
+  </body>`);
+}
+
+test("BUG-011 preserves the single unique stable-ID rule regardless of link shape or count", () => {
+  const scenarios: readonly (readonly ProfileLinkFixture[])[] = [
+    [profileLink("single-profile", "text")],
+    [profileLink("single-profile", "image")],
+    [
+      profileLink("single-profile", "empty"),
+      profileLink("single-profile", "text"),
+      profileLink("single-profile", "image"),
+    ],
+  ];
+
+  for (const mainLinks of scenarios) {
+    const dom = commentEvidenceFixture({ mainLinks });
+    const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+    if (!root) throw new Error("Missing single-identity fixture.");
+    strictEqual(resolveCommentAuthorUserId(root), "single-profile");
+  }
+});
+
+test("BUG-011/AC-070 a single-link unblocked main author plus a duplicated blocked text mention stays visible without alias work", () => {
+  const dom = commentEvidenceFixture({
+    mainLinks: [profileLink("visible-main", "text")],
+    mentionLinks: [
+      profileLink("blocked-mention", "text"),
+      profileLink("blocked-mention", "text"),
+    ],
+  });
+  const frames = createFrames();
+  let aliasAttempts = 0;
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    async resolveHistoricalAlias() {
+      aliasAttempts += 1;
+    },
+  });
+  const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+  if (!root) throw new Error("Missing duplicated direct-mention fixture.");
+
+  strictEqual(resolveCommentAuthorUserId(root), null);
+  controller.updateStableUserIds(new Set(["blocked-mention"]));
+  controller.scan(dom.window.document.body);
+  frames.flush();
+
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  strictEqual(aliasAttempts, 0);
+});
+
+test("BUG-011/AC-070 a duplicated text-only hash mention never triggers an alias GET", () => {
+  const dom = commentEvidenceFixture({
+    mainLinks: [profileLink("visible-main", "text")],
+    mentionLinks: [
+      profileLink(MENTION_HASH, "text"),
+      profileLink(MENTION_HASH, "text"),
+    ],
+  });
+  const frames = createFrames();
+  const requestedAliases: string[] = [];
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    async resolveHistoricalAlias(memberHashId) {
+      requestedAliases.push(memberHashId);
+    },
+  });
+  const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+  if (!root) throw new Error("Missing duplicated hash-mention fixture.");
+
+  strictEqual(resolveCommentAuthorUserId(root), null);
+  controller.updateStableUserIds(new Set(["canonical-token"]));
+  controller.scan(dom.window.document.body);
+  frames.flush();
+
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  deepStrictEqual(requestedAliases, []);
+});
+
+test("BUG-011/AC-070 the unique semantic main pair filters direct token and member-hash matches with zero GETs", () => {
+  const scenarios = [
+    {
+      name: "token main with hash mention before it",
+      mainUserId: "blocked-main",
+      mentionUserId: MENTION_HASH,
+      mentionsBeforeMain: true,
+    },
+    {
+      name: "member-hash main with token mention after it",
+      mainUserId: MEMBER_HASH,
+      mentionUserId: "blocked-mention",
+      mentionsBeforeMain: false,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const dom = commentEvidenceFixture({
+      mainLinks: semanticProfileLinks(scenario.mainUserId),
+      mentionLinks: [profileLink(scenario.mentionUserId, "text")],
+      mentionsBeforeMain: scenario.mentionsBeforeMain,
+    });
+    const frames = createFrames();
+    let aliasAttempts = 0;
+    const controller = createCommentFilterController({
+      schedule: frames.schedule,
+      async resolveHistoricalAlias() {
+        aliasAttempts += 1;
+      },
+    });
+    const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+    if (!root) throw new Error(`Missing ${scenario.name} fixture.`);
+
+    strictEqual(
+      resolveCommentAuthorUserId(root),
+      scenario.mainUserId,
+      scenario.name,
+    );
+    controller.updateStableUserIds(new Set([
+      scenario.mainUserId,
+      scenario.mentionUserId,
+    ]));
+    controller.scan(dom.window.document.body);
+    frames.flush();
+
+    strictEqual(
+      root.classList.contains(COMMENT_HIDDEN_CLASS),
+      true,
+      scenario.name,
+    );
+    strictEqual(aliasAttempts, 0, scenario.name);
+  }
+});
+
+test("BUG-011/AC-070 multiple semantic pairs or another image-bearing identity fail open", () => {
+  const scenarios: readonly (readonly ProfileLinkFixture[])[] = [
+    semanticProfileLinks(OTHER_HASH),
+    [profileLink(OTHER_HASH, "image")],
+  ];
+
+  for (const mentionLinks of scenarios) {
+    const dom = commentEvidenceFixture({
+      mainLinks: semanticProfileLinks(MEMBER_HASH),
+      mentionLinks,
+    });
+    const frames = createFrames();
+    let aliasAttempts = 0;
+    const controller = createCommentFilterController({
+      schedule: frames.schedule,
+      async resolveHistoricalAlias() {
+        aliasAttempts += 1;
+      },
+    });
+    const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
+    if (!root) throw new Error("Missing image-ambiguity fixture.");
+
+    strictEqual(resolveCommentAuthorUserId(root), null);
+    controller.updateStableUserIds(new Set([MEMBER_HASH, OTHER_HASH]));
+    controller.scan(dom.window.document.body);
+    frames.flush();
+
+    strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false);
+    strictEqual(aliasAttempts, 0);
+  }
+});
+
+test("BUG-011/COMMENT-004 nested comment roots own their semantic profile evidence independently", () => {
+  const dom = new JSDOM(`<!doctype html><body>
+    <div class="Modal-content">
+      <div data-id="outer" id="semantic-outer">
+        ${renderProfileLinks(semanticProfileLinks("outer-main"))}
+        <p>${renderProfileLinks([profileLink("outer-mention", "text")])}</p>
+        <div data-id="nested" id="semantic-nested">
+          ${renderProfileLinks(semanticProfileLinks("nested-main"))}
+        </div>
+      </div>
+    </div>
+  </body>`);
+  const outer = dom.window.document.querySelector<HTMLElement>("#semantic-outer");
+  const nested = dom.window.document.querySelector<HTMLElement>("#semantic-nested");
+  if (!outer || !nested) throw new Error("Missing nested semantic fixtures.");
+
+  strictEqual(resolveCommentAuthorUserId(outer), "outer-main");
+  strictEqual(resolveCommentAuthorUserId(nested), "nested-main");
+});
 
 function aliasCommentFixture(
   count = 1,
@@ -337,6 +577,325 @@ async function settleAliasWork(): Promise<void> {
     await Promise.resolve();
   }
 }
+
+interface CommentMutationScanner {
+  scan(root: Node): void;
+}
+
+function observeCommentMutations(
+  dom: JSDOM,
+  scanner: CommentMutationScanner,
+  onMutation?: (mutation: MutationRecord) => void,
+) {
+  const observer = new dom.window.MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      onMutation?.(mutation);
+      if (mutation.type === "attributes") {
+        scanner.scan(mutation.target);
+        continue;
+      }
+
+      for (const node of mutation.addedNodes) {
+        scanner.scan(node);
+      }
+      for (const node of mutation.removedNodes) {
+        scanner.scan(node);
+      }
+    }
+  });
+  observer.observe(dom.window.document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: [...COMMENT_MUTATION_ATTRIBUTE_FILTER],
+  });
+  return observer;
+}
+
+async function deliverMutationRecords(dom: JSDOM): Promise<void> {
+  await new Promise<void>((resolve) => {
+    dom.window.queueMicrotask(resolve);
+  });
+}
+
+test("BUG-012/AC-071 data-id maturation reaches alias backfill through the production observer whitelist", async () => {
+  deepStrictEqual(COMMENT_MUTATION_ATTRIBUTE_FILTER, ["href", "data-id"]);
+
+  const dom = new JSDOM(`<!doctype html><body>
+    <div class="Comments-container" id="progressive-comments"></div>
+  </body>`);
+  const frames = createFrames();
+  let stored = blockedAliasState();
+  let writes = 0;
+  const requestedMemberPaths: string[] = [];
+  const resolveMemberUserId = createMemberUserIdResolver(async (input, init) => {
+    requestedMemberPaths.push(String(input));
+    strictEqual(input, `/api/v4/members/${MEMBER_HASH}`);
+    deepStrictEqual(init, { credentials: "same-origin" });
+    return {
+      ok: true,
+      async json() {
+        return { url_token: "canonical-token" };
+      },
+    };
+  });
+  let controller: ReturnType<typeof createCommentFilterController>;
+  const aliasController = createAuthorAliasPersistenceController({
+    resolveMemberUserId,
+    async withExclusiveLock(operation) {
+      return operation();
+    },
+    async readState() {
+      return parseBlacklistState(stored);
+    },
+    async writeState(state) {
+      writes += 1;
+      stored = state;
+    },
+    applyPersistedState(state) {
+      controller.updateStableUserIds(stableIds(state));
+    },
+  });
+  const completions: Promise<unknown>[] = [];
+  controller = createCommentFilterController({
+    schedule: frames.schedule,
+    async resolveHistoricalAlias(memberHashId) {
+      const completion = aliasController.persistMemberHashAlias(memberHashId);
+      completions.push(completion);
+      await completion;
+    },
+  });
+  controller.updateStableUserIds(stableIds(stored));
+  frames.flush();
+
+  const scannedMutationRoots: Node[] = [];
+  const observedAttributeNames: string[] = [];
+  const observer = observeCommentMutations(
+    dom,
+    {
+      scan(root) {
+        scannedMutationRoots.push(root);
+        controller.scan(root);
+      },
+    },
+    (mutation) => {
+      if (mutation.type === "attributes" && mutation.attributeName) {
+        observedAttributeNames.push(mutation.attributeName);
+      }
+    },
+  );
+  const container = dom.window.document.querySelector<HTMLElement>(
+    "#progressive-comments",
+  );
+  if (!container) throw new Error("Missing progressive comments container.");
+  const progressiveRoot = dom.window.document.createElement("div");
+  progressiveRoot.id = "progressive-comment";
+  progressiveRoot.innerHTML = `
+    ${renderProfileLinks(semanticProfileLinks(MEMBER_HASH))}
+    <p>${renderProfileLinks([profileLink(MENTION_HASH, "text")])}</p>`;
+
+  container.append(progressiveRoot);
+  await deliverMutationRecords(dom);
+  frames.flush();
+
+  strictEqual(progressiveRoot.hasAttribute("data-id"), false);
+  strictEqual(requestedMemberPaths.length, 0);
+  strictEqual(writes, 0);
+  strictEqual(progressiveRoot.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  const scansAfterInsertion = scannedMutationRoots.length;
+
+  progressiveRoot.setAttribute("title", "unrelated mutation");
+  await deliverMutationRecords(dom);
+  frames.flush();
+
+  strictEqual(scannedMutationRoots.length, scansAfterInsertion);
+  deepStrictEqual(observedAttributeNames, []);
+  strictEqual(requestedMemberPaths.length, 0);
+
+  progressiveRoot.setAttribute("data-id", "mature-comment-root");
+  await deliverMutationRecords(dom);
+  strictEqual(scannedMutationRoots.length, scansAfterInsertion + 1);
+  deepStrictEqual(observedAttributeNames, ["data-id"]);
+  frames.flush();
+  await Promise.all(completions);
+  await settleAliasWork();
+  frames.flush();
+  await deliverMutationRecords(dom);
+
+  deepStrictEqual(requestedMemberPaths, [
+    `/api/v4/members/${MEMBER_HASH}`,
+  ]);
+  strictEqual(writes, 1);
+  strictEqual(stored.authors[0]?.memberHashId, MEMBER_HASH);
+  strictEqual(progressiveRoot.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  strictEqual(scannedMutationRoots.length, scansAfterInsertion + 1);
+  deepStrictEqual(observedAttributeNames, ["data-id"]);
+  observer.disconnect();
+});
+
+test("BUG-012/AC-071 the shared whitelist retains href identity rescans", async () => {
+  const dom = new JSDOM(`<!doctype html><body>
+    <div class="Modal-content" id="href-comments"></div>
+  </body>`);
+  const frames = createFrames();
+  let aliasAttempts = 0;
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    async resolveHistoricalAlias() {
+      aliasAttempts += 1;
+    },
+  });
+  controller.updateStableUserIds(new Set(["blocked-after-href-change"]));
+  frames.flush();
+
+  const scannedMutationRoots: Node[] = [];
+  const observedAttributeNames: string[] = [];
+  const observer = observeCommentMutations(
+    dom,
+    {
+      scan(root) {
+        scannedMutationRoots.push(root);
+        controller.scan(root);
+      },
+    },
+    (mutation) => {
+      if (mutation.type === "attributes" && mutation.attributeName) {
+        observedAttributeNames.push(mutation.attributeName);
+      }
+    },
+  );
+  const container = dom.window.document.querySelector<HTMLElement>(
+    "#href-comments",
+  );
+  if (!container) throw new Error("Missing href comments container.");
+  const root = dom.window.document.createElement("div");
+  root.dataset.id = "href-comment";
+  root.innerHTML = '<a href="/people/visible-before-change">author</a>';
+  const link = root.querySelector<HTMLAnchorElement>("a[href]");
+  if (!link) throw new Error("Missing href mutation link.");
+
+  container.append(root);
+  await deliverMutationRecords(dom);
+  frames.flush();
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  const scansAfterInsertion = scannedMutationRoots.length;
+
+  link.setAttribute("aria-label", "unrelated mutation");
+  await deliverMutationRecords(dom);
+  frames.flush();
+  strictEqual(scannedMutationRoots.length, scansAfterInsertion);
+  deepStrictEqual(observedAttributeNames, []);
+
+  link.setAttribute("href", "/people/blocked-after-href-change");
+  await deliverMutationRecords(dom);
+  frames.flush();
+
+  strictEqual(scannedMutationRoots.length, scansAfterInsertion + 1);
+  deepStrictEqual(observedAttributeNames, ["href"]);
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  strictEqual(aliasAttempts, 0);
+  observer.disconnect();
+});
+
+async function runSemanticMainAliasScenario(rootCount: number): Promise<{
+  readonly requestedMemberPaths: readonly string[];
+  readonly writes: number;
+  readonly stored: BlacklistState;
+  readonly roots: readonly HTMLElement[];
+}> {
+  const dom = commentEvidenceFixture({
+    mainLinks: semanticProfileLinks(MEMBER_HASH),
+    mentionLinks: [
+      profileLink(OTHER_HASH, "text"),
+      profileLink(OTHER_HASH, "text"),
+      profileLink(MENTION_HASH, "text"),
+    ],
+    mentionsBeforeMain: true,
+    rootCount,
+  });
+  const frames = createFrames();
+  let stored = blockedAliasState();
+  let writes = 0;
+  const requestedMemberPaths: string[] = [];
+  const resolveMemberUserId = createMemberUserIdResolver(async (input, init) => {
+    requestedMemberPaths.push(String(input));
+    strictEqual(input, `/api/v4/members/${MEMBER_HASH}`);
+    deepStrictEqual(init, { credentials: "same-origin" });
+    return {
+      ok: true,
+      async json() {
+        return { url_token: "canonical-token" };
+      },
+    };
+  });
+  let controller: ReturnType<typeof createCommentFilterController>;
+  const aliasController = createAuthorAliasPersistenceController({
+    resolveMemberUserId,
+    async withExclusiveLock(operation) {
+      return operation();
+    },
+    async readState() {
+      return parseBlacklistState(stored);
+    },
+    async writeState(state) {
+      writes += 1;
+      stored = state;
+    },
+    applyPersistedState(state) {
+      controller.updateStableUserIds(stableIds(state));
+    },
+  });
+  const completions: Promise<unknown>[] = [];
+  controller = createCommentFilterController({
+    schedule: frames.schedule,
+    async resolveHistoricalAlias(memberHashId) {
+      const completion = aliasController.persistMemberHashAlias(memberHashId);
+      completions.push(completion);
+      await completion;
+    },
+  });
+
+  controller.updateStableUserIds(stableIds(stored));
+  controller.scan(dom.window.document.body);
+  frames.flush();
+  await Promise.all(completions);
+  await settleAliasWork();
+  frames.flush();
+
+  return {
+    requestedMemberPaths,
+    writes,
+    stored,
+    roots: Array.from(
+      dom.window.document.querySelectorAll<HTMLElement>("div[data-id]"),
+    ),
+  };
+}
+
+test("BUG-011/AC-070 an approved main hash pair aliases and hides while text-only mention hashes never GET", async () => {
+  const result = await runSemanticMainAliasScenario(1);
+
+  deepStrictEqual(result.requestedMemberPaths, [
+    `/api/v4/members/${MEMBER_HASH}`,
+  ]);
+  strictEqual(result.writes, 1);
+  strictEqual(result.stored.authors[0]?.memberHashId, MEMBER_HASH);
+  strictEqual(result.roots[0]?.classList.contains(COMMENT_HIDDEN_CLASS), true);
+});
+
+test("BUG-011/AC-070 repeated roots share one approved main alias request and storage write", async () => {
+  const result = await runSemanticMainAliasScenario(2);
+
+  deepStrictEqual(result.requestedMemberPaths, [
+    `/api/v4/members/${MEMBER_HASH}`,
+  ]);
+  strictEqual(result.writes, 1);
+  strictEqual(result.stored.authors[0]?.memberHashId, MEMBER_HASH);
+  strictEqual(result.roots.length, 2);
+  for (const root of result.roots) {
+    strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  }
+});
 
 test("BUG-008/010 inline and modal direct matches never request an alias GET", () => {
   for (const containerClass of ["Comments-container", "Modal-content"]) {
