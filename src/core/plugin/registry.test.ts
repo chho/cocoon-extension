@@ -13,6 +13,7 @@ const capabilities = {
   hoverEntry: true,
   remoteAccountBlock: true,
   audienceVoterExpansion: true,
+  interceptionBadge: true,
 } as const;
 
 function discoveredPlugin(
@@ -45,6 +46,7 @@ test("ARCH-001/002 registry selects exactly one valid plugin", () => {
   strictEqual(selection.status, "selected");
   if (selection.status === "selected") {
     strictEqual(selection.plugin.descriptor.id, "zhihu");
+    strictEqual(selection.plugin.capabilities.interceptionBadge, true);
   }
 });
 
@@ -135,7 +137,7 @@ test("ARCH-004 descriptor/runtime mismatch and orphan modules invalidate the reg
   strictEqual(orphanResult.valid, false);
 });
 
-test("ARCH-006 capability declarations are strict and do not accept permission metadata", () => {
+test("ARCH-006 capability declarations include Badge counting and reject extra permission metadata", () => {
   const descriptor = {
     id: "zhihu",
     matches: ["https://www.zhihu.com/"],

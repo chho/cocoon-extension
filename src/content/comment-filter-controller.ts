@@ -69,6 +69,7 @@ export function resolveCommentAuthorUserId(
 export interface CommentFilterControllerDependencies {
   readonly schedule: (callback: () => void) => void;
   readonly resolveHistoricalAlias?: (memberHashId: string) => Promise<void>;
+  readonly onFirstHidden?: () => void;
   readonly batchSize?: number;
 }
 
@@ -90,6 +91,7 @@ export function createCommentFilterController(
   const pending = new Set<HTMLElement>();
   const inFlightAliases = new Map<string, Promise<void>>();
   const skipAliasOnce = new WeakMap<HTMLElement, string>();
+  const rootsEverObservedHidden = new WeakSet<HTMLElement>();
   let stableUserIds = new Set<string>();
   let storageLoaded = false;
   let frameRequested = false;
@@ -117,6 +119,9 @@ export function createCommentFilterController(
       encountered.delete(commentRoot);
       pending.delete(commentRoot);
       skipAliasOnce.delete(commentRoot);
+      if (commentRoot.classList.contains(COMMENT_HIDDEN_CLASS)) {
+        rootsEverObservedHidden.add(commentRoot);
+      }
       commentRoot.classList.remove(COMMENT_HIDDEN_CLASS);
     }
   }
@@ -127,6 +132,9 @@ export function createCommentFilterController(
         encountered.delete(commentRoot);
         pending.delete(commentRoot);
         skipAliasOnce.delete(commentRoot);
+        if (commentRoot.classList.contains(COMMENT_HIDDEN_CLASS)) {
+          rootsEverObservedHidden.add(commentRoot);
+        }
         commentRoot.classList.remove(COMMENT_HIDDEN_CLASS);
         continue;
       }
@@ -176,6 +184,9 @@ export function createCommentFilterController(
       if (!commentRoot.isConnected) {
         encountered.delete(commentRoot);
         skipAliasOnce.delete(commentRoot);
+        if (commentRoot.classList.contains(COMMENT_HIDDEN_CLASS)) {
+          rootsEverObservedHidden.add(commentRoot);
+        }
         commentRoot.classList.remove(COMMENT_HIDDEN_CLASS);
         continue;
       }
@@ -183,9 +194,25 @@ export function createCommentFilterController(
         continue;
       }
       try {
+        const wasHidden = commentRoot.classList.contains(COMMENT_HIDDEN_CLASS);
+        if (wasHidden) {
+          rootsEverObservedHidden.add(commentRoot);
+        }
         const userId = resolveCommentAuthorUserId(commentRoot);
         const hidden = userId !== null && stableUserIds.has(userId);
         commentRoot.classList.toggle(COMMENT_HIDDEN_CLASS, hidden);
+        if (
+          hidden &&
+          !wasHidden &&
+          !rootsEverObservedHidden.has(commentRoot)
+        ) {
+          rootsEverObservedHidden.add(commentRoot);
+          try {
+            dependencies.onFirstHidden?.();
+          } catch {
+            // Badge reporting is observational and must not fail open filtering.
+          }
+        }
         if (hidden || userId === null || !isMemberHashId(userId)) {
           continue;
         }

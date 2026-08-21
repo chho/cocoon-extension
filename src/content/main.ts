@@ -1,9 +1,24 @@
+import { startSitePluginWithBadgeReset } from "./badge-bootstrap.ts";
+import { createBadgeReporter } from "./badge-reporter.ts";
 import { createSitePluginBootstrap } from "../core/plugin/bootstrap.ts";
 import { discoverSitePluginRegistry } from "../core/plugin/discovery.ts";
 
 async function startContentScript(): Promise<void> {
+  const badgeReporter = createBadgeReporter({
+    generation: crypto.randomUUID(),
+    async sendMessage(message) {
+      return chrome.runtime.sendMessage(message);
+    },
+    schedule(callback) {
+      queueMicrotask(callback);
+    },
+  });
   const bootstrap = createSitePluginBootstrap(discoverSitePluginRegistry());
-  const result = await bootstrap.start({ url: new URL(window.location.href) });
+  const result = await startSitePluginWithBadgeReset(
+    bootstrap,
+    new URL(window.location.href),
+    badgeReporter,
+  );
 
   if (result.status === "invalid-registry") {
     console.error("[Cocoon] 站点插件注册表无效，内容脚本已安全停止。");

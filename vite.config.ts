@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         popup: resolve(import.meta.dirname, "popup/popup.html"),
         content: resolve(import.meta.dirname, "src/content/main.ts"),
+        background: resolve(import.meta.dirname, "src/background/main.ts"),
       },
       output: {
         entryFileNames: "assets/[name].js",

@@ -24,6 +24,7 @@ const DEFAULT_CONTENT_RESOURCES: ContentScriptResources = {
   js: "assets/content.js",
   css: "assets/content.css",
 };
+const BACKGROUND_RESOURCE = "assets/background.js";
 
 interface ModulePathIdentity {
   readonly lexicalPath: string;
@@ -350,6 +351,20 @@ export function createExtensionBuildPlugin(
       if (bundle[contentResources.css]?.type !== "asset") {
         throw new Error(
           `[Cocoon build] missing stable ${contentResources.css} asset`,
+        );
+      }
+      const backgroundChunk = bundle[BACKGROUND_RESOURCE];
+      if (backgroundChunk?.type !== "chunk" || !backgroundChunk.isEntry) {
+        throw new Error(
+          `[Cocoon build] missing stable ${BACKGROUND_RESOURCE} entry`,
+        );
+      }
+      if (
+        backgroundChunk.imports.length > 0 ||
+        backgroundChunk.dynamicImports.length > 0
+      ) {
+        throw new Error(
+          "[Cocoon build] background.js must be self-contained without shared or dynamic chunks",
         );
       }
 

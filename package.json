@@ -7,7 +7,7 @@
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/content/*.test.ts src/core/plugin/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs",
+    "test": "node --test src/background/*.test.ts src/content/*.test.ts src/core/plugin/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs",
     "snapshot:zhihu": "node scripts/capture-zhihu-snapshot.mjs"
   },
   "devDependencies": {

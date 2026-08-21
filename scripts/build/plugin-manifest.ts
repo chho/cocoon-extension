@@ -186,6 +186,17 @@ export function parseBaseManifest(value: unknown): ExtensionManifest {
   ) {
     throw buildError("base Manifest permissions must be a string array");
   }
+  const background = value.background;
+  if (
+    !isRecord(background) ||
+    Object.keys(background).length !== 2 ||
+    background.service_worker !== "assets/background.js" ||
+    background.type !== "module"
+  ) {
+    throw buildError(
+      "base Manifest must define the module service worker assets/background.js",
+    );
+  }
   return { ...value };
 }
 

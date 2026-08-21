@@ -1,3 +1,4 @@
+import type { SitePluginMountContext } from "../../core/plugin/contract.ts";
 import {
   STORAGE_KEY,
   createInitialState,
@@ -8,7 +9,10 @@ import {
 } from "../../content/blacklist-state.ts";
 import { createAuthorAliasPersistenceController } from "../../content/author-alias-persistence-controller.ts";
 import { resolveProvenAuthorIdentity } from "../../content/author-identity.ts";
-import { createCardFilterController } from "../../content/card-filter-controller.ts";
+import {
+  createCardFilterController,
+  type CardFilterFreshness,
+} from "../../content/card-filter-controller.ts";
 import { createCommentFilterController } from "../../content/comment-filter-controller.ts";
 import { createCommitController } from "../../content/commit-controller.ts";
 import {
@@ -69,7 +73,7 @@ const AUTHOR_PROFILE_LINK_SELECTOR =
   "a.AuthorInfo-name[href], a.UserLink-link[href], .AuthorInfo-name a[href]";
 const CONTENT_LINK_SELECTOR = "a[href]";
 const ENHANCED_CARD_CLASS = "cocoon-zhihu-card";
-const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
+export const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
 const CLOSE_BUTTON_CLASS = "cocoon-zhihu-card-close";
 const DRAWER_CLASS = "cocoon-tag-drawer";
 const STORAGE_LOCK_NAME = "cocoon-blacklist-storage";
@@ -86,12 +90,103 @@ interface ZhihuCardMetadata {
 
 type HtmlDrawerTarget = DrawerTarget<HTMLElement, HTMLButtonElement>;
 
-export function mountZhihuPlugin(): void {
-const pendingVisibility = new Map<HTMLElement, boolean>();
+interface PendingCardVisibility {
+  readonly hidden: boolean;
+  readonly isCurrent: CardFilterFreshness;
+}
+
+export interface CardVisibilityController {
+  queue(
+    card: HTMLElement,
+    hidden: boolean,
+    isCurrent: CardFilterFreshness,
+  ): void;
+}
+
+interface CardVisibilityControllerDependencies {
+  readonly schedule: (callback: () => void) => void;
+  readonly onFirstHidden: () => void;
+  readonly batchSize?: number;
+}
+
+export function applyCardHiddenState(
+  card: HTMLElement,
+  hidden: boolean,
+  isCurrent: CardFilterFreshness,
+  rootsEverObservedHidden: WeakSet<HTMLElement>,
+  onFirstHidden: () => void,
+): void {
+  if (!isCurrent() || !card.isConnected) {
+    return;
+  }
+
+  const wasHidden = card.classList.contains(BLACKLISTED_CARD_CLASS);
+  if (wasHidden) {
+    rootsEverObservedHidden.add(card);
+  }
+  card.classList.toggle(BLACKLISTED_CARD_CLASS, hidden);
+  if (!hidden || wasHidden || rootsEverObservedHidden.has(card)) {
+    return;
+  }
+
+  rootsEverObservedHidden.add(card);
+  try {
+    onFirstHidden();
+  } catch {
+    // Badge reporting is observational and must never affect card filtering.
+  }
+}
+
+export function createCardVisibilityController(
+  dependencies: CardVisibilityControllerDependencies,
+): CardVisibilityController {
+  const batchSize = dependencies.batchSize ?? 20;
+  const pendingVisibility = new Map<HTMLElement, PendingCardVisibility>();
+  const rootsEverObservedHidden = new WeakSet<HTMLElement>();
+  let frameRequested = false;
+
+  function requestFrame(): void {
+    if (frameRequested) {
+      return;
+    }
+    frameRequested = true;
+    dependencies.schedule(processPendingVisibility);
+  }
+
+  function processPendingVisibility(): void {
+    frameRequested = false;
+    const batch = Array.from(pendingVisibility.entries()).slice(0, batchSize);
+    for (const [card, visibility] of batch) {
+      if (pendingVisibility.get(card) !== visibility) {
+        continue;
+      }
+      pendingVisibility.delete(card);
+      applyCardHiddenState(
+        card,
+        visibility.hidden,
+        visibility.isCurrent,
+        rootsEverObservedHidden,
+        dependencies.onFirstHidden,
+      );
+    }
+
+    if (pendingVisibility.size > 0) {
+      requestFrame();
+    }
+  }
+
+  return {
+    queue(card, hidden, isCurrent) {
+      pendingVisibility.set(card, { hidden, isCurrent });
+      requestFrame();
+    },
+  };
+}
+
+export function mountZhihuPlugin(context: SitePluginMountContext): void {
 const cardTargetIds = new WeakMap<HTMLElement, string>();
 const resolveMemberUserId = createMemberUserIdResolver(fetch);
 let currentState: BlacklistState = createInitialState();
-let visibilityFrameRequested = false;
 let nextTargetId = 1;
 let blockedOutsideClickTarget: EventTarget | null = null;
 let lifecycleEnded = false;
@@ -101,6 +196,16 @@ window.addEventListener("pagehide", () => {
 });
 window.addEventListener("pageshow", () => {
   lifecycleEnded = false;
+});
+
+const cardVisibilityController = createCardVisibilityController({
+  schedule(callback) {
+    requestAnimationFrame(callback);
+  },
+  onFirstHidden() {
+    context.badgeReporter.recordFirstHidden();
+  },
+  batchSize: BATCH_SIZE,
 });
 
 const authorAliasPersistenceController =
@@ -118,6 +223,9 @@ const commentFilterController = createCommentFilterController({
   },
   async resolveHistoricalAlias(memberHashId) {
     await authorAliasPersistenceController.persistMemberHashAlias(memberHashId);
+  },
+  onFirstHidden() {
+    context.badgeReporter.recordFirstHidden();
   },
   batchSize: BATCH_SIZE,
 });
@@ -747,35 +855,13 @@ function enhanceCard(card: HTMLElement): void {
   card.append(closeButton);
 }
 
-function queueVisibility(card: HTMLElement, hidden: boolean): void {
-  pendingVisibility.set(card, hidden);
-  if (!visibilityFrameRequested) {
-    visibilityFrameRequested = true;
-    requestAnimationFrame(processPendingVisibility);
-  }
-}
-
-function processPendingVisibility(): void {
-  visibilityFrameRequested = false;
-  const batch = Array.from(pendingVisibility.entries()).slice(0, BATCH_SIZE);
-  for (const [card, hidden] of batch) {
-    pendingVisibility.delete(card);
-    if (card.isConnected) {
-      card.classList.toggle(BLACKLISTED_CARD_CLASS, hidden);
-    }
-  }
-
-  if (pendingVisibility.size > 0) {
-    visibilityFrameRequested = true;
-    requestAnimationFrame(processPendingVisibility);
-  }
-}
-
 const filterController = createCardFilterController<HTMLElement>({
   prepareCard: enhanceCard,
   resolveDirectStableUserIds: getDirectCardAuthorIds,
   resolveStableUserId: getAuthorUserId,
-  setHidden: queueVisibility,
+  setHidden(card, hidden, isCurrent) {
+    cardVisibilityController.queue(card, hidden, isCurrent);
+  },
   reportFailure(error) {
     console.warn("[Cocoon] 无法判断卡片作者。", error);
   },

@@ -1053,8 +1053,12 @@ test("BUG-008 detached roots and changed author links cannot be stale-hidden aft
     const proof = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let badgeReports = 0;
     const controller = createCommentFilterController({
       schedule: frames.schedule,
+      onFirstHidden() {
+        badgeReports += 1;
+      },
       async resolveHistoricalAlias() {
         await proof;
         controller.updateStableUserIds(new Set(["canonical-token", MEMBER_HASH]));
@@ -1074,6 +1078,7 @@ test("BUG-008 detached roots and changed author links cannot be stale-hidden aft
     frames.flush();
 
     strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false, mutation);
+    strictEqual(badgeReports, 0, mutation);
   }
 });
 
@@ -1102,4 +1107,101 @@ test("BUG-008 an intervening runtime state remains authoritative after an unchan
   const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
   if (!root) throw new Error("Missing intervening state fixture.");
   strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), false);
+});
+
+test("BADGE-002/003 comments and replies count once per connected DOM root", () => {
+  const dom = fixture();
+  const frames = createFrames();
+  let count = 0;
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    onFirstHidden() {
+      count += 1;
+    },
+  });
+  controller.updateStableUserIds(new Set(["blocked-top", "visible-reply"]));
+  controller.scan(dom.window.document.body);
+  controller.scan(dom.window.document.body);
+  frames.flush();
+  strictEqual(count, 2);
+
+  controller.updateStableUserIds(new Set(["blocked-top", "visible-reply"]));
+  frames.flush();
+  strictEqual(count, 2);
+
+  controller.updateStableUserIds(new Set());
+  frames.flush();
+  controller.updateStableUserIds(new Set(["blocked-top", "visible-reply"]));
+  frames.flush();
+  strictEqual(count, 2);
+
+  const container = dom.window.document.querySelector<HTMLElement>(
+    ".Comments-container",
+  );
+  if (!container) throw new Error("Missing badge comments container.");
+  const newSameAuthorRoot = dom.window.document.createElement("div");
+  newSameAuthorRoot.dataset.id = "new-same-author-root";
+  newSameAuthorRoot.innerHTML = '<a href="/people/blocked-top">new root</a>';
+  container.append(newSameAuthorRoot);
+  controller.scan(newSameAuthorRoot);
+  frames.flush();
+  strictEqual(count, 3);
+});
+
+test("BADGE-002/003 preexisting hidden and detached comment roots do not count", () => {
+  const dom = fixture();
+  const frames = createFrames();
+  let count = 0;
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    onFirstHidden() {
+      count += 1;
+    },
+  });
+  const preexisting = dom.window.document.querySelector<HTMLElement>(
+    "#top-blocked",
+  );
+  const detached = dom.window.document.querySelector<HTMLElement>(
+    "#reply-visible",
+  );
+  if (!preexisting || !detached) throw new Error("Missing badge fixtures.");
+  preexisting.classList.add(COMMENT_HIDDEN_CLASS);
+
+  controller.updateStableUserIds(new Set(["blocked-top", "visible-reply"]));
+  controller.scan(dom.window.document.body);
+  detached.remove();
+  frames.flush();
+  strictEqual(count, 0);
+
+  controller.updateStableUserIds(new Set());
+  frames.flush();
+  controller.updateStableUserIds(new Set(["blocked-top"]));
+  frames.flush();
+  strictEqual(count, 0);
+});
+
+test("BADGE-006 callback failures do not enter comment fail-open handling", () => {
+  const dom = fixture();
+  const frames = createFrames();
+  let attempts = 0;
+  const controller = createCommentFilterController({
+    schedule: frames.schedule,
+    onFirstHidden() {
+      attempts += 1;
+      throw new Error("reporting failed");
+    },
+  });
+  const root = dom.window.document.querySelector<HTMLElement>("#top-blocked");
+  if (!root) throw new Error("Missing callback failure fixture.");
+
+  controller.updateStableUserIds(new Set(["blocked-top"]));
+  controller.scan(root);
+  frames.flush();
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  strictEqual(attempts, 1);
+
+  controller.scan(root);
+  frames.flush();
+  strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  strictEqual(attempts, 1);
 });

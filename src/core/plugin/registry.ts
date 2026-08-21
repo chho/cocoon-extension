@@ -14,6 +14,7 @@ const CAPABILITY_KEYS = [
   "hoverEntry",
   "remoteAccountBlock",
   "audienceVoterExpansion",
+  "interceptionBadge",
 ] as const satisfies readonly (keyof SitePluginCapabilities)[];
 
 export interface DiscoveredDescriptor {
@@ -78,6 +79,7 @@ function validateCapabilities(value: unknown): SitePluginCapabilities | null {
     hoverEntry: value.hoverEntry as boolean,
     remoteAccountBlock: value.remoteAccountBlock as boolean,
     audienceVoterExpansion: value.audienceVoterExpansion as boolean,
+    interceptionBadge: value.interceptionBadge as boolean,
   };
 }
 

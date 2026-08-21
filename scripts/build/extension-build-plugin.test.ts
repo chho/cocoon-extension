@@ -30,6 +30,7 @@ interface FixtureProjectPaths {
   readonly pluginsRoot: string;
   readonly discoveryPath: string;
   readonly contentEntryPath: string;
+  readonly backgroundEntryPath: string;
   readonly baseManifestPath: string;
   readonly outDir: string;
 }
@@ -37,6 +38,7 @@ interface FixtureProjectPaths {
 interface BuildOutputSnapshot {
   readonly manifest: string;
   readonly contentJavaScript: string;
+  readonly backgroundJavaScript: string;
   readonly contentCss: string;
 }
 
@@ -182,11 +184,13 @@ async function writeFixtureProject(
   const pluginsRoot = join(projectRoot, "src/plugins");
   const discoveryPath = join(projectRoot, "src/core/plugin/discovery.ts");
   const contentEntryPath = join(projectRoot, "src/content/main.ts");
+  const backgroundEntryPath = join(projectRoot, "src/background/main.ts");
   const baseManifestPath = join(projectRoot, "public/manifest.json");
   const outDir = join(projectRoot, "dist");
 
   await mkdir(join(projectRoot, "src/core/plugin"), { recursive: true });
   await mkdir(join(projectRoot, "src/content"), { recursive: true });
+  await mkdir(join(projectRoot, "src/background"), { recursive: true });
   await mkdir(join(projectRoot, "public"), { recursive: true });
   await writeFile(
     baseManifestPath,
@@ -194,6 +198,10 @@ async function writeFixtureProject(
       manifest_version: 3,
       name: "Cocoon build fixture",
       version: "0.2.0",
+      background: {
+        service_worker: "assets/background.js",
+        type: "module",
+      },
       permissions: ["storage"],
     })}\n`,
   );
@@ -217,11 +225,17 @@ async function writeFixtureProject(
       `};\n`,
   );
 
+  await writeFile(
+    backgroundEntryPath,
+    `globalThis.__COCOON_BACKGROUND_FIXTURE__ = true;\n`,
+  );
+
   return {
     projectRoot,
     pluginsRoot,
     discoveryPath,
     contentEntryPath,
+    backgroundEntryPath,
     baseManifestPath,
     outDir,
   };
@@ -230,6 +244,8 @@ async function writeFixtureProject(
 function createFixtureBuildConfig(
   fixture: FixtureProjectPaths,
   watch: boolean,
+  includeBackground = true,
+  forceBackgroundSharedChunk = false,
 ): InlineConfig {
   return {
     configFile: false,
@@ -251,11 +267,25 @@ function createFixtureBuildConfig(
       minify: false,
       ...(watch ? { watch: {} } : {}),
       rollupOptions: {
-        input: { content: fixture.contentEntryPath },
+        input: includeBackground
+          ? {
+            content: fixture.contentEntryPath,
+            background: fixture.backgroundEntryPath,
+          }
+          : { content: fixture.contentEntryPath },
         output: {
           entryFileNames: "assets/[name].js",
           chunkFileNames: "assets/[name].js",
           assetFileNames: "assets/[name][extname]",
+          ...(forceBackgroundSharedChunk
+            ? {
+              manualChunks(id: string) {
+                return id.endsWith("/src/background/shared.ts")
+                  ? "background-shared"
+                  : undefined;
+              },
+            }
+            : {}),
         },
       },
     },
@@ -301,6 +331,10 @@ async function readBuildOutputSnapshot(
       join(outDir, "assets/content.js"),
       "utf8",
     ),
+    backgroundJavaScript: await readFile(
+      join(outDir, "assets/background.js"),
+      "utf8",
+    ),
     contentCss: await readFile(join(outDir, "assets/content.css"), "utf8"),
   };
 }
@@ -317,8 +351,12 @@ async function readBuiltState(
   if (typeof manifestValue !== "object" || manifestValue === null) {
     throw new Error("Fixture Manifest is not an object");
   }
-  const contentScripts = (manifestValue as Record<string, unknown>)
-    .content_scripts;
+  const manifest = manifestValue as Record<string, unknown>;
+  deepStrictEqual(manifest.background, {
+    service_worker: "assets/background.js",
+    type: "module",
+  });
+  const contentScripts = manifest.content_scripts;
   if (!Array.isArray(contentScripts) || contentScripts.length !== 1) {
     throw new Error("Fixture Manifest has invalid content_scripts");
   }
@@ -338,6 +376,11 @@ async function readBuiltState(
   runInNewContext(
     await readFile(join(outDir, "assets/content.js"), "utf8"),
     sandbox,
+  );
+  match(
+    await readFile(join(outDir, "assets/background.js"), "utf8"),
+    /__COCOON_BACKGROUND_FIXTURE__/,
+    "fixture background entry must exist and retain its marker",
   );
   return {
     manifestMatches: matches as string[],
@@ -394,6 +437,63 @@ async function waitForBuildState(
     cause: lastError,
   });
 }
+
+test("BADGE-006 clean Vite build rejects a missing stable background entry before Manifest emission", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-background-"));
+  try {
+    const fixture = await writeFixtureProject(projectRoot);
+    await writeFixturePlugin(
+      join(fixture.pluginsRoot, "alpha"),
+      "alpha",
+      "https://alpha.example.com/*",
+      "alpha-runtime-v1",
+    );
+
+    await rejects(
+      build(createFixtureBuildConfig(fixture, false, false)),
+      /\[Cocoon build\] missing stable assets\/background\.js entry/,
+    );
+    await rejects(
+      readFile(join(fixture.outDir, "manifest.json"), "utf8"),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT",
+    );
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("BADGE-006 clean Vite build rejects a background static shared chunk", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-background-shared-"));
+  try {
+    const fixture = await writeFixtureProject(projectRoot);
+    await writeFixturePlugin(
+      join(fixture.pluginsRoot, "alpha"),
+      "alpha",
+      "https://alpha.example.com/*",
+      "alpha-runtime-v1",
+    );
+    await writeFile(
+      join(projectRoot, "src/background/shared.ts"),
+      `export const backgroundMarker = "shared-background-marker";\n`,
+    );
+    await writeFile(
+      fixture.backgroundEntryPath,
+      `import { backgroundMarker } from "./shared.ts";\n` +
+        `globalThis.__COCOON_BACKGROUND_FIXTURE__ = backgroundMarker;\n`,
+    );
+
+    await rejects(
+      build(createFixtureBuildConfig(fixture, false, true, true)),
+      /\[Cocoon build\] background\.js must be self-contained without shared or dynamic chunks/,
+    );
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
 
 test("ARCH-001 clean Vite build rejects a symlinked plugin before Manifest emission", async (context) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-symlink-"));
@@ -545,6 +645,11 @@ test("ARCH-001/004 Vite watch rejects a symlinked plugin and recovers atomically
       ["alpha-runtime-v1"],
     );
     const successfulOutput = await readBuildOutputSnapshot(fixture.outDir);
+    match(
+      successfulOutput.backgroundJavaScript,
+      /__COCOON_BACKGROUND_FIXTURE__/,
+      "successful watch output must include the background entry marker",
+    );
 
     const linkedPluginPath = join(fixture.pluginsRoot, "linked");
     if (

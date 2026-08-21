@@ -13,10 +13,16 @@ export interface SitePluginCapabilities {
   readonly hoverEntry: boolean;
   readonly remoteAccountBlock: boolean;
   readonly audienceVoterExpansion: boolean;
+  readonly interceptionBadge: boolean;
+}
+
+export interface FirstHideReporter {
+  recordFirstHidden(): void;
 }
 
 export interface SitePluginMountContext {
   readonly url: URL;
+  readonly badgeReporter: FirstHideReporter;
 }
 
 export interface SitePlugin {

@@ -4,12 +4,17 @@ import { test } from "node:test";
 import { createSitePluginBootstrap } from "./bootstrap.ts";
 import { createPluginRegistry } from "./registry.ts";
 
+const badgeReporter = {
+  recordFirstHidden() {},
+};
+
 const capabilities = {
   cardFiltering: true,
   commentFiltering: true,
   hoverEntry: true,
   remoteAccountBlock: true,
   audienceVoterExpansion: true,
+  interceptionBadge: true,
 } as const;
 
 function validRegistry(
@@ -44,7 +49,10 @@ test("ARCH-002 bootstrap mounts the selected plugin exactly once across repeated
       mounts += 1;
     },
   }]));
-  const context = { url: new URL("https://www.zhihu.com/") };
+  const context = {
+    url: new URL("https://www.zhihu.com/"),
+    badgeReporter,
+  };
 
   const first = bootstrap.start(context);
   const second = bootstrap.start(context);
@@ -66,7 +74,10 @@ test("ARCH-002 zero and multiple matches mount nothing", async () => {
     },
   }]));
   deepStrictEqual(
-    await noMatch.start({ url: new URL("https://example.com/") }),
+    await noMatch.start({
+      url: new URL("https://example.com/"),
+      badgeReporter,
+    }),
     { status: "no-match" },
   );
 
@@ -87,7 +98,10 @@ test("ARCH-002 zero and multiple matches mount nothing", async () => {
     },
   ]));
   deepStrictEqual(
-    await multiple.start({ url: new URL("https://www.example.com/") }),
+    await multiple.start({
+      url: new URL("https://www.example.com/"),
+      badgeReporter,
+    }),
     { status: "multiple-matches", pluginIds: ["broad", "narrow"] },
   );
   strictEqual(mounts, 0);
@@ -131,6 +145,7 @@ test("ARCH-002 invalid registries fail closed before any runtime can mount", asy
   );
   const result = await createSitePluginBootstrap(registry).start({
     url: new URL("https://first.example.com/"),
+    badgeReporter,
   });
   strictEqual(result.status, "invalid-registry");
   strictEqual(mounts, 0);

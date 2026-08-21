@@ -11,9 +11,10 @@ const plugin: SitePlugin = {
     hoverEntry: true,
     remoteAccountBlock: true,
     audienceVoterExpansion: true,
+    interceptionBadge: true,
   },
-  mount() {
-    mountZhihuPlugin();
+  mount(context) {
+    mountZhihuPlugin(context);
   },
 };
 

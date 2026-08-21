@@ -218,6 +218,10 @@ test("ARCH-005 manifest composition generates exact stable content resources fro
     name: "Cocoon",
     version: "0.2.0",
     action: { default_popup: "popup/popup.html" },
+    background: {
+      service_worker: "assets/background.js",
+      type: "module",
+    },
     permissions: ["storage"],
   });
   const manifest = composeManifest(
@@ -237,12 +241,40 @@ test("ARCH-005 manifest composition generates exact stable content resources fro
   strictEqual("content_scripts" in base, false);
 });
 
+test("BADGE-006 base Manifest requires the stable module Service Worker", () => {
+  for (const background of [
+    undefined,
+    { service_worker: "assets/other.js", type: "module" },
+    { service_worker: "assets/background.js" },
+    {
+      service_worker: "assets/background.js",
+      type: "module",
+      unexpected: true,
+    },
+  ]) {
+    throws(
+      () => parseBaseManifest({
+        manifest_version: 3,
+        name: "Cocoon",
+        version: "0.2.0",
+        background,
+        permissions: ["storage"],
+      }),
+      /module service worker assets\/background\.js/,
+    );
+  }
+});
+
 test("ARCH-004 base Manifest rejects manually duplicated content_scripts", () => {
   throws(
     () => parseBaseManifest({
       manifest_version: 3,
       name: "Cocoon",
       version: "0.2.0",
+      background: {
+        service_worker: "assets/background.js",
+        type: "module",
+      },
       permissions: ["storage"],
       content_scripts: [],
     }),
