@@ -6,9 +6,12 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 当前功能：
 
-- 点击扩展图标，Popup 显示 `Hello`。
-- 进入知乎首页 `https://www.zhihu.com/` 后，为每张内容信息流卡片添加一个极简 `×` 按钮。
-- 点击 `×` 后打开本地标签抽屉；选择或创建标签后，将作者稳定标识、名称、标签、来源和首次屏蔽时间记录到 `chrome.storage.local`，并隐藏当前及后续出现的同作者卡片与评论；不采集或保存卡片图像。
+- Action Badge 统计当前标签页本次页面生命周期内被隐藏的卡片与评论数量；Popup 显示页面状态、准确拦截数、本地作者/标签摘要、搜索、单个解除、8 秒撤销和管理页入口。
+- 进入知乎首页 `https://www.zhihu.com/` 后，为内容信息流卡片添加极简 `×`，并在受支持的知乎作者悬浮窗口中添加屏蔽入口。
+- 点击入口只打开本地标签抽屉；选择或创建标签后，才把 schema v5 作者记录写入 `chrome.storage.local`，并隐藏当前及后续出现的同作者卡片、评论和回复；不采集或保存卡片图像。
+- 标签抽屉可按用户可见且已记忆的选项，对直接选择的单个作者执行知乎账号级拉黑，或读取当前内容的点赞者并仅将其加入 Cocoon 本地黑名单；点赞者不得进入远程拉黑 POST。
+- 独立管理页提供完整作者列表、搜索、标签/平台筛选、排序、单个/批量解除、标签维护，以及严格校验且原子执行的 JSON 导入与导出。
+- 本地身份按 `(platformId, userId)` 隔离；当前只有知乎运行时插件，展示或导入其他平台分类不表示支持对应网站过滤。
 - 具体已交付能力、待开发需求和已知浏览器缺陷以 `docs/blacklist-spec.md` 的需求状态为准。
 
 ## 技术栈
@@ -22,38 +25,41 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 ```text
 .
+├── README.md                    # 公开项目说明、安装、权限、数据行为与贡献入口
+├── LICENSE                      # Apache License 2.0
 ├── popup/popup.html             # Popup HTML 入口
+├── options/options.html         # 独立管理页 HTML 入口
 ├── public/
 │   └── manifest.json            # Manifest 基础字段源文件（不手写 content_scripts）
 ├── src/
+│   ├── background/              # 模块 Service Worker、Badge、RPC、锁与管理事务
 │   ├── content/
 │   │   ├── main.ts              # 无站点业务语义的内容脚本启动入口
-│   │   └── *.ts                 # 现有知乎纯逻辑/控制器（迁移期由插件复用）
+│   │   └── *.ts                 # 共享黑名单、过滤、标签与知乎纯逻辑控制器
 │   ├── core/plugin/             # 严格插件契约、descriptor 校验、registry 与 eager discovery
-│   ├── plugins/zhihu/
-│   │   ├── plugin.json          # 知乎插件 ID 与 Manifest matches 的单一来源
-│   │   ├── plugin.ts            # 插件能力声明与挂载入口
-│   │   ├── runtime.ts           # 知乎 DOM/storage/network 挂载接线
-│   │   └── plugin.css           # 知乎内容样式，构建为稳定 assets/content.css
-│   └── popup/
-│       ├── main.ts              # Popup TypeScript 入口
-│       └── popup.css            # Popup 样式
+│   ├── options/                 # 管理页逻辑、视图、对话框与文件传输
+│   ├── popup/                   # Popup 逻辑、视图与样式
+│   ├── ui/                      # Popup/options 共用 RPC、view-model 与 URL helper
+│   └── plugins/zhihu/
+│       ├── plugin.json          # 知乎插件 ID 与 Manifest matches 的单一来源
+│       ├── plugin.ts            # 插件能力声明与挂载入口
+│       ├── runtime.ts           # 知乎 DOM/storage/network 挂载接线
+│       └── plugin.css           # 知乎内容样式，构建为稳定 assets/content.css
 ├── scripts/
-│   ├── build/plugin-manifest.ts # 插件扫描与最终 Manifest 组合
+│   ├── build/                   # 插件扫描、Manifest 组合、Vite 构建守卫及测试
 │   ├── capture-zhihu-snapshot.mjs # 本地知乎原始最小快照采集
 │   └── lib/                     # 快照转换纯函数及测试
 ├── docs/
-│   ├── blacklist-spec.md        # 作者黑名单功能规格与交付状态
-│   └── zhihu-browser-snapshots.md
-├── vite.config.ts               # Vite 多入口构建配置
+│   └── blacklist-spec.md        # 唯一跟踪的产品规格与交付状态文档
+├── vite.config.ts               # Popup/options/content/background 多入口构建配置
 ├── tsconfig.json
-└── dist/                        # 构建产物，不要手动编辑
+└── dist/                        # 构建产物，不要手动编辑或提交
 ```
 
 ## 常用命令
 
 ```bash
-npm install
+npm ci
 npm test
 npm run typecheck
 npm run build
@@ -61,17 +67,23 @@ npm run dev
 npm run snapshot:zhihu
 ```
 
-- `npm test`：运行现有内容逻辑、插件 registry、构建扫描/Manifest 组合和快照纯函数测试。
-- `npm run typecheck`：执行 TypeScript 类型检查。
-- `npm run build`：先进行类型检查，再扫描本地插件 descriptor、构建并生成 `dist/manifest.json`。
+- `npm ci`：按已提交的 lockfile 进行可复现安装；只有明确变更依赖时才使用 `npm install` 并同步提交 lockfile。
+- `npm test`：运行 background、内容逻辑、RPC、Popup、options、UI、插件 registry、构建/Manifest 和快照纯函数测试。
+- `npm run typecheck`：执行严格 TypeScript 类型检查。
+- `npm run build`：先进行类型检查，再扫描插件 descriptor、构建四个入口并生成最终 `dist/manifest.json`。
 - `npm run dev`：监听源码变化并持续重新构建。
 - `npm run snapshot:zhihu`：显式连接现有 Chrome，生成包含真实作者标识的本地最小知乎快照。
 
-每次修改代码后，至少运行：
+每次修改代码、测试、Manifest 或构建配置后，至少运行：
 
 ```bash
+npm test
+npm run typecheck
 npm run build
+git diff --check
 ```
+
+仅修改普通文档时至少运行 `git diff --check`；不得把文档中的历史验证结果冒充为本次已执行结果。
 
 ## 功能规格与交付状态
 
@@ -91,9 +103,14 @@ npm run build
 3. 开启开发者模式。
 4. 加载或重新加载 `dist/` 目录，而不是项目根目录。
 5. 刷新知乎首页。
-6. 点击卡片右上角的 `×`，验证标签抽屉、无图存储记录，以及作者卡片和评论隐藏行为。
+6. 按本次修改范围验证：
+   - Popup 页面状态、Badge/准确拦截数、搜索、解除、撤销和“管理全部”；
+   - 管理页作者搜索、标签/平台筛选、排序、单个/批量解除、标签维护及导入导出；
+   - 卡片与作者悬浮入口只打开抽屉，提交标签后才写入并过滤卡片、评论和回复；
+   - 无限滚动、评论重开和动态插入不重复注入且继续过滤；
+   - 若涉及知乎操作，直接作者远程 POST 与点赞者仅本地入库的边界不被破坏。
 
-修改 Manifest 或内容脚本后，必须同时重新加载扩展并刷新目标网页。
+修改 Manifest、background 或内容脚本后，必须重新加载扩展；修改目标页面行为后还必须刷新知乎首页。未经用户授权不得自行执行这些浏览器操作。
 
 ### Chrome DevTools 连接约定
 
@@ -129,18 +146,21 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 仅在明确需要更新本地证据时运行 `npm run snapshot:zhihu`；脚本不得自动随构建或测试执行。
 - 快照只写入 `.pi/browser-snapshots-local/zhihu/`，该目录必须保持 Git 忽略，不得强制提交真实采集数据。
 - 快照包含真实作者名、成员 hash、资料页 `url_token` 等个人数据；不得提交、分享、上传、附加到 issue，或用于本机开发以外的任何场景；不再需要时必须删除。
-- 只提交采集脚本、纯函数测试、配置和文档；采集范围必须保持用途限定和严格白名单，不得恢复标题、内容/问题 ID、跟踪数据、完整 HTML、Cookie、请求头、Storage、通知、React 内部数据、头像 URL 或无关信息流数据。
+- 只提交采集脚本、纯函数测试和必要配置；`docs/` 中仅 `docs/blacklist-spec.md` 允许跟踪，不得强制加入被忽略的快照说明、真实快照或其他本地文档。
+- 采集范围必须保持用途限定和严格白名单，不得恢复标题、内容/问题 ID、跟踪数据、完整 HTML、Cookie、请求头、Storage、通知、React 内部数据、头像 URL 或无关信息流数据。
 - 采集只能连接现有 Chrome 和精确 URL `https://www.zhihu.com/` 的唯一已有标签页，不得导航、刷新、关闭页面或启动浏览器。
-- 快照是采集时的本地开发证据，不代表当前生产 DOM，不能替代用户最终浏览器验收。详细说明见 `docs/zhihu-browser-snapshots.md`。
+- 快照是采集时的本地开发证据，不代表当前生产 DOM，不能替代用户最终浏览器验收。公开 clone 不提供被忽略的本地快照说明，开发与审查必须以本节、采集脚本和已跟踪规格为准。
 
 ## 构建约束
 
 - `public/manifest.json` 只提供 Manifest 基础字段（名称、版本、Action、权限等），不得手写 `content_scripts`；`dist/manifest.json` 由构建扫描 `src/plugins/*/plugin.json` 后组合生成，不是基础文件的直接副本。
 - 不要直接修改 `dist/` 中的任何文件。
-- 最终 Manifest 固定引用自包含的 `assets/content.js` 和稳定的 `assets/content.css`；内容入口不得依赖外部 shared/dynamic ESM chunk。Popup 的 JS/CSS 保持独立。
-- 新增构建入口时，需要同步更新 `vite.config.ts`；新增站点插件不应新增内容入口，而应由 eager registry 编入同一个内容 bundle。
+- 最终 Manifest 固定引用稳定的 `assets/content.js`、`assets/content.css` 和模块 `assets/background.js`；content 与 background 两个入口都必须自包含，不得依赖 shared/dynamic ESM chunk。
+- Popup 与 options 必须保持为独立扩展页面入口，可以共享构建生成的本地普通 ESM chunk，但不得成为 content/background 的外部依赖；不得引入远程脚本。
+- 基础 Manifest 必须继续声明 Action Popup、模块 Service Worker 和 tabbed options 页面；新增入口时同步更新 `vite.config.ts`，新增站点插件不应新增内容入口，而应由 eager registry 编入同一个 content bundle。
 - `package.json` 和 `public/manifest.json` 的版本号应保持一致；最终 Manifest 版本必须继续来自该基础文件。
 - `scripts/build/plugin-manifest.ts` 必须严格拒绝缺失配对入口、非法/重复 ID、非法/空/重复 matches、跨插件重复 matches、额外 descriptor 字段和孤立 `plugin.ts`/`plugin.json`。
+- 构建扫描不得跟随 symlink 插件目录或入口；watch 模式下插件 registry、构建 bundle 和 Manifest 页面范围必须保持一致，失败时不得留下部分更新的 Manifest。
 
 ## 站点插件架构
 
@@ -156,9 +176,36 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 始终使用 Manifest V3，不得引入 Manifest V2 API。
 - Popup 和其他扩展页面中不得使用内联脚本或内联事件处理器。
 - 只申请功能实际需要的权限和站点访问范围。
-- 当前功能只需要 `storage` 权限；不要无理由添加 `tabs`、`scripting`、`unlimitedStorage` 或 `<all_urls>`。
+- 当前功能只需要 `storage` 权限；不要无理由添加 `tabs`、`scripting`、`downloads`、`unlimitedStorage` 或 `<all_urls>`。
 - Manifest 中引用的脚本、CSS 和图片必须真实存在于构建产物中。
 - 内容脚本运行在 isolated world，但共享页面 DOM；Console 日志仍可在页面开发者工具中查看。
+- Service Worker 会被随时终止；持久或会话权威状态必须存入 `chrome.storage.local` / `chrome.storage.session`，不得只依赖后台模块全局变量。异步消息 listener 必须同步声明保持响应通道，并确保最多响应一次。
+
+## Schema v5 与平台身份边界
+
+- `cocoonBlacklistState` 是唯一黑名单，当前 `schemaVersion` 为 `5`；不得建立平行 storage key 绕过迁移、校验或锁。
+- 作者记录必须包含合法 `platformId`，身份、去重、恢复、批量解除和 alias 冲突都按 `(platformId, identifier)` 隔离；跨平台相同 `userId` 可以共存。
+- 所有 v1～v4 有效历史记录迁移为 `platformId: "zhihu"`；迁移必须幂等、无图且保留标签、名称、来源和首次屏蔽时间。
+- `memberHashId` 是知乎专用 alias，非知乎记录必须为 `null`；非知乎稳定 ID 不执行知乎 hash 规范化。
+- 知乎卡片、评论、alias 补写、点赞者任务和账号级网络操作只能读取/写入 `platformId: "zhihu"` 的运行时记录。其他平台分类不得获得知乎页面过滤、网络请求、Manifest scope 或插件能力。
+- Popup/options 只有知乎记录可以生成知乎主页链接；其他平台作者名称必须为普通文本，直到对应插件交付可信 URL 规则。
+
+## Background RPC、管理事务与导入导出
+
+- Popup/options 的黑名单读写必须通过严格版本化 RPC 和 background storage 锁；未知、额外字段、错误 operation、未授权 sender 或超限消息必须 fail closed。
+- 普通管理 RPC 只接受精确内置 Popup/options 页面；JSON transfer operation 只能接受精确 `options/options.html` sender。
+- 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors 和 tags，不得包含设置、Badge/session 状态或其他 storage 数据。
+- 导入合并与替换必须先完成固定键、版本、字段、长度、数量、标签引用、平台身份和 alias 冲突校验，再在锁内重读并最多执行一次原子写入；解析、冲突、锁或写入失败时不得留下部分状态或虚假成功。
+- Transfer 文件和 RPC JSON 上限为 8 MiB，作者最多 20,000 条、标签最多 2,000 个；不得为导出新增 `downloads` 权限，继续使用扩展页面本地 Blob 下载。
+- 真实 `cocoon-blacklist-*.json` 导出包含作者名称、稳定 ID、alias、标签、来源和时间等个人数据，不得提交、分享、上传或附加到 Issue，也不得直接用作测试 fixture。测试必须使用合成标识和最小构造数据。
+
+## 公开仓库与敏感文件规则
+
+- 用户可见功能、支持页面、权限、数据行为、安装方式或开发命令变化时同步更新 `README.md`；不得写入不存在的 Badge、截图、远程仓库或发布链接。
+- 根目录 `LICENSE` 与 `package.json#license` 必须保持一致；第三方代码、素材和历史文件必须单独确认来源及再分发权，项目许可证不会自动覆盖第三方内容。
+- `docs/` 默认忽略，只有 `docs/blacklist-spec.md` 允许跟踪；不得使用 `git add -f` 提交其他 docs、本地审计报告或包含真实数据的说明文件。
+- 不得提交 `.env*`、私钥/证书、CRX、发布 ZIP、日志、真实导出 JSON、浏览器 Profile、Cookie、Storage dump 或个人数据。构建产物 `dist/` 只用于本地加载或经审查的发布制品，不进入源码提交。
+- 示例、测试、截图和 README 素材只使用合成或明确脱敏数据；不得复述本地快照中的真实作者名、稳定 ID、member hash 或资料 token。
 
 ## 知乎内容脚本约定
 
@@ -215,16 +262,24 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 简单的 DOM 接线代码可以通过构建检查和 Chrome 浏览器手动验证，不强制编写单元测试。
 - 修复可复现的逻辑缺陷时，应优先补充能够覆盖该缺陷的回归测试。
 - 涉及 `chrome.*` API、Manifest 注入、isolated world 或真实知乎 DOM 的行为，Developer 和 Reviewer 必须明确自动化证据的边界；真实浏览器结果由用户验收并反馈，不作为 Reviewer `PASS` 或需求标记 `DELIVERED` 的前置条件。
-- 如果项目尚未配置测试框架，而本次修改按上述规则需要测试，应先提出最小化的测试方案，不要无说明地引入大型测试依赖。
+- 当前测试框架为 Node 内置 test runner + jsdom；新增测试应优先复用现有工具，不要无说明地引入大型测试依赖。
 
 ## 完成修改前的检查清单
 
-- [ ] `npm run typecheck` 通过
-- [ ] `npm run build` 通过
-- [ ] `dist/manifest.json` 是合法 JSON
-- [ ] Manifest 引用的文件都存在于 `dist/`
-- [ ] Popup 仍能正常显示 `Hello`
-- [ ] 知乎首页现有卡片和滚动后新增卡片都只有一个 `×`
-- [ ] 点击 `×` 只打开标签抽屉且不会误触卡片跳转；赋予标签后才执行持久化和屏蔽
-- [ ] 没有无必要新增 Chrome 权限
-- [ ] 没有手动提交或修改 `dist/`、`node_modules/`
+仅修改普通文档时，只要求执行 `git diff --check`，并核对文档引用与事实准确性；以下测试、类型检查、构建和产物项仅适用于代码、测试、Manifest 或构建配置变更。其余安全、敏感数据和真实浏览器报告项始终适用。
+
+- [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm test` 通过
+- [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run typecheck` 通过
+- [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run build` 通过
+- [ ] `git diff --check` 通过
+- [ ] `dist/manifest.json` 是合法 MV3 JSON，版本与 `public/manifest.json` 一致
+- [ ] Manifest 引用的 Popup、options、content、background、CSS 和图片资源都存在于 `dist/`
+- [ ] Popup 页面状态、准确拦截数、搜索、解除/撤销和管理入口未因本次修改回归
+- [ ] 管理页搜索/筛选/排序、作者与标签操作、平台显示及导入导出按本次范围通过自动化或用户验收
+- [ ] 知乎首页现有和动态卡片、评论/回复及受支持悬浮入口保持单次注入、稳定身份和失败安全
+- [ ] 点击卡片/悬浮入口只打开抽屉且不会误触跳转；赋予标签后才执行持久化、过滤和当前可见选项授权的知乎操作
+- [ ] schema v5、平台隔离、知乎 alias/网络范围和点赞者仅本地入库边界没有回归
+- [ ] 导入导出严格校验、options-only 授权、原子写入、Blob 下载和个人数据保护没有回归
+- [ ] 没有无必要新增 Chrome 权限、页面范围、远程代码、第三方请求或服务端
+- [ ] 没有提交真实快照、导出 JSON、凭据、个人数据、被忽略 docs、`dist/` 或 `node_modules/`
+- [ ] 真实浏览器未执行的检查明确报告为“用户验收待进行”，没有写成已验证
