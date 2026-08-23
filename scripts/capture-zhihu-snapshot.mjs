@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   CdpClient,
+  DEFAULT_CHROME_DEVTOOLS_PORT,
   getBrowserWebSocketUrl,
+  getBrowserWebSocketUrlFromPort,
+  parseChromeDevToolsPort,
   parseSnapshotLimit,
   runCaptureWithClient,
 } from "./lib/zhihu-capture-runtime.mjs";
 
-const defaultActivePortPath = join(
-  homedir(),
-  "Library/Application Support/Google/Chrome/DevToolsActivePort",
-);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = join(projectRoot, ".pi/browser-snapshots-local/zhihu");
 
@@ -22,9 +20,15 @@ async function main() {
   const sampleLimit = parseSnapshotLimit(
     process.env.COCOON_ZHIHU_SNAPSHOT_LIMIT ?? "3",
   );
-  const activePortPath =
-    process.env.COCOON_CHROME_DEVTOOLS_ACTIVE_PORT ?? defaultActivePortPath;
-  const webSocketUrl = await getBrowserWebSocketUrl(activePortPath);
+  const activePortPath = process.env.COCOON_CHROME_DEVTOOLS_ACTIVE_PORT;
+  const webSocketUrl = activePortPath
+    ? await getBrowserWebSocketUrl(activePortPath)
+    : await getBrowserWebSocketUrlFromPort(
+        parseChromeDevToolsPort(
+          process.env.COCOON_CHROME_DEVTOOLS_PORT ??
+            String(DEFAULT_CHROME_DEVTOOLS_PORT),
+        ),
+      );
   const client = await CdpClient.connect(webSocketUrl);
   const { outputDirectory, snapshot } = await runCaptureWithClient(client, {
     sampleLimit,

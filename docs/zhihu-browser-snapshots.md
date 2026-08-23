@@ -7,22 +7,22 @@
 ## 使用
 
 1. 在现有 Chrome 中保持且仅保持一个 URL 严格为 `https://www.zhihu.com/` 的已加载标签页。
-2. 确保该 Chrome 已由用户启用远程调试，并存在 `DevToolsActivePort`。
+2. 确保用户已在 `127.0.0.1:9223` 启动并登录需要连接的 Chrome，且该端口的 `/json/version` 可返回 Browser WebSocket URL。
 3. 在项目根目录显式执行：
 
 ```bash
 npm run snapshot:zhihu
 ```
 
-默认读取 macOS Chrome 路径：
+项目默认连接本机 Chrome DevTools 端口 `9223`：
 
 ```text
-~/Library/Application Support/Google/Chrome/DevToolsActivePort
+http://127.0.0.1:9223/json/version
 ```
 
-如现有 Profile 使用其他路径，可设置 `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT`。默认最多采集 3 张回答和 3 篇文章；可用 `COCOON_ZHIHU_SNAPSHOT_LIMIT=1` 至 `10` 调整。
+如现有 Chrome 使用其他端口，可设置 `COCOON_CHROME_DEVTOOLS_PORT`。如必须改为读取某个现有 Profile 的 `DevToolsActivePort` 文件，可设置 `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT`；该文件覆盖端口环境变量。默认最多采集 3 张回答和 3 篇文章；可用 `COCOON_ZHIHU_SNAPSHOT_LIMIT=1` 至 `10` 调整。
 
-脚本只直连现有 Browser WebSocket，并在唯一精确匹配的标签页上调用 `Target.attachToTarget`、`Page.getFrameTree`、`Page.createIsolatedWorld` 和会话级 `Runtime.evaluate`。采集函数在任何 DOM 查询前核对精确 URL，并在每次成员接口请求前再次核对；隔离执行上下文共享只读 DOM，但不受页面覆写的 JavaScript 全局对象影响。脚本不会启动浏览器、创建 Profile、导航、刷新、修改 DOM 或关闭页面。
+默认情况下，脚本只通过本机发现端点取得并直连现有 Browser WebSocket；设置 `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT` 时则从指定文件读取同一连接信息。连接后，脚本只在唯一精确匹配的标签页上调用 `Target.attachToTarget`、`Page.getFrameTree`、`Page.createIsolatedWorld` 和会话级 `Runtime.evaluate`。采集函数在任何 DOM 查询前核对精确 URL，并在每次成员接口请求前再次核对；隔离执行上下文共享只读 DOM，但不受页面覆写的 JavaScript 全局对象影响。脚本不会启动浏览器、创建 Profile、导航、刷新、修改 DOM 或关闭页面。
 
 ## 输出
 

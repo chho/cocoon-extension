@@ -10,6 +10,7 @@ import { buildLocalRawSamples } from "./zhihu-snapshot.mjs";
 
 export const SCHEMA_VERSION = 3;
 export const COMMAND_TIMEOUT_MS = 15_000;
+export const DEFAULT_CHROME_DEVTOOLS_PORT = 9223;
 
 export function parseFullDecimal(source, label, minimum, maximum) {
   if (typeof source !== "string" || !/^[0-9]+$/u.test(source)) {
@@ -28,6 +29,17 @@ export function parseSnapshotLimit(source = "3") {
     "COCOON_ZHIHU_SNAPSHOT_LIMIT",
     1,
     10,
+  );
+}
+
+export function parseChromeDevToolsPort(
+  source = String(DEFAULT_CHROME_DEVTOOLS_PORT),
+) {
+  return parseFullDecimal(
+    source,
+    "COCOON_CHROME_DEVTOOLS_PORT",
+    1,
+    65_535,
   );
 }
 
@@ -61,6 +73,79 @@ export async function getBrowserWebSocketUrl(activePortPath, fileSystem = fsProm
   }
   const { port, browserPath } = parseActivePort(contents, activePortPath);
   return `ws://127.0.0.1:${port}${browserPath}`;
+}
+
+export async function getBrowserWebSocketUrlFromPort(
+  port,
+  fetchImpl = globalThis.fetch,
+) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("Chrome DevTools port must be an integer from 1 through 65535.");
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new Error("Chrome DevTools discovery requires the Fetch API.");
+  }
+
+  const discoveryUrl = `http://127.0.0.1:${port}/json/version`;
+  let response;
+  try {
+    response = await fetchImpl(discoveryUrl, {
+      signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot connect to the existing Chrome DevTools endpoint at 127.0.0.1:${port}. No browser was launched. (${reason})`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Chrome DevTools discovery at 127.0.0.1:${port} returned HTTP ${response.status}. No browser was launched.`,
+    );
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(
+      `Chrome DevTools discovery at 127.0.0.1:${port} returned invalid JSON.`,
+    );
+  }
+  const webSocketDebuggerUrl =
+    payload !== null && typeof payload === "object"
+      ? payload.webSocketDebuggerUrl
+      : undefined;
+  if (typeof webSocketDebuggerUrl !== "string") {
+    throw new Error(
+      `Chrome DevTools discovery at 127.0.0.1:${port} did not return a Browser WebSocket URL.`,
+    );
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(webSocketDebuggerUrl);
+  } catch {
+    throw new Error("Chrome returned an invalid Browser WebSocket URL.");
+  }
+  const parsedPort = parsedUrl.port === "" ? 80 : Number(parsedUrl.port);
+  if (
+    parsedUrl.protocol !== "ws:" ||
+    parsedUrl.hostname !== "127.0.0.1" ||
+    parsedPort !== port ||
+    parsedUrl.username !== "" ||
+    parsedUrl.password !== "" ||
+    parsedUrl.search !== "" ||
+    parsedUrl.hash !== "" ||
+    !/^\/devtools\/browser\/[A-Za-z0-9._-]+$/u.test(parsedUrl.pathname)
+  ) {
+    throw new Error(
+      `Chrome returned a Browser WebSocket URL outside 127.0.0.1:${port}.`,
+    );
+  }
+
+  return parsedUrl.href;
 }
 
 export function selectExactZhihuTarget(targetInfos) {

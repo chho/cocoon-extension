@@ -109,15 +109,14 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 配置后直接运行 `pi`；不得再使用已弃用的 `PI_CHROME_DEVTOOLS_AUTO_LAUNCH` 环境变量。浏览器检查必须遵守：
 
-- 只连接用户已经运行且已登录的 Chrome，不得启动新的 Chrome、Chromium 或 Chrome for Testing 实例。
-- 不得创建临时浏览器 Profile，也不得通过 `bash`、`open`、`nohup` 或其他子进程绕过限制启动浏览器。
-- 本机已知 `/json/version`、`/json/list` 等传统 HTTP 发现接口会返回 `404`，不得把 `chrome_devtools_list_pages` 或其他依赖这些接口的工具作为首次发现步骤。
-- 首先读取现有 Chrome Profile 中的 `DevToolsActivePort`，连接其中记录的 Browser WebSocket；只有该文件缺失、格式无效或直连失败时，才尝试传统 HTTP 发现工具。
+- 本项目显式覆盖用户级默认端口约定：默认只连接用户已经运行且已登录、监听于 `127.0.0.1:9223` 的 Chrome，不得默认连接 `9222`，也不得启动新的 Chrome、Chromium 或 Chrome for Testing 实例。
+- 不得创建临时浏览器 Profile，也不得通过 `bash`、`open`、`nohup` 或其他子进程绕过限制启动浏览器；`9223` 对应的浏览器和 Profile 必须由用户自行启动与管理。
+- 首次发现通过 `http://127.0.0.1:9223/json/version` 取得 `webSocketDebuggerUrl`；只接受指向同一 `127.0.0.1:9223` 且路径为 `/devtools/browser/<id>` 的 Browser WebSocket URL。
+- 只有用户明确提供其他现有端口，或为快照脚本设置 `COCOON_CHROME_DEVTOOLS_PORT` / `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT` 时，才允许覆盖默认 `9223`；不得因发现失败而自行改连 `9222`。
 - 通过 Browser WebSocket 调用 `Target.getTargets` 查找现有标签页，再使用 `Target.attachToTarget`、`flatten: true` 和带 `sessionId` 的 CDP 命令（如 `Runtime.evaluate`）检查页面。
-- HTTP 发现接口返回 `404` 只表示该接口不可用，不能据此认定 CDP 不可用，也不得因此启动其他浏览器。
-- 同一次用户授权的浏览器检查必须优先建立一个长生命周期的 Browser WebSocket，并复用同一个目标页 `sessionId` 完成全部已规划检查；不得为每个查询分别启动短命进程、重复连接或重复 attach，避免反复触发 Chrome 的 “Allow” 提示。
-- 应先汇总需要执行的只读检查，再在单个 CDP 会话中批量完成。只有连接意外断开或目标会话失效时才允许重连；重连前应告知用户可能再次触发 Chrome 授权提示。
-- 仅当 `DevToolsActivePort` 直连和后备 HTTP 发现都失败时，才能判定 CDP 不可用；此时应报告准确错误，不得回退到新浏览器实例。
+- `9223` 发现端点失败只表示该现有 CDP 实例不可用；应报告准确错误，不得因此启动其他浏览器、创建 Profile 或扫描其他调试端口。
+- 同一次用户授权的浏览器检查必须优先建立一个长生命周期的 Browser WebSocket，并复用同一个目标页 `sessionId` 完成全部已规划检查；不得为每个查询分别启动短命进程、重复连接或重复 attach。
+- 应先汇总需要执行的只读检查，再在单个 CDP 会话中批量完成。只有连接意外断开或目标会话失效时才允许重连。
 - 除非用户明确要求，不得导航、刷新或关闭用户已有标签页。
 - 浏览器验证报告必须区分真实观察结果与源码推断，不得把未执行的检查描述为已验证。
 

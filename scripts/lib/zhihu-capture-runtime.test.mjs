@@ -12,7 +12,10 @@ import { test } from "node:test";
 
 import {
   createSnapshot,
+  DEFAULT_CHROME_DEVTOOLS_PORT,
+  getBrowserWebSocketUrlFromPort,
   parseActivePort,
+  parseChromeDevToolsPort,
   parseSnapshotLimit,
   runCaptureWithClient,
   selectExactZhihuTarget,
@@ -100,6 +103,93 @@ test("parses only complete decimal snapshot limits", () => {
   for (const source of ["3junk", "3.0", " 3", "0", "11", "-1", ""]) {
     throws(() => parseSnapshotLimit(source), /COCOON_ZHIHU_SNAPSHOT_LIMIT/u);
   }
+});
+
+test("uses 9223 as the default Chrome DevTools port", () => {
+  strictEqual(DEFAULT_CHROME_DEVTOOLS_PORT, 9223);
+  strictEqual(parseChromeDevToolsPort(), 9223);
+  strictEqual(parseChromeDevToolsPort("9224"), 9224);
+  for (const source of ["9223junk", " 9223", "0", "65536", "-1", ""]) {
+    throws(() => parseChromeDevToolsPort(source), /COCOON_CHROME_DEVTOOLS_PORT/u);
+  }
+});
+
+test("discovers only the requested local Browser WebSocket", async () => {
+  const requests = [];
+  const webSocketUrl = await getBrowserWebSocketUrlFromPort(
+    9223,
+    async (url, options) => {
+      requests.push({ url, hasSignal: options.signal instanceof AbortSignal });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            webSocketDebuggerUrl:
+              "ws://127.0.0.1:9223/devtools/browser/abc-123",
+          };
+        },
+      };
+    },
+  );
+
+  strictEqual(
+    webSocketUrl,
+    "ws://127.0.0.1:9223/devtools/browser/abc-123",
+  );
+  deepStrictEqual(requests, [
+    {
+      url: "http://127.0.0.1:9223/json/version",
+      hasSignal: true,
+    },
+  ]);
+
+  strictEqual(
+    await getBrowserWebSocketUrlFromPort(80, async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          webSocketDebuggerUrl: "ws://127.0.0.1:80/devtools/browser/abc",
+        };
+      },
+    })),
+    "ws://127.0.0.1/devtools/browser/abc",
+  );
+
+  for (const invalidUrl of [
+    "ws://127.0.0.1:9222/devtools/browser/abc",
+    "ws://localhost:9223/devtools/browser/abc",
+    "ws://127.0.0.1:9223/devtools/page/abc",
+    "wss://127.0.0.1:9223/devtools/browser/abc",
+  ]) {
+    await rejects(
+      getBrowserWebSocketUrlFromPort(9223, async () => ({
+        ok: true,
+        status: 200,
+        async json() {
+          return { webSocketDebuggerUrl: invalidUrl };
+        },
+      })),
+      /outside/u,
+    );
+  }
+});
+
+test("reports Chrome DevTools discovery failures without launching a browser", async () => {
+  await rejects(
+    getBrowserWebSocketUrlFromPort(9223, async () => {
+      throw new Error("connection refused");
+    }),
+    /127\.0\.0\.1:9223.*No browser was launched/u,
+  );
+  await rejects(
+    getBrowserWebSocketUrlFromPort(9223, async () => ({
+      ok: false,
+      status: 503,
+    })),
+    /HTTP 503.*No browser was launched/u,
+  );
 });
 
 test("requires exactly one exact Zhihu page target", () => {
