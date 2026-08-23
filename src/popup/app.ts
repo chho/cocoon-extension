@@ -40,6 +40,7 @@ function requiredElement<ElementType extends HTMLElement>(
 export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
   const { document, window, rpc } = dependencies;
   const pageStatus = requiredElement<HTMLElement>(document, "#page-status");
+  const pageStatusText = requiredElement<HTMLElement>(document, "#page-status-text");
   const count = requiredElement<HTMLElement>(document, "#count");
   const countInline = requiredElement<HTMLElement>(document, "#count-inline");
   const connectionError = requiredElement<HTMLElement>(document, "#connection-error");
@@ -73,8 +74,10 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
       unsupported: "此页面不受支持",
       "connection-error": "页面连接异常",
     };
-    pageStatus.textContent = labels[status];
+    const label = labels[status];
+    pageStatusText.textContent = label;
     pageStatus.dataset.state = status;
+    pageStatus.setAttribute("aria-label", `页面状态：${label}`);
     count.textContent = String(exactCount);
     countInline.textContent = String(exactCount);
     connectionError.hidden = status !== "connection-error";

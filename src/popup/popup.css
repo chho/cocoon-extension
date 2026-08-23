@@ -64,25 +64,31 @@ h1 {
 }
 
 .status {
-  position: relative;
-  padding-left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #68716b;
   font-size: 12px;
 }
 
-.status::before {
-  position: absolute;
-  top: 0.42em;
-  left: 0;
-  width: 6px;
-  height: 6px;
+.status-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #8b938d;
-  content: "";
+  background: #767e78;
 }
 
-.status[data-state="running"]::before {
-  background: #63766a;
+.status[data-state="running"] .status-dot {
+  background: #3f704f;
+}
+
+.status[data-state="unsupported"] .status-dot {
+  background: #767e78;
+}
+
+.status[data-state="connection-error"] .status-dot {
+  background: #a24d38;
 }
 
 .count-section {

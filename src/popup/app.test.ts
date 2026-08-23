@@ -1,4 +1,5 @@
-import { strictEqual } from "node:assert/strict";
+import { doesNotMatch, strictEqual } from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { JSDOM } from "jsdom";
@@ -16,6 +17,12 @@ import {
 } from "../ui/background-rpc.ts";
 import { bootstrapPopup } from "./app.ts";
 
+const POPUP_HTML = readFileSync(
+  new URL("../../popup/popup.html", import.meta.url),
+  "utf8",
+);
+const POPUP_CSS = readFileSync(new URL("./popup.css", import.meta.url), "utf8");
+
 const AUTHOR: BlacklistAuthorDto = {
   userId: "author-one",
   memberHashId: null,
@@ -32,12 +39,45 @@ const INITIAL: BlacklistSnapshotDto = { ...EMPTY, authors: [AUTHOR] };
 
 function fixture(): JSDOM {
   return new JSDOM(`<!doctype html><body><main>
-    <p id="page-status"></p><strong id="count"></strong><span id="count-inline"></span>
+    <p id="page-status" data-state="checking" aria-label="页面状态：正在检查…">
+      <span class="status-dot" aria-hidden="true"></span><span id="page-status-text">正在检查…</span>
+    </p><strong id="count"></strong><span id="count-inline"></span>
     <p id="connection-error"></p><strong id="author-total"></strong><strong id="tag-total"></strong>
     <h2 id="records-title"></h2><input id="search"><p id="data-message"></p><ul id="records"></ul>
     <div id="undo-strip" hidden><button id="undo">撤销</button></div>
     <p id="save-error" hidden></p><button id="manage">管理全部</button>
   </main></body>`, { url: "chrome-extension://runtime/popup/popup.html" });
+}
+
+function sourceFixture(): JSDOM {
+  return new JSDOM(
+    POPUP_HTML.replace("</head>", `<style>${POPUP_CSS}</style></head>`),
+    {
+      pretendToBeVisual: true,
+      url: "chrome-extension://runtime/popup/popup.html",
+    },
+  );
+}
+
+function assertStatusView(
+  dom: JSDOM,
+  state: "checking" | "running" | "unsupported" | "connection-error",
+  label: string,
+  color: string,
+): void {
+  const status = dom.window.document.querySelector<HTMLElement>("#page-status");
+  const text = dom.window.document.querySelector<HTMLElement>("#page-status-text");
+  const dot = dom.window.document.querySelector<HTMLElement>("#page-status .status-dot");
+  if (!status || !text || !dot) throw new Error("status fixture is incomplete");
+  strictEqual(status.classList.contains("status"), true);
+  strictEqual(status.dataset.state, state);
+  strictEqual(status.getAttribute("aria-live"), "polite");
+  strictEqual(status.getAttribute("aria-label"), `页面状态：${label}`);
+  strictEqual(text.textContent, label);
+  strictEqual(status.textContent?.trim(), label);
+  strictEqual(dot.tagName, "SPAN");
+  strictEqual(dot.getAttribute("aria-hidden"), "true");
+  strictEqual(dom.window.getComputedStyle(dot).backgroundColor, color);
 }
 
 async function settle(): Promise<void> {
@@ -120,6 +160,125 @@ function assertUndoState(dom: JSDOM, visible: boolean): void {
   strictEqual(strip?.hidden, !visible);
   strictEqual(button?.disabled, !visible);
 }
+
+test("POPUP-010/AC-088 source uses a real hidden status dot with restrained static CSS", () => {
+  const dom = sourceFixture();
+  assertStatusView(dom, "checking", "正在检查…", "rgb(118, 126, 120)");
+
+  const dotRules = [...POPUP_CSS.matchAll(/[^{}]*\.status-dot[^{}]*\{[^{}]*\}/g)]
+    .map(([rule]) => rule)
+    .join("\n");
+  strictEqual(dotRules.length > 0, true);
+  doesNotMatch(dotRules, /animation(?:-name)?\s*:|gradient\(|(?:box-|text-)?shadow\s*:/i);
+});
+
+test("POPUP-010/AC-088 keeps the neutral checking state visible while status RPC is pending", async () => {
+  const dom = sourceFixture();
+  const rpc = new RpcQueue();
+  const pendingStatus = deferredResponse();
+  rpc.push("status", pendingStatus.promise);
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
+  bootstrapPopup({
+    document: dom.window.document,
+    window: dom.window as unknown as Window,
+    rpc,
+    storageChanges: { addListener() {} },
+    async openOptionsPage() {},
+  });
+  await settle();
+
+  assertStatusView(dom, "checking", "正在检查…", "rgb(118, 126, 120)");
+  pendingStatus.resolve(createBlacklistRpcResponse("status", true, {
+    status: "running",
+    count: 12,
+  }));
+  await settle();
+  assertStatusView(dom, "running", "运行中", "rgb(63, 112, 79)");
+});
+
+for (const statusCase of [
+  {
+    state: "running" as const,
+    label: "运行中",
+    count: 1_234,
+    color: "rgb(63, 112, 79)",
+    connectionError: false,
+  },
+  {
+    state: "unsupported" as const,
+    label: "此页面不受支持",
+    count: 0,
+    color: "rgb(118, 126, 120)",
+    connectionError: false,
+  },
+  {
+    state: "connection-error" as const,
+    label: "页面连接异常",
+    count: 7,
+    color: "rgb(162, 77, 56)",
+    connectionError: true,
+  },
+]) {
+  test(`POPUP-010/AC-088 renders explicit ${statusCase.state} text, state, and color`, async () => {
+    const dom = sourceFixture();
+    const rpc = new RpcQueue();
+    rpc.push("status", createBlacklistRpcResponse("status", true, {
+      status: statusCase.state,
+      count: statusCase.count,
+    }));
+    rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
+    bootstrapPopup({
+      document: dom.window.document,
+      window: dom.window as unknown as Window,
+      rpc,
+      storageChanges: { addListener() {} },
+      async openOptionsPage() {},
+    });
+    await settle();
+
+    assertStatusView(
+      dom,
+      statusCase.state,
+      statusCase.label,
+      statusCase.color,
+    );
+    strictEqual(dom.window.document.querySelector("#count")?.textContent,
+      String(statusCase.count));
+    strictEqual(dom.window.document.querySelector("#count-inline")?.textContent,
+      String(statusCase.count));
+    const error = dom.window.document.querySelector<HTMLElement>("#connection-error");
+    strictEqual(error?.hidden, !statusCase.connectionError);
+    if (statusCase.connectionError) {
+      strictEqual(error?.textContent, "Cocoon 无法连接当前页面。");
+    }
+  });
+}
+
+test("POPUP-010/AC-088 transport failure exposes the connection-error state without color-only labeling", async () => {
+  const dom = sourceFixture();
+  const rpc = new RpcQueue();
+  rpc.push("status", Promise.reject(new Error("disconnected")));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
+  bootstrapPopup({
+    document: dom.window.document,
+    window: dom.window as unknown as Window,
+    rpc,
+    storageChanges: { addListener() {} },
+    async openOptionsPage() {},
+  });
+  await settle();
+
+  assertStatusView(
+    dom,
+    "connection-error",
+    "页面连接异常",
+    "rgb(162, 77, 56)",
+  );
+  strictEqual(
+    dom.window.document.querySelector<HTMLElement>("#connection-error")?.hidden,
+    false,
+  );
+});
 
 test("BUG-014/AC-085 Popup accepts nullable member aliases through the strict RPC client", async () => {
   const dom = fixture();

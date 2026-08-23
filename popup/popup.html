@@ -9,7 +9,10 @@
     <main>
       <header class="popup-header">
         <h1>Cocoon</h1>
-        <p id="page-status" class="status" aria-live="polite">正在检查…</p>
+        <p id="page-status" class="status" data-state="checking" aria-label="页面状态：正在检查…" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="page-status-text">正在检查…</span>
+        </p>
       </header>
 
       <section class="count-section" aria-labelledby="count-label">
