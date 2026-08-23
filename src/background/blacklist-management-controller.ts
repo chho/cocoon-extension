@@ -1,5 +1,6 @@
 import type * as BlacklistStateModule from "../content/blacklist-state.ts";
 import type {
+  AuthorIdentity,
   BlacklistState,
   BlacklistedAuthor,
 } from "../content/blacklist-state.ts";
@@ -47,6 +48,7 @@ export interface BlacklistManagementController {
 
 function toAuthorDto(author: BlacklistedAuthor): BlacklistAuthorDto {
   return {
+    platformId: author.platformId,
     userId: author.userId,
     memberHashId: author.memberHashId,
     authorName: author.authorNameAtCapture,
@@ -58,6 +60,7 @@ function toAuthorDto(author: BlacklistedAuthor): BlacklistAuthorDto {
 
 function fromAuthorDto(author: BlacklistAuthorDto): BlacklistedAuthor {
   return {
+    platformId: author.platformId,
     userId: author.userId,
     memberHashId: author.memberHashId,
     authorNameAtCapture: author.authorName,
@@ -65,6 +68,13 @@ function fromAuthorDto(author: BlacklistAuthorDto): BlacklistedAuthor {
     blacklistedAt: author.blacklistedAt,
     blockSource: author.source,
   };
+}
+
+function toIdentity(author: {
+  readonly platformId: string;
+  readonly userId: string;
+}): AuthorIdentity {
+  return { platformId: author.platformId, userId: author.userId };
 }
 
 function toSnapshot(state: BlacklistState): BlacklistSnapshotDto {
@@ -81,7 +91,7 @@ function toSnapshot(state: BlacklistState): BlacklistSnapshotDto {
 export function createBlacklistManagementController(
   storage: LocalStorageArea,
   lock: Pick<BlacklistLockCoordinator, "runExclusive">,
-  statusController: StatusController,
+  statusController: StatusController
 ): BlacklistManagementController {
   async function readLatest(): Promise<ReturnType<typeof parseBlacklistState>> {
     const values = await storage.get(STORAGE_KEY);
@@ -102,7 +112,7 @@ export function createBlacklistManagementController(
   }
 
   async function snapshotResponse(
-    request: BlacklistRpcRequest,
+    request: Extract<BlacklistRpcRequest, { readonly operation: "snapshot" }>,
   ): Promise<BlacklistRpcResponse> {
     try {
       return await lock.runExclusive(async () => {
@@ -148,7 +158,7 @@ export function createBlacklistManagementController(
 
         switch (request.operation) {
           case "remove-one": {
-            const plan = planAuthorRemoval(state, request.input.userId);
+            const plan = planAuthorRemoval(state, toIdentity(request.input.identity));
             if (plan.status !== "ready") {
               return createBlacklistRpcResponse(
                 request.operation,
@@ -178,7 +188,10 @@ export function createBlacklistManagementController(
             break;
           }
           case "remove-many": {
-            const plan = planAuthorBatchRemoval(state, request.input.userIds);
+            const plan = planAuthorBatchRemoval(
+              state,
+              request.input.identities.map(toIdentity),
+            );
             if (plan.status !== "ready") {
               return createBlacklistRpcResponse(
                 request.operation,
@@ -271,6 +284,8 @@ export function createBlacklistManagementController(
       if (request.operation === "snapshot") {
         return snapshotResponse(request);
       }
+
+
       return mutate(request);
     },
   };

@@ -26,6 +26,7 @@ function record(
   source: BlacklistAuthorDto["source"] = "direct",
 ): BlacklistAuthorDto {
   return {
+    platformId: "zhihu",
     userId,
     memberHashId: INTERNAL_HASH,
     authorName: "Visible Author",

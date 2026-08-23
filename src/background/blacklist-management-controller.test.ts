@@ -24,6 +24,7 @@ function author(
   overrides: Partial<BlacklistState["authors"][number]> = {},
 ): BlacklistState["authors"][number] {
   return {
+    platformId: "zhihu",
     userId,
     memberHashId: null,
     authorNameAtCapture: `Author ${userId}`,
@@ -37,11 +38,17 @@ function author(
 class MemoryStorage {
   value: unknown;
   readonly sets: unknown[] = [];
+  readonly setPayloads: Record<string, unknown>[] = [];
+  readonly separateValues: Record<string, unknown>;
   failGet = false;
   failSet = false;
 
-  constructor(value: unknown) {
+  constructor(
+    value: unknown,
+    separateValues: Record<string, unknown> = {},
+  ) {
     this.value = value;
+    this.separateValues = { ...separateValues };
   }
 
   async get(key: string): Promise<Record<string, unknown>> {
@@ -51,19 +58,29 @@ class MemoryStorage {
 
   async set(items: Record<string, unknown>): Promise<void> {
     if (this.failSet) throw new Error("set failed");
+    this.setPayloads.push(items);
     this.sets.push(items[STORAGE_KEY]);
     this.value = items[STORAGE_KEY];
   }
 }
 
-function createHarness(value: unknown) {
-  const storage = new MemoryStorage(value);
+function createHarness(
+  value: unknown,
+  options: {
+    readonly separateValues?: Record<string, unknown>;
+    readonly beforeLock?: (storage: MemoryStorage) => void;
+    readonly failLock?: boolean;
+  } = {},
+) {
+  const storage = new MemoryStorage(value, options.separateValues);
   let lockCalls = 0;
   const controller = createBlacklistManagementController(
     storage,
     {
       async runExclusive(operation) {
         lockCalls += 1;
+        options.beforeLock?.(storage);
+        if (options.failLock) throw new Error("lock failed");
         return operation();
       },
     },
@@ -85,6 +102,7 @@ function request(
 
 function dto(value: BlacklistState["authors"][number]): BlacklistAuthorDto {
   return {
+    platformId: value.platformId,
     userId: value.userId,
     memberHashId: value.memberHashId,
     authorName: value.authorNameAtCapture,
@@ -94,7 +112,7 @@ function dto(value: BlacklistState["authors"][number]): BlacklistAuthorDto {
   };
 }
 
-test("POPUP-009 snapshot initializes missing schema v4 once and returns an exact contract", async () => {
+test("POPUP-009 snapshot initializes missing schema v5 once and returns an exact contract", async () => {
   const harness = createHarness(undefined);
   const response = await harness.controller.handle(request("snapshot"));
   strictEqual(response.ok, true);
@@ -113,9 +131,13 @@ test("POPUP-009 malformed state remains read-only for every management mutation"
   const harness = createHarness(malformed);
   const operations: readonly BlacklistRpcRequest[] = [
     request("snapshot"),
-    request("remove-one", { userId: "one" }),
+    request("remove-one", {
+      identity: { platformId: "zhihu", userId: "one" },
+    }),
     request("restore-one", { author: dto(author("one")) }),
-    request("remove-many", { userIds: ["one"] }),
+    request("remove-many", {
+      identities: [{ platformId: "zhihu", userId: "one" }],
+    }),
     request("rename-tag", { tagId: "tag", name: "Name" }),
     request("delete-tag", { tagId: "tag" }),
   ];
@@ -139,7 +161,9 @@ test("POPUP-005 remove and exact undo preserve records and reject concurrent ove
   const state: BlacklistState = { ...createInitialState(), authors: [original] };
   const harness = createHarness(state);
   const removed = await harness.controller.handle(
-    request("remove-one", { userId: original.userId }),
+    request("remove-one", {
+      identity: { platformId: original.platformId, userId: original.userId },
+    }),
   );
   strictEqual(removed.ok, true);
   deepStrictEqual(removed.data.removed, dto(original));
@@ -189,7 +213,12 @@ test("MANAGE-001 remove-many is all-or-nothing and performs one storage set", as
   };
   const missingHarness = createHarness(state);
   const rejected = await missingHarness.controller.handle(
-    request("remove-many", { userIds: ["one", "missing"] }),
+    request("remove-many", {
+      identities: [
+        { platformId: "zhihu", userId: "one" },
+        { platformId: "zhihu", userId: "missing" },
+      ],
+    }),
   );
   strictEqual(rejected.ok, false);
   strictEqual(rejected.error, "not-found");
@@ -198,7 +227,12 @@ test("MANAGE-001 remove-many is all-or-nothing and performs one storage set", as
 
   const harness = createHarness(state);
   const response = await harness.controller.handle(
-    request("remove-many", { userIds: ["one", "three"] }),
+    request("remove-many", {
+      identities: [
+        { platformId: "zhihu", userId: "one" },
+        { platformId: "zhihu", userId: "three" },
+      ],
+    }),
   );
   strictEqual(response.ok, true);
   strictEqual(harness.storage.sets.length, 1);
@@ -258,7 +292,9 @@ test("MANAGE-001 save failure returns the latest rollback snapshot without chang
   const harness = createHarness(state);
   harness.storage.failSet = true;
   const response = await harness.controller.handle(
-    request("remove-one", { userId: "one" }),
+    request("remove-one", {
+      identity: { platformId: "zhihu", userId: "one" },
+    }),
   );
   strictEqual(response.ok, false);
   strictEqual(response.error, "save-failed");

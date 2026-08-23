@@ -24,6 +24,7 @@ const POPUP_HTML = readFileSync(
 const POPUP_CSS = readFileSync(new URL("./popup.css", import.meta.url), "utf8");
 
 const AUTHOR: BlacklistAuthorDto = {
+  platformId: "zhihu",
   userId: "author-one",
   memberHashId: null,
   authorName: "Author One",
@@ -278,6 +279,98 @@ test("POPUP-010/AC-088 transport failure exposes the connection-error state with
     dom.window.document.querySelector<HTMLElement>("#connection-error")?.hidden,
     false,
   );
+});
+
+test("PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names plain across rerenders", async () => {
+  const dom = fixture();
+  const multiPlatform: BlacklistSnapshotDto = {
+    tags: EMPTY.tags,
+    authors: [
+      {
+        ...AUTHOR,
+        userId: "author/with ?query#fragment%",
+        authorName: "Zhihu Author",
+        blacklistedAt: "2026-08-21T12:00:00.000Z",
+      },
+      {
+        ...AUTHOR,
+        platformId: "youtube",
+        userId: "same-user",
+        authorName: "YouTube Author",
+        blacklistedAt: "2026-08-21T11:00:00.000Z",
+      },
+      {
+        ...AUTHOR,
+        platformId: "future-site",
+        userId: "same-user",
+        authorName: "Future Author",
+        blacklistedAt: "2026-08-21T10:00:00.000Z",
+      },
+    ],
+  };
+  const refreshed = {
+    ...multiPlatform,
+    authors: multiPlatform.authors.map((author) => ({ ...author })),
+  };
+  const rpc = new RpcQueue();
+  rpc.push("status", createBlacklistRpcResponse("status", true, {
+    status: "running",
+    count: 3,
+  }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
+    snapshot: multiPlatform,
+  }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
+    snapshot: refreshed,
+  }));
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
+  bootstrapPopup({
+    document: dom.window.document,
+    window: dom.window as unknown as Window,
+    rpc,
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
+    async openOptionsPage() {},
+  });
+  await settle();
+
+  const assertPlatformNames = (): void => {
+    const link = dom.window.document.querySelector<HTMLAnchorElement>(
+      "#records a.author-name",
+    );
+    strictEqual(link?.textContent, "Zhihu Author");
+    strictEqual(
+      link?.href,
+      "https://www.zhihu.com/people/author%2Fwith%20%3Fquery%23fragment%25",
+    );
+    strictEqual(link?.target, "_blank");
+    strictEqual(link?.rel, "noopener");
+    const plainNames = Array.from(
+      dom.window.document.querySelectorAll<HTMLElement>("#records span.author-name"),
+    );
+    strictEqual(plainNames.length, 2);
+    strictEqual(plainNames.map((name) => name.textContent).sort().join("|"),
+      "Future Author|YouTube Author");
+    for (const name of plainNames) {
+      strictEqual(name.hasAttribute("href"), false);
+      strictEqual(name.hasAttribute("tabindex"), false);
+      strictEqual(name.tabIndex, -1);
+      strictEqual(name.closest("a"), null);
+    }
+  };
+  assertPlatformNames();
+
+  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  await settle();
+  assertPlatformNames();
+
+  const search = dom.window.document.querySelector<HTMLInputElement>("#search");
+  if (!search) throw new Error("search missing");
+  search.value = "YouTube";
+  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  strictEqual(dom.window.document.querySelectorAll("#records a.author-name").length, 0);
+  strictEqual(dom.window.document.querySelector("#records span.author-name")?.textContent,
+    "YouTube Author");
+  strictEqual(dom.window.document.querySelectorAll("#records button").length, 1);
 });
 
 test("BUG-014/AC-085 Popup accepts nullable member aliases through the strict RPC client", async () => {

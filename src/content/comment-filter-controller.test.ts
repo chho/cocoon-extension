@@ -554,6 +554,7 @@ function blockedAliasState(memberHashId: string | null = null): BlacklistState {
   return {
     ...createInitialState(),
     authors: [{
+      platformId: "zhihu",
       userId: "canonical-token",
       memberHashId,
       authorNameAtCapture: "Stored name",

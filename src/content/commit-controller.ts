@@ -1,4 +1,5 @@
 import {
+  ZHIHU_PLATFORM_ID,
   createBlacklistTimestamp,
   normalizeMemberHashId,
   planAuthorCommit,
@@ -60,11 +61,14 @@ export function createCommitController<TCard, TButton>(
       memberHashId: normalizeMemberHashId(identity.memberHashId),
     };
     const existing = latestState.authors.find(
-      (author) => author.userId === canonicalIdentity.userId,
+      (author) =>
+        author.platformId === ZHIHU_PLATFORM_ID &&
+        author.userId === canonicalIdentity.userId,
     );
 
     if (existing) {
       const duplicatePlan = planAuthorCommit(latestState, {
+        platformId: ZHIHU_PLATFORM_ID,
         ...canonicalIdentity,
         authorNameAtCapture: task.target.authorNameAtClick,
         tag: task.selection.tag,
@@ -85,6 +89,7 @@ export function createCommitController<TCard, TButton>(
 
     const blacklistedAt = createBlacklistTimestamp(dependencies.now);
     const plan = planAuthorCommit(latestState, {
+      platformId: ZHIHU_PLATFORM_ID,
       ...canonicalIdentity,
       authorNameAtCapture: task.target.authorNameAtClick,
       tag: task.selection.tag,

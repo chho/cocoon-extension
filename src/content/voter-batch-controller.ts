@@ -1,4 +1,7 @@
-import type { ParsedBlacklistState } from "./blacklist-state.ts";
+import {
+  ZHIHU_PLATFORM_ID,
+  type ParsedBlacklistState,
+} from "./blacklist-state.ts";
 import type { RemoteBlockCoordinator } from "./remote-block-coordinator.ts";
 import type {
   CurrentUserResult,
@@ -129,7 +132,9 @@ export function createVoterBatchController(
       }
       const locallyBlocked = new Set(
         parsed.state.authors.flatMap((author) =>
-          author.memberHashId === null
+          author.platformId !== ZHIHU_PLATFORM_ID
+            ? []
+            : author.memberHashId === null
             ? [author.userId]
             : [author.userId, author.memberHashId]
         ),

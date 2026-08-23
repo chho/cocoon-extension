@@ -24,7 +24,8 @@ export interface AuthorListRenderResult {
 type ControlRole = "checkbox" | "profile" | "remove";
 
 interface FocusDescriptor {
-  readonly rowIndex: number;
+  readonly platformId: string;
+  readonly userId: string;
   readonly role: ControlRole;
 }
 
@@ -81,9 +82,12 @@ function focusedControl(
     : active.matches("button")
     ? "remove"
     : null;
-  if (!role) return null;
+  if (!role || !state) return null;
+  const item = state.items[state.start + mountedIndex];
+  if (!item) return null;
   return {
-    rowIndex: (state?.start ?? 0) + mountedIndex,
+    platformId: item.author.platformId,
+    userId: item.author.userId,
     role,
   };
 }
@@ -91,18 +95,15 @@ function focusedControl(
 function restoreFocus(
   options: AuthorListRenderOptions,
   descriptor: FocusDescriptor | null,
-  previous: RenderState | undefined,
   next: RenderState,
 ): void {
   if (!descriptor) return;
-  const previousItem = previous?.items[descriptor.rowIndex];
-  const nextItem = options.items[descriptor.rowIndex];
-  if (
-    previousItem && nextItem && previousItem.author === nextItem.author &&
-    previousItem.tag === nextItem.tag && descriptor.rowIndex >= next.start &&
-    descriptor.rowIndex < next.end
-  ) {
-    const mountedIndex = descriptor.rowIndex - next.start;
+  const nextIndex = options.items.findIndex(({ author }) =>
+    author.platformId === descriptor.platformId &&
+    author.userId === descriptor.userId
+  );
+  if (nextIndex >= next.start && nextIndex < next.end) {
+    const mountedIndex = nextIndex - next.start;
     const row = options.list.querySelectorAll<HTMLElement>(".author-row").item(mountedIndex);
     const control = descriptor.role === "checkbox"
       ? row?.querySelector<HTMLElement>("input[type='checkbox']")
@@ -142,7 +143,7 @@ export function renderAuthorListRows(
       items: options.items,
     };
     renderStates.set(options.list, next);
-    restoreFocus(options, focus, previous, next);
+    restoreFocus(options, focus, next);
     return { loadedCount: 0, mountedRowCount: 0, virtualized: false };
   }
 
@@ -182,7 +183,7 @@ export function renderAuthorListRows(
       items: options.items,
     };
     renderStates.set(options.list, next);
-    restoreFocus(options, focus, previous, next);
+    restoreFocus(options, focus, next);
     return {
       loadedCount: visibleLoadedCount,
       mountedRowCount: range.end - range.start,
@@ -216,7 +217,7 @@ export function renderAuthorListRows(
     items: options.items,
   };
   renderStates.set(options.list, next);
-  restoreFocus(options, focus, previous, next);
+  restoreFocus(options, focus, next);
   return {
     loadedCount: visibleLoadedCount,
     mountedRowCount: visibleLoadedCount,

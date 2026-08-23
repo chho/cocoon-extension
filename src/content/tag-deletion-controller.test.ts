@@ -22,6 +22,7 @@ function populatedState(): BlacklistState {
     ],
     authors: [
       {
+        platformId: "zhihu",
         userId: "move",
         memberHashId: MEMBER_HASH,
         authorNameAtCapture: "Move",
@@ -30,6 +31,7 @@ function populatedState(): BlacklistState {
         blockSource: "direct",
       },
       {
+        platformId: "zhihu",
         userId: "keep",
         memberHashId: null,
         authorNameAtCapture: "Keep",
@@ -69,6 +71,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
         authors: [
           ...stored.authors,
           {
+            platformId: "zhihu",
             userId: "concurrent",
             memberHashId: null,
             authorNameAtCapture: "Concurrent",
@@ -106,6 +109,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
     { ...beforeMove, tagId: DEFAULT_TAG_ID },
     populatedState().authors[1],
     {
+      platformId: "zhihu",
       userId: "concurrent",
       memberHashId: null,
       authorNameAtCapture: "Concurrent",
@@ -178,7 +182,7 @@ test("default is protected by controller logic without any storage write", async
   strictEqual(applies, 0);
 });
 
-test("deleting from v1 atomically migrates schema v4, source, hash, and null timestamps", async () => {
+test("deleting from v1 atomically migrates schema v5, platform, source, hash, and null timestamps", async () => {
   let stored: unknown = {
     schemaVersion: 1,
     tags: [
@@ -213,10 +217,11 @@ test("deleting from v1 atomically migrates schema v4, source, hash, and null tim
   const result = await controller.deleteTag("remove", event.value);
   strictEqual(result.status, "persisted");
   deepStrictEqual(stored, {
-    schemaVersion: 4,
+    schemaVersion: 5,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [
       {
+        platformId: "zhihu",
         userId: "legacy",
         memberHashId: null,
         authorNameAtCapture: "Legacy",

@@ -17,6 +17,7 @@ const TAGS: readonly BlacklistTagDto[] = [
 
 const AUTHORS: readonly BlacklistAuthorDto[] = [
   {
+    platformId: "zhihu",
     userId: "author-one",
     memberHashId: null,
     authorName: "Author One",
@@ -25,6 +26,7 @@ const AUTHORS: readonly BlacklistAuthorDto[] = [
     source: "direct",
   },
   {
+    platformId: "zhihu",
     userId: "author-two",
     memberHashId: null,
     authorName: "Author Two",

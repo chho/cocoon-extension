@@ -128,6 +128,7 @@ test("CAP-007 concurrent duplicate commits perform one image-free write", async 
   deepStrictEqual(results.map((result) => result.status), ["persisted", "duplicate"]);
   deepStrictEqual(harness.counts(), { writes: 1, applies: 2, clockCalls: 1 });
   deepStrictEqual(harness.storedState().authors[0], {
+    platformId: "zhihu",
     userId: "stable-duplicate",
     memberHashId: HASH_A,
     authorNameAtCapture: "author-duplicate",
@@ -177,6 +178,7 @@ test("BUG-008 exact duplicate backfills a proven hash in one atomic write withou
   const existing: BlacklistState = {
     ...initial,
     authors: [{
+      platformId: "zhihu",
       userId: "stable-existing",
       memberHashId: null,
       authorNameAtCapture: "First name",
@@ -205,6 +207,7 @@ test("BUG-008 duplicate alias conflict fails with no write or runtime mutation",
     ...initial,
     authors: [
       {
+        platformId: "zhihu",
         userId: "stable-existing",
         memberHashId: null,
         authorNameAtCapture: "Existing",
@@ -213,6 +216,7 @@ test("BUG-008 duplicate alias conflict fails with no write or runtime mutation",
         blockSource: "direct",
       },
       {
+        platformId: "zhihu",
         userId: "other",
         memberHashId: HASH_B,
         authorNameAtCapture: "Other",

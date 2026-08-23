@@ -27,7 +27,7 @@ function legacyState(authorIds: readonly string[] = []) {
   };
 }
 
-test("CAP-007 migrates v1 to v4 in one locked write without legacy image data", async () => {
+test("PLATFORM-001 migrates v1 to v5 in one locked write without legacy image data", async () => {
   let stored: unknown = legacyState(["legacy-user"]);
   const writes: BlacklistState[] = [];
   const result = await initializeBlacklistState({
@@ -46,9 +46,10 @@ test("CAP-007 migrates v1 to v4 in one locked write without legacy image data", 
   strictEqual(result.status, "valid");
   strictEqual(writes.length, 1);
   deepStrictEqual(writes[0], {
-    schemaVersion: 4,
+    schemaVersion: 5,
     tags: legacyState().tags,
     authors: [{
+      platformId: "zhihu",
       userId: "legacy-user",
       memberHashId: null,
       authorNameAtCapture: "Name legacy-user",
@@ -77,20 +78,22 @@ test("migration re-reads under lock so a concurrent legacy update is preserved",
     },
   });
   deepStrictEqual(writes[0]?.authors.map((author) => ({
+    platformId: author.platformId,
     userId: author.userId,
     memberHashId: author.memberHashId,
   })), [
-    { userId: "initial", memberHashId: null },
-    { userId: "concurrent", memberHashId: null },
+    { platformId: "zhihu", userId: "initial", memberHashId: null },
+    { platformId: "zhihu", userId: "concurrent", memberHashId: null },
   ]);
 });
 
-test("initialization does not overwrite a valid v4 state created before lock acquisition", async () => {
+test("initialization does not overwrite a valid v5 state created before lock acquisition", async () => {
   let stored: unknown = undefined;
   const concurrentState: BlacklistState = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [{
+      platformId: "zhihu",
       userId: "concurrent",
       memberHashId: null,
       authorNameAtCapture: "Concurrent",

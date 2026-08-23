@@ -2,6 +2,7 @@ import {
   createBlacklistRpcRequest,
   parseBlacklistRpcResponse,
   type BlacklistAuthorDto,
+  type BlacklistAuthorIdentityDto,
   type BlacklistRpcOperation,
   type BlacklistRpcResponse,
 } from "../core/blacklist-rpc-contract.ts";
@@ -17,7 +18,7 @@ export interface BlacklistRpcClient {
     operation: BlacklistRpcOperation,
     input?: Record<string, unknown>,
   ): Promise<BlacklistRpcResponse>;
-  removeOne(userId: string): Promise<BlacklistRpcResponse>;
+  removeOne(identity: BlacklistAuthorIdentityDto): Promise<BlacklistRpcResponse>;
   restoreOne(author: BlacklistAuthorDto): Promise<BlacklistRpcResponse>;
 }
 
@@ -35,8 +36,8 @@ export function createBlacklistRpcClient(
       }
       return parsed;
     },
-    removeOne(userId) {
-      return this.request("remove-one", { userId });
+    removeOne(identity) {
+      return this.request("remove-one", { identity });
     },
     restoreOne(author) {
       return this.request("restore-one", { author });

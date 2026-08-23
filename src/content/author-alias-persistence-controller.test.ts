@@ -15,6 +15,7 @@ const TIMESTAMP = "2026-08-14T12:00:00.000Z";
 
 function author(userId: string, memberHashId: string | null = null) {
   return {
+    platformId: "zhihu",
     userId,
     memberHashId,
     authorNameAtCapture: `Name ${userId}`,
@@ -119,6 +120,40 @@ test("BUG-008 alias persistence re-reads under lock and preserves intervening st
     { ...intervening.authors[0]!, memberHashId: HASH_A },
     intervening.authors[1],
   ]);
+});
+
+test("PLATFORM-001 alias backfill targets only the Zhihu owner when another platform has the same user ID", async () => {
+  const youtube = {
+    ...author("canonical-token"),
+    platformId: "youtube",
+  };
+  const zhihu = author("canonical-token");
+  const initial = stateWith(youtube, zhihu);
+  const harness = createHarness({ initial });
+
+  const result = await harness.controller.persistMemberHashAlias(HASH_A);
+
+  strictEqual(result.status, "persisted");
+  deepStrictEqual(harness.state().authors, [
+    youtube,
+    { ...zhihu, memberHashId: HASH_A },
+  ]);
+  deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 1, applies: 1 });
+});
+
+test("PLATFORM-001 a non-Zhihu-only record cannot receive a Zhihu alias", async () => {
+  const initial = stateWith({
+    ...author("canonical-token"),
+    platformId: "youtube",
+  });
+  const harness = createHarness({ initial });
+
+  deepStrictEqual(
+    await harness.controller.persistMemberHashAlias(HASH_A),
+    { status: "failed" },
+  );
+  strictEqual(harness.state(), initial);
+  deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 0, applies: 0 });
 });
 
 test("BUG-008 alias backfill changes one field in one atomic write", async () => {

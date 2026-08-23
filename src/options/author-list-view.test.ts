@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
 import type { AuthorListItem } from "../ui/blacklist-view-model.ts";
+import { createAuthorProfileUrl } from "../ui/zhihu-profile-url.ts";
 import {
   renderAuthorListRows,
   resetAuthorListViewport,
@@ -12,6 +13,7 @@ import {
 function items(count: number, prefix = "Author"): readonly AuthorListItem[] {
   return Array.from({ length: count }, (_, index) => ({
     author: {
+      platformId: "zhihu",
       userId: `internal-${prefix}-${index}`,
       memberHashId: null,
       authorName: `${prefix} ${index}`,
@@ -179,10 +181,20 @@ function createFocusFixture() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.setAttribute("aria-label", `选择 ${item.author.authorName}`);
-    const name = document.createElement("a");
+    const profileUrl = createAuthorProfileUrl(
+      item.author.platformId,
+      item.author.userId,
+    );
+    const name = profileUrl
+      ? document.createElement("a")
+      : document.createElement("span");
     name.className = "author-name";
-    name.href = `https://www.zhihu.com/people/${encodeURIComponent(item.author.userId)}`;
     name.textContent = item.author.authorName;
+    if (name instanceof document.defaultView!.HTMLAnchorElement) {
+      name.href = profileUrl!;
+      name.target = "_blank";
+      name.rel = "noopener";
+    }
     const remove = document.createElement("button");
     remove.textContent = "解除屏蔽";
     row.append(checkbox, name, remove);
@@ -302,6 +314,95 @@ test("PROFILE-001/AC-086 filtering reset keeps encoded author profile links", ()
     firstProfile?.href,
     "https://www.zhihu.com/people/internal-Filtered-0",
   );
+});
+
+test("PROFILE-002/AC-091 virtual refresh restores the same Zhihu profile link by composite identity", () => {
+  const fixture = createFocusFixture();
+  const original = items(250);
+  const options = {
+    list: fixture.list,
+    items: original,
+    loadedCount: 250,
+    scrollTop: 640,
+    viewportHeight: 640,
+    createRow: fixture.createRow,
+    focusFallback: fixture.viewport,
+  };
+  renderAuthorListRows(options);
+  const focused = fixture.list.querySelectorAll<HTMLAnchorElement>("a.author-name").item(4);
+  focused.focus();
+
+  const refreshed = original.map(({ author, tag }) => ({
+    author: { ...author },
+    tag: { ...tag },
+  }));
+  renderAuthorListRows({ ...options, items: refreshed });
+
+  const restored = fixture.document.activeElement;
+  strictEqual(restored?.tagName, "A");
+  strictEqual(restored === focused, false);
+  strictEqual(restored?.textContent, focused.textContent);
+  strictEqual((restored as HTMLAnchorElement).href, focused.href);
+  strictEqual((restored as HTMLAnchorElement).target, "_blank");
+  strictEqual((restored as HTMLAnchorElement).rel, "noopener");
+});
+
+test("PROFILE-002/AC-091 incremental and virtual rows never make other platforms focusable Zhihu links", () => {
+  const fixture = createFocusFixture();
+  const mixed = items(230).map((item, index) => ({
+    ...item,
+    author: {
+      ...item.author,
+      platformId: index % 3 === 0
+        ? "zhihu"
+        : index % 3 === 1
+        ? "youtube"
+        : "future-site",
+      userId: `shared/id ${index}`,
+    },
+  }));
+
+  const incremental = renderAuthorListRows({
+    list: fixture.list,
+    items: mixed.slice(0, 180),
+    loadedCount: 100,
+    scrollTop: 0,
+    viewportHeight: 640,
+    createRow: fixture.createRow,
+    focusFallback: fixture.viewport,
+  });
+  strictEqual(incremental.virtualized, false);
+  strictEqual(fixture.list.querySelectorAll(".author-row").length, 100);
+  for (const link of fixture.list.querySelectorAll<HTMLAnchorElement>("a.author-name")) {
+    strictEqual(link.href.startsWith("https://www.zhihu.com/people/"), true);
+    strictEqual(link.href.includes("shared%2Fid%20"), true);
+  }
+  for (const text of fixture.list.querySelectorAll<HTMLElement>("span.author-name")) {
+    strictEqual(text.hasAttribute("href"), false);
+    strictEqual(text.hasAttribute("tabindex"), false);
+    strictEqual(text.tabIndex, -1);
+  }
+
+  const virtualized = renderAuthorListRows({
+    list: fixture.list,
+    items: mixed,
+    loadedCount: 230,
+    scrollTop: 640,
+    viewportHeight: 640,
+    createRow: fixture.createRow,
+    focusFallback: fixture.viewport,
+  });
+  strictEqual(virtualized.virtualized, true);
+  strictEqual(virtualized.mountedRowCount < mixed.length, true);
+  strictEqual(
+    fixture.list.querySelectorAll("a.author-name").length +
+      fixture.list.querySelectorAll("span.author-name").length,
+    virtualized.mountedRowCount,
+  );
+  for (const text of fixture.list.querySelectorAll<HTMLElement>("span.author-name")) {
+    strictEqual(text.tabIndex, -1);
+    strictEqual(text.closest("a"), null);
+  }
 });
 
 test("MANAGE-001 empty candidates replace stale rows with the empty state", () => {

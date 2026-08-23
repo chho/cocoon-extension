@@ -4,7 +4,7 @@ import {
   formatSource,
   type AuthorListItem,
 } from "../ui/blacklist-view-model.ts";
-import { createZhihuProfileUrl } from "../ui/zhihu-profile-url.ts";
+import { createAuthorProfileUrl } from "../ui/zhihu-profile-url.ts";
 
 export interface PopupRecordListViewOptions {
   readonly list: HTMLUListElement;
@@ -39,13 +39,18 @@ export function renderPopupRecordList(
     const item = options.list.ownerDocument.createElement("li");
     item.className = "record";
     const copy = options.list.ownerDocument.createElement("div");
-    const name = options.list.ownerDocument.createElement("a");
     const visibleName = author.authorName || "未知作者";
+    const profileUrl = createAuthorProfileUrl(author.platformId, author.userId);
+    const name = profileUrl
+      ? options.list.ownerDocument.createElement("a")
+      : options.list.ownerDocument.createElement("span");
     name.className = "author-name";
-    name.href = createZhihuProfileUrl(author.userId);
-    name.target = "_blank";
-    name.rel = "noopener";
     name.textContent = visibleName;
+    if (name instanceof options.list.ownerDocument.defaultView!.HTMLAnchorElement) {
+      name.href = profileUrl!;
+      name.target = "_blank";
+      name.rel = "noopener";
+    }
     const metadata = options.list.ownerDocument.createElement("p");
     metadata.textContent = `${tag.name} · ${formatSource(author.source)} · ${formatLocalTime(author.blacklistedAt)}`;
     copy.append(name, metadata);

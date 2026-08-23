@@ -1,4 +1,5 @@
 import {
+  ZHIHU_PLATFORM_ID,
   normalizeMemberHashId,
   type BlacklistState,
 } from "./blacklist-state.ts";
@@ -28,6 +29,9 @@ export function applyBlacklistRuntimeState(
 
   const stableUserIds = new Set(
     state.authors.flatMap((author) => {
+      if (author.platformId !== ZHIHU_PLATFORM_ID) {
+        return [];
+      }
       const userId = normalizeMemberHashId(author.userId) ?? author.userId;
       const memberHashId = normalizeMemberHashId(author.memberHashId);
       return memberHashId === null ? [userId] : [userId, memberHashId];

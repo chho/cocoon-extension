@@ -1,7 +1,11 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
-import { createInitialState, parseBlacklistState } from "./blacklist-state.ts";
+import {
+  createInitialState,
+  parseBlacklistState,
+  type BlacklistState,
+} from "./blacklist-state.ts";
 import type {
   CoordinatedBlockResult,
   RemoteBlockCoordinator,
@@ -35,6 +39,7 @@ function createHarness(options: {
     | { readonly status: "success"; readonly userId: string }
     | { readonly status: "failed"; readonly reason: "invalid-response" };
   readonly localBlocked?: readonly string[];
+  readonly localAuthors?: BlacklistState["authors"];
   readonly block?: (
     request: UserBlockRequest,
     isStopped: () => boolean,
@@ -46,7 +51,8 @@ function createHarness(options: {
   let voterFetches = 0;
   const localState = {
     ...createInitialState(),
-    authors: (options.localBlocked ?? []).map((userId) => ({
+    authors: options.localAuthors ?? (options.localBlocked ?? []).map((userId) => ({
+      platformId: "zhihu",
       userId,
       memberHashId: null,
       authorNameAtCapture: `Existing ${userId}`,
@@ -161,6 +167,38 @@ test("VOTER-014 skips current user, direct author, and local records while persi
     unprocessed: 0,
     dataComplete: true,
   });
+});
+
+test("PLATFORM-001 non-Zhihu records do not enter Zhihu voter dedupe sets", async () => {
+  const harness = createHarness({
+    voterResult: voters(["shared", "zhihu-blocked"]),
+    localAuthors: [
+      {
+        platformId: "youtube",
+        userId: "shared",
+        memberHashId: null,
+        authorNameAtCapture: "YouTube shared",
+        tagId: "default",
+        blacklistedAt: "2026-08-13T12:34:56.789Z",
+        blockSource: "direct",
+      },
+      {
+        platformId: "zhihu",
+        userId: "zhihu-blocked",
+        memberHashId: null,
+        authorNameAtCapture: "Zhihu blocked",
+        tagId: "default",
+        blacklistedAt: "2026-08-13T12:34:56.789Z",
+        blockSource: "direct",
+      },
+    ],
+  });
+
+  const result = await runBatch(harness);
+
+  deepStrictEqual(harness.requests.map(({ userId }) => userId), ["shared"]);
+  strictEqual(result.success, 1);
+  strictEqual(result.skipped, 1);
 });
 
 test("VOTER-014 counts a coordinator race as skipped instead of successful", async () => {

@@ -90,8 +90,10 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
       [author.userId, author.memberHashId].filter((value): value is string => value !== null),
     );
     return !snapshot.authors.some((candidate) =>
-      removedIdentifiers.has(candidate.userId) ||
-      (candidate.memberHashId !== null && removedIdentifiers.has(candidate.memberHashId))
+      candidate.platformId === author.platformId &&
+      (removedIdentifiers.has(candidate.userId) ||
+        (candidate.memberHashId !== null &&
+          removedIdentifiers.has(candidate.memberHashId)))
     );
   }
 
@@ -171,7 +173,10 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     saveError.hidden = true;
     button.disabled = true;
     try {
-      const response = await rpc.removeOne(author.userId);
+      const response = await rpc.removeOne({
+        platformId: author.platformId,
+        userId: author.userId,
+      });
       if (!response.ok || !response.data.removed) {
         await rollbackFailure(response.error === "storage-unreadable");
         return;

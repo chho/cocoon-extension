@@ -1,6 +1,18 @@
-export const BLACKLIST_RPC_VERSION = 1 as const;
+export const BLACKLIST_RPC_VERSION = 2 as const;
 export const BLACKLIST_RPC_REQUEST_TYPE = "cocoon.blacklist.request" as const;
 export const BLACKLIST_RPC_RESPONSE_TYPE = "cocoon.blacklist.response" as const;
+
+export const MAX_PLATFORM_ID_ASCII_LENGTH = 64;
+export const MAX_STABLE_ID_CODE_POINTS = 512;
+export const MAX_AUTHOR_NAME_CODE_POINTS = 500;
+export const MAX_TRANSFER_TAG_NAME_CODE_POINTS = 30;
+
+const ZHIHU_PLATFORM_ID = "zhihu";
+const DEFAULT_TAG_ID = "default";
+const PLATFORM_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
+const MEMBER_HASH_PATTERN = /^[0-9a-f]{32}$/;
+const MEMBER_HASH_CASE_INSENSITIVE_PATTERN = /^[0-9a-f]{32}$/i;
+const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export type BlacklistRpcOperation =
   | "status"
@@ -11,8 +23,12 @@ export type BlacklistRpcOperation =
   | "rename-tag"
   | "delete-tag";
 
-export interface BlacklistAuthorDto {
+export interface BlacklistAuthorIdentityDto {
+  readonly platformId: string;
   readonly userId: string;
+}
+
+export interface BlacklistAuthorDto extends BlacklistAuthorIdentityDto {
   readonly memberHashId: string | null;
   readonly authorName: string;
   readonly tagId: string;
@@ -36,9 +52,11 @@ export type CurrentPageStatus = "running" | "unsupported" | "connection-error";
 export type BlacklistRpcRequest =
   | RpcRequest<"status", Record<never, never>>
   | RpcRequest<"snapshot", Record<never, never>>
-  | RpcRequest<"remove-one", { readonly userId: string }>
+  | RpcRequest<"remove-one", { readonly identity: BlacklistAuthorIdentityDto }>
   | RpcRequest<"restore-one", { readonly author: BlacklistAuthorDto }>
-  | RpcRequest<"remove-many", { readonly userIds: readonly string[] }>
+  | RpcRequest<"remove-many", {
+      readonly identities: readonly BlacklistAuthorIdentityDto[];
+    }>
   | RpcRequest<"rename-tag", { readonly tagId: string; readonly name: string }>
   | RpcRequest<"delete-tag", { readonly tagId: string }>;
 
@@ -88,8 +106,6 @@ const ERRORS: readonly BlacklistRpcError[] = [
   "not-found",
   "invalid-tag",
 ];
-const MEMBER_HASH_PATTERN = /^[0-9a-f]{32}$/;
-const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -105,6 +121,10 @@ function hasExactKeys(
     actual.every((key, index) => key === sorted[index]);
 }
 
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
 function isTrimmedNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
@@ -117,19 +137,45 @@ function isValidTimestamp(value: unknown): value is string {
   return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
 }
 
-function isCanonicalUserId(value: unknown): value is string {
+function isPlatformId(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.length <= MAX_PLATFORM_ID_ASCII_LENGTH &&
+    PLATFORM_ID_PATTERN.test(value);
+}
+
+function isCanonicalUserId(platformId: string, value: unknown): value is string {
   return isTrimmedNonEmpty(value) &&
-    (!/^[0-9a-f]{32}$/i.test(value) || MEMBER_HASH_PATTERN.test(value));
+    (platformId !== ZHIHU_PLATFORM_ID ||
+      !MEMBER_HASH_CASE_INSENSITIVE_PATTERN.test(value) ||
+      MEMBER_HASH_PATTERN.test(value));
+}
+
+function scopedIdentifierKey(platformId: string, identifier: string): string {
+  return JSON.stringify([platformId, identifier]);
 }
 
 function isEmptyInput(value: unknown): value is Record<never, never> {
   return isRecord(value) && hasExactKeys(value, []);
 }
 
+function parseIdentity(value: unknown): BlacklistAuthorIdentityDto | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["platformId", "userId"]) ||
+    !isPlatformId(value.platformId) ||
+    !isCanonicalUserId(value.platformId, value.userId) ||
+    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS
+  ) {
+    return null;
+  }
+  return { platformId: value.platformId, userId: value.userId };
+}
+
 function parseAuthor(value: unknown): BlacklistAuthorDto | null {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
+      "platformId",
       "userId",
       "memberHashId",
       "authorName",
@@ -137,13 +183,18 @@ function parseAuthor(value: unknown): BlacklistAuthorDto | null {
       "blacklistedAt",
       "source",
     ]) ||
-    !isCanonicalUserId(value.userId) ||
+    !isPlatformId(value.platformId) ||
+    !isCanonicalUserId(value.platformId, value.userId) ||
+    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS ||
     (value.memberHashId !== null &&
-      (typeof value.memberHashId !== "string" ||
+      (value.platformId !== ZHIHU_PLATFORM_ID ||
+        typeof value.memberHashId !== "string" ||
         !MEMBER_HASH_PATTERN.test(value.memberHashId))) ||
     value.memberHashId === value.userId ||
     typeof value.authorName !== "string" ||
+    codePointLength(value.authorName) > MAX_AUTHOR_NAME_CODE_POINTS ||
     !isTrimmedNonEmpty(value.tagId) ||
+    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
     (value.blacklistedAt !== null && !isValidTimestamp(value.blacklistedAt)) ||
     (value.source !== "direct" && value.source !== "upvoter") ||
     (value.source === "upvoter" && value.blacklistedAt === null)
@@ -151,6 +202,7 @@ function parseAuthor(value: unknown): BlacklistAuthorDto | null {
     return null;
   }
   return {
+    platformId: value.platformId,
     userId: value.userId,
     memberHashId: value.memberHashId as string | null,
     authorName: value.authorName,
@@ -165,10 +217,11 @@ function parseTag(value: unknown): BlacklistTagDto | null {
     !isRecord(value) ||
     !hasExactKeys(value, ["tagId", "name", "isDefault"]) ||
     !isTrimmedNonEmpty(value.tagId) ||
+    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
     !isTrimmedNonEmpty(value.name) ||
-    Array.from(value.name).length > 30 ||
+    Array.from(value.name).length > MAX_TRANSFER_TAG_NAME_CODE_POINTS ||
     typeof value.isDefault !== "boolean" ||
-    value.isDefault !== (value.tagId === "default") ||
+    value.isDefault !== (value.tagId === DEFAULT_TAG_ID) ||
     (value.isDefault && value.name !== "default")
   ) {
     return null;
@@ -193,7 +246,7 @@ function parseSnapshot(value: unknown): BlacklistSnapshotDto | null {
   const parsedAuthors = authors as BlacklistAuthorDto[];
   const parsedTags = tags as BlacklistTagDto[];
   const tagIds = new Set(parsedTags.map(({ tagId }) => tagId));
-  const tagNames = new Set(parsedTags.map(({ name }) => name.toLocaleLowerCase()));
+  const tagNames = new Set(parsedTags.map(({ name }) => name.toLowerCase()));
   const identifiers = new Set<string>();
   if (
     tagIds.size !== parsedTags.length ||
@@ -206,8 +259,9 @@ function parseSnapshot(value: unknown): BlacklistSnapshotDto | null {
   for (const author of parsedAuthors) {
     for (const identifier of [author.userId, author.memberHashId]) {
       if (identifier === null) continue;
-      if (identifiers.has(identifier)) return null;
-      identifiers.add(identifier);
+      const key = scopedIdentifierKey(author.platformId, identifier);
+      if (identifiers.has(key)) return null;
+      identifiers.add(key);
     }
   }
   return { authors: parsedAuthors, tags: parsedTags };
@@ -228,7 +282,11 @@ export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | 
     return null;
   }
   const input = value.input;
-  if ((value.operation === "status" || value.operation === "snapshot") && isEmptyInput(input)) {
+  if (
+    (value.operation === "status" ||
+      value.operation === "snapshot") &&
+    isEmptyInput(input)
+  ) {
     return value as unknown as BlacklistRpcRequest;
   }
   if (!isRecord(input)) {
@@ -236,8 +294,8 @@ export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | 
   }
   if (
     value.operation === "remove-one" &&
-    hasExactKeys(input, ["userId"]) &&
-    isCanonicalUserId(input.userId)
+    hasExactKeys(input, ["identity"]) &&
+    parseIdentity(input.identity) !== null
   ) {
     return value as unknown as BlacklistRpcRequest;
   }
@@ -250,13 +308,21 @@ export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | 
   }
   if (
     value.operation === "remove-many" &&
-    hasExactKeys(input, ["userIds"]) &&
-    Array.isArray(input.userIds) &&
-    input.userIds.length > 0 &&
-    input.userIds.every(isCanonicalUserId) &&
-    new Set(input.userIds).size === input.userIds.length
+    hasExactKeys(input, ["identities"]) &&
+    Array.isArray(input.identities) &&
+    input.identities.length > 0
   ) {
-    return value as unknown as BlacklistRpcRequest;
+    const identities = input.identities.map(parseIdentity);
+    if (
+      identities.every((identity) => identity !== null) &&
+      new Set(
+        (identities as BlacklistAuthorIdentityDto[]).map(({ platformId, userId }) =>
+          scopedIdentifierKey(platformId, userId)
+        ),
+      ).size === identities.length
+    ) {
+      return value as unknown as BlacklistRpcRequest;
+    }
   }
   if (
     value.operation === "rename-tag" &&
@@ -287,9 +353,7 @@ function hasValidResponseShape(
       data.snapshot === null && data.removed === null &&
       (data.status !== "unsupported" || data.count === 0);
   }
-  if (data.status !== null || data.count !== null) {
-    return false;
-  }
+  if (data.status !== null || data.count !== null) return false;
   if (operation === "snapshot") {
     return data.removed === null && (ok
       ? error === null && data.snapshot !== null
@@ -299,8 +363,18 @@ function hasValidResponseShape(
     return error === null && data.snapshot !== null &&
       (operation === "remove-one" ? data.removed !== null : data.removed === null);
   }
-  return data.removed === null && error !== null &&
-    (data.snapshot !== null || error === "storage-unreadable");
+  if (data.removed !== null) return false;
+  if (error === "storage-unreadable") return data.snapshot === null;
+  if (error === "save-failed") return data.snapshot !== null;
+  if (data.snapshot === null) return false;
+  if (operation === "remove-one" || operation === "remove-many") {
+    return error === "not-found";
+  }
+  if (operation === "restore-one") {
+    return error === "conflict" || error === "invalid-tag";
+  }
+  return (operation === "rename-tag" || operation === "delete-tag") &&
+    error === "invalid-tag";
 }
 
 export function parseBlacklistRpcResponse(

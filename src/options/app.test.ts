@@ -1,4 +1,4 @@
-import { strictEqual } from "node:assert/strict";
+import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import { JSDOM } from "jsdom";
@@ -17,6 +17,7 @@ import { bootstrapOptions } from "./app.ts";
 
 const SNAPSHOT: BlacklistSnapshotDto = {
   authors: [{
+    platformId: "zhihu",
     userId: "author-one",
     memberHashId: null,
     authorName: "Author One",
@@ -31,18 +32,26 @@ const SNAPSHOT: BlacklistSnapshotDto = {
 };
 
 function fixture(): JSDOM {
-  return new JSDOM(`<!doctype html><body>
+  const dom = new JSDOM(`<!doctype html><body>
     <span id="author-total"></span><span id="tag-total"></span>
     <p id="page-message"></p><p id="write-error" tabindex="-1" hidden></p>
-    <input id="author-search"><select id="tag-filter"></select>
-    <select id="time-sort"><option value="desc">desc</option></select>
+    <input id="author-search"><select id="tag-filter"></select><select id="platform-filter"></select>
+    <select id="time-sort"><option value="desc">desc</option><option value="asc">asc</option></select>
     <button id="remove-selected"></button>
     <div id="author-viewport" tabindex="0"><div id="author-list"></div></div>
     <p id="list-summary"></p><h2 id="tags-heading" tabindex="-1"></h2><p id="tag-summary"></p><div id="tag-list"></div>
     <dialog id="batch-dialog"><p id="batch-dialog-description"></p>
       <button id="batch-cancel"></button><button id="batch-confirm"></button>
     </dialog>
-  </body>`, { url: "chrome-extension://runtime/options/options.html" });
+  </body>`, {
+    pretendToBeVisual: true,
+    url: "chrome-extension://runtime/options/options.html",
+  });
+  for (const dialog of dom.window.document.querySelectorAll<HTMLDialogElement>("dialog")) {
+    dialog.showModal = () => { dialog.open = true; };
+    dialog.close = () => { dialog.open = false; };
+  }
+  return dom;
 }
 
 async function settle(): Promise<void> {
@@ -61,6 +70,10 @@ class RpcQueue implements BlacklistRpcClient {
     Array<Promise<BlacklistRpcResponse>>
   >();
   readonly requestCounts = new Map<BlacklistRpcOperation, number>();
+  readonly requests: Array<{
+    readonly operation: BlacklistRpcOperation;
+    readonly input: Record<string, unknown>;
+  }> = [];
   push(
     operation: BlacklistRpcOperation,
     response: BlacklistRpcResponse | Promise<BlacklistRpcResponse>,
@@ -69,14 +82,26 @@ class RpcQueue implements BlacklistRpcClient {
     queue.push(Promise.resolve(response));
     this.responses.set(operation, queue);
   }
-  async request(operation: BlacklistRpcOperation): Promise<BlacklistRpcResponse> {
+  async request(
+    operation: BlacklistRpcOperation,
+    input: Record<string, unknown> = {},
+  ): Promise<BlacklistRpcResponse> {
     this.requestCounts.set(operation, (this.requestCounts.get(operation) ?? 0) + 1);
+    this.requests.push({ operation, input });
     const response = this.responses.get(operation)?.shift();
     if (!response) throw new Error(`missing ${operation} response`);
     return await response;
   }
-  removeOne(): Promise<BlacklistRpcResponse> { return this.request("remove-one"); }
-  restoreOne(): Promise<BlacklistRpcResponse> { return this.request("restore-one"); }
+  removeOne(
+    identity: Parameters<BlacklistRpcClient["removeOne"]>[0],
+  ): Promise<BlacklistRpcResponse> {
+    return this.request("remove-one", { identity });
+  }
+  restoreOne(
+    author: Parameters<BlacklistRpcClient["restoreOne"]>[0],
+  ): Promise<BlacklistRpcResponse> {
+    return this.request("restore-one", { author });
+  }
 }
 
 test("BUG-014/AC-085 options accepts nullable member aliases through the strict RPC client", async () => {
@@ -596,6 +621,7 @@ test("PROFILE-001/AC-086 management links profiles and preserves tag filtering a
   const privateSnapshot: BlacklistSnapshotDto = {
     authors: [
       {
+        platformId: "zhihu",
         userId: internalUserId,
         memberHashId: internalMemberHash,
         authorName: "Filtered Author",
@@ -604,6 +630,7 @@ test("PROFILE-001/AC-086 management links profiles and preserves tag filtering a
         source: "direct",
       },
       {
+        platformId: "zhihu",
         userId: "private-user-token-92",
         memberHashId: null,
         authorName: "Other Author",
@@ -692,11 +719,65 @@ test("PROFILE-001/AC-086 management links profiles and preserves tag filtering a
   assertProfileLinks([internalUserId, "private-user-token-92"]);
 });
 
-test("MANAGE production storage listener performs a later validated refresh before re-enabling writes", async () => {
+test("PLATFORM-001/AC-090 management renders an independent platform column/filter through composed storage refreshes", async () => {
+  const multiPlatform: BlacklistSnapshotDto = {
+    tags: SNAPSHOT.tags,
+    authors: [
+      {
+        ...SNAPSHOT.authors[0]!,
+        userId: "zhihu/encoded user",
+        authorName: "Video Zhihu",
+        blacklistedAt: "2026-08-21T09:00:00.000Z",
+      },
+      {
+        ...SNAPSHOT.authors[0]!,
+        platformId: "youtube",
+        userId: "shared-user",
+        memberHashId: null,
+        authorName: "Video Older",
+        blacklistedAt: "2026-08-20T09:00:00.000Z",
+        source: "upvoter",
+      },
+      {
+        ...SNAPSHOT.authors[0]!,
+        platformId: "youtube",
+        userId: "newer-user",
+        memberHashId: null,
+        authorName: "Video Newer",
+        blacklistedAt: "2026-08-22T09:00:00.000Z",
+        source: "direct",
+      },
+      {
+        ...SNAPSHOT.authors[0]!,
+        platformId: "future-site",
+        userId: "shared-user",
+        memberHashId: null,
+        authorName: "Future Author",
+        tagId: "default",
+        source: "direct",
+      },
+    ],
+  };
+  const refreshed: BlacklistSnapshotDto = {
+    tags: multiPlatform.tags.map((tag) => ({ ...tag })),
+    authors: [
+      ...multiPlatform.authors.map((author) => ({ ...author })),
+      {
+        ...multiPlatform.authors[1]!,
+        userId: "third-user",
+        authorName: "Video Middle",
+        blacklistedAt: "2026-08-21T09:00:00.000Z",
+      },
+    ],
+  };
   const dom = fixture();
   const rpc = new RpcQueue();
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
+    snapshot: multiPlatform,
+  }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
+    snapshot: refreshed,
+  }));
   const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
   bootstrapOptions({
     document: dom.window.document,
@@ -705,9 +786,215 @@ test("MANAGE production storage listener performs a later validated refresh befo
     requestFrame(callback) { callback(); return 1; },
   });
   await settle();
-  strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 0);
+
+  const platformFilter = dom.window.document.querySelector<HTMLSelectElement>(
+    "#platform-filter",
+  );
+  const tagFilter = dom.window.document.querySelector<HTMLSelectElement>("#tag-filter");
+  const search = dom.window.document.querySelector<HTMLInputElement>("#author-search");
+  const sort = dom.window.document.querySelector<HTMLSelectElement>("#time-sort");
+  if (!platformFilter || !tagFilter || !search || !sort) {
+    throw new Error("filter controls missing");
+  }
+  const expectedPlatformLabels = ["future-site", "YouTube", "知乎"]
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  deepStrictEqual(
+    [...platformFilter.options].map((option) => option.textContent),
+    ["全部站点", ...expectedPlatformLabels],
+  );
+  const rows = Array.from(
+    dom.window.document.querySelectorAll<HTMLElement>("#author-list .author-row"),
+  );
+  const futureRow = rows.find((row) => row.textContent?.includes("Future Author"));
+  strictEqual(futureRow?.querySelector(".platform-name")?.textContent, "future-site");
+  strictEqual(futureRow?.querySelector(".source-name")?.textContent, "手动屏蔽");
+  strictEqual(futureRow?.querySelector("a.author-name"), null);
+  const plainFuture = futureRow?.querySelector<HTMLElement>("span.author-name");
+  strictEqual(plainFuture?.tabIndex, -1);
+  strictEqual(plainFuture?.hasAttribute("href"), false);
+  const zhihu = rows.find((row) => row.textContent?.includes("Video Zhihu"))
+    ?.querySelector<HTMLAnchorElement>("a.author-name");
+  strictEqual(
+    zhihu?.href,
+    "https://www.zhihu.com/people/zhihu%2Fencoded%20user",
+  );
+  strictEqual(zhihu?.target, "_blank");
+  strictEqual(zhihu?.rel, "noopener");
+
+  const youtubeOption = [...platformFilter.options]
+    .find((option) => option.textContent === "YouTube");
+  const readingOption = [...tagFilter.options]
+    .find((option) => option.textContent === "Persisted");
+  if (!youtubeOption || !readingOption) throw new Error("filter option missing");
+  platformFilter.value = youtubeOption.value;
+  platformFilter.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  tagFilter.value = readingOption.value;
+  tagFilter.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  search.value = "video";
+  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  sort.value = "asc";
+  sort.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+
+  deepStrictEqual(
+    Array.from(dom.window.document.querySelectorAll("#author-list .author-name"))
+      .map((name) => name.textContent),
+    ["Video Older", "Video Newer"],
+  );
+  deepStrictEqual(
+    Array.from(dom.window.document.querySelectorAll("#author-list .source-name"))
+      .map((source) => source.textContent),
+    ["来自点赞者", "手动屏蔽"],
+  );
+  strictEqual(dom.window.document.querySelectorAll("#author-list a.author-name").length, 0);
+
   listeners[0]?.({ cocoonBlacklistState: {} }, "local");
   await settle();
-  strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 1);
-  strictEqual((dom.window.document.querySelector("#author-list button") as HTMLButtonElement).disabled, false);
+  strictEqual(platformFilter.selectedOptions[0]?.textContent, "YouTube");
+  strictEqual(tagFilter.selectedOptions[0]?.textContent, "Persisted");
+  deepStrictEqual(
+    Array.from(dom.window.document.querySelectorAll("#author-list .author-name"))
+      .map((name) => name.textContent),
+    ["Video Older", "Video Middle", "Video Newer"],
+  );
+  for (const name of dom.window.document.querySelectorAll<HTMLElement>(
+    "#author-list span.author-name",
+  )) {
+    strictEqual(name.tabIndex, -1);
+    strictEqual(name.closest("a"), null);
+  }
+});
+
+test("PLATFORM-001/PROFILE-002/AC-090/AC-091 composed filters keep incremental loading and link focus", async () => {
+  const tags = SNAPSHOT.tags;
+  const large: BlacklistSnapshotDto = {
+    tags,
+    authors: [
+      ...Array.from({ length: 130 }, (_, index) => ({
+        ...SNAPSHOT.authors[0]!,
+        userId: `bulk/zhihu ${index}`,
+        authorName: `Bulk ${String(index).padStart(3, "0")}`,
+        blacklistedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      })),
+      ...Array.from({ length: 10 }, (_, index) => ({
+        ...SNAPSHOT.authors[0]!,
+        platformId: "youtube",
+        userId: `bulk-youtube-${index}`,
+        memberHashId: null,
+        authorName: `Bulk Video ${index}`,
+      })),
+    ],
+  };
+  const dom = fixture();
+  const viewport = dom.window.document.querySelector<HTMLElement>("#author-viewport");
+  const list = dom.window.document.querySelector<HTMLElement>("#author-list");
+  if (!viewport || !list) throw new Error("author list missing");
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 640 });
+  Object.defineProperty(viewport, "scrollHeight", {
+    configurable: true,
+    get() {
+      return list.querySelectorAll(".author-row").length * 64;
+    },
+  });
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: large }));
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+  });
+  await settle();
+
+  strictEqual(list.classList.contains("virtual-list"), false);
+  strictEqual(list.querySelectorAll(".author-row").length, 50);
+  const originalFocus = list.querySelector<HTMLAnchorElement>("a.author-name");
+  originalFocus?.focus();
+  viewport.scrollTop = 2_600;
+  viewport.dispatchEvent(new dom.window.Event("scroll"));
+  strictEqual(list.querySelectorAll(".author-row").length, 100);
+  strictEqual(dom.window.document.activeElement?.tagName, "A");
+  strictEqual(dom.window.document.activeElement === originalFocus, false);
+  strictEqual(
+    (dom.window.document.activeElement as HTMLAnchorElement).href,
+    originalFocus?.href,
+  );
+
+  const platform = dom.window.document.querySelector<HTMLSelectElement>("#platform-filter");
+  const youtube = [...(platform?.options ?? [])]
+    .find((option) => option.textContent === "YouTube");
+  if (!platform || !youtube) throw new Error("YouTube filter missing");
+  platform.value = youtube.value;
+  platform.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  strictEqual(list.querySelectorAll(".author-row").length, 10);
+  strictEqual(list.querySelectorAll("a.author-name").length, 0);
+  strictEqual(list.querySelectorAll("span.author-name").length, 10);
+});
+
+test("PLATFORM-001/PROFILE-002/AC-090/AC-091 platform filtering and storage refresh preserve >200 virtualization focus", async () => {
+  const large: BlacklistSnapshotDto = {
+    tags: SNAPSHOT.tags,
+    authors: [
+      ...Array.from({ length: 230 }, (_, index) => ({
+        ...SNAPSHOT.authors[0]!,
+        userId: `virtual/zhihu ${index}`,
+        authorName: `Virtual ${String(index).padStart(3, "0")}`,
+        blacklistedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      })),
+      {
+        ...SNAPSHOT.authors[0]!,
+        platformId: "youtube",
+        userId: "virtual-youtube",
+        memberHashId: null,
+        authorName: "Virtual YouTube",
+      },
+    ],
+  };
+  const refreshed: BlacklistSnapshotDto = {
+    tags: large.tags.map((tag) => ({ ...tag })),
+    authors: large.authors.map((author) => ({ ...author })),
+  };
+  const dom = fixture();
+  const viewport = dom.window.document.querySelector<HTMLElement>("#author-viewport");
+  if (!viewport) throw new Error("viewport missing");
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 640 });
+  Object.defineProperty(viewport, "scrollHeight", {
+    configurable: true,
+    get() {
+      const list = dom.window.document.querySelector<HTMLElement>("#author-list");
+      return Number.parseFloat(list?.style.height || "0");
+    },
+  });
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: large }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: refreshed }));
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
+    requestFrame(callback) { callback(); return 1; },
+  });
+  await settle();
+
+  const platform = dom.window.document.querySelector<HTMLSelectElement>("#platform-filter");
+  const zhihuOption = [...(platform?.options ?? [])]
+    .find((option) => option.textContent === "知乎");
+  if (!platform || !zhihuOption) throw new Error("Zhihu filter missing");
+  platform.value = zhihuOption.value;
+  platform.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  const list = dom.window.document.querySelector<HTMLElement>("#author-list");
+  if (!list) throw new Error("list missing");
+  strictEqual(list.classList.contains("virtual-list"), true);
+  strictEqual(list.querySelectorAll(".author-row").length < 50, true);
+  const focused = list.querySelectorAll<HTMLAnchorElement>("a.author-name").item(3);
+  focused.focus();
+
+  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  await settle();
+  strictEqual(platform.selectedOptions[0]?.textContent, "知乎");
+  strictEqual(list.classList.contains("virtual-list"), true);
+  strictEqual(dom.window.document.activeElement?.tagName, "A");
+  strictEqual(dom.window.document.activeElement === focused, false);
+  strictEqual((dom.window.document.activeElement as HTMLAnchorElement).href, focused.href);
+  strictEqual(list.querySelectorAll("span.author-name").length, 0);
 });

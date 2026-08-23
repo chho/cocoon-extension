@@ -190,11 +190,14 @@ input[type="search"]::placeholder {
   color: #34443a;
   font-size: 13px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record a.author-name {
   text-decoration: underline;
   text-decoration-color: #9aa69e;
-  text-overflow: ellipsis;
   text-underline-offset: 3px;
-  white-space: nowrap;
 }
 
 .record p {

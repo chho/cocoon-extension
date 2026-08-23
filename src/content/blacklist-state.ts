@@ -1,8 +1,11 @@
 export const STORAGE_KEY = "cocoonBlacklistState";
-export const STORAGE_SCHEMA_VERSION = 4;
-export const LEGACY_STORAGE_SCHEMA_VERSIONS = [1, 2, 3] as const;
+export const STORAGE_SCHEMA_VERSION = 5;
+export const LEGACY_STORAGE_SCHEMA_VERSIONS = [1, 2, 3, 4] as const;
 export const DEFAULT_TAG_ID = "default";
 export const MAX_TAG_CODE_POINTS = 30;
+export const ZHIHU_PLATFORM_ID = "zhihu";
+export const MAX_PLATFORM_ID_LENGTH = 64;
+export const PLATFORM_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 export interface CocoonTag {
   readonly tagId: string;
@@ -11,8 +14,12 @@ export interface CocoonTag {
 
 export type BlockSource = "direct" | "upvoter";
 
-export interface BlacklistedAuthor {
+export interface AuthorIdentity {
+  readonly platformId: string;
   readonly userId: string;
+}
+
+export interface BlacklistedAuthor extends AuthorIdentity {
   readonly memberHashId: string | null;
   readonly authorNameAtCapture: string;
   readonly tagId: string;
@@ -50,8 +57,7 @@ export interface TagLabelValidation {
   readonly error: "empty" | "too-long" | "duplicate" | null;
 }
 
-export interface CommitInput {
-  readonly userId: string;
+export interface CommitInput extends AuthorIdentity {
   readonly memberHashId: string | null;
   readonly authorNameAtCapture: string;
   readonly tag: CocoonTag;
@@ -59,8 +65,7 @@ export interface CommitInput {
   readonly blacklistedAt: string;
 }
 
-export interface UpvoterCommitInput {
-  readonly userId: string;
+export interface UpvoterCommitInput extends AuthorIdentity {
   readonly authorNameAtCapture: string;
   readonly tagId: string;
   readonly blacklistedAt: string;
@@ -114,7 +119,7 @@ export type TagRenamePlan =
   | { readonly status: "unchanged" | "ready"; readonly state: BlacklistState };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasExactKeys(
@@ -131,6 +136,12 @@ function isNonEmptyTrimmedString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
+export function isValidPlatformId(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.length <= MAX_PLATFORM_ID_LENGTH &&
+    PLATFORM_ID_PATTERN.test(value);
+}
+
 export function normalizeMemberHashId(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value)
     ? value.toLowerCase()
@@ -139,6 +150,22 @@ export function normalizeMemberHashId(value: unknown): string | null {
 
 export function isMemberHashId(value: unknown): value is string {
   return normalizeMemberHashId(value) !== null;
+}
+
+export function canonicalizeAuthorUserId(
+  platformId: string,
+  userId: string,
+): string {
+  return platformId === ZHIHU_PLATFORM_ID
+    ? normalizeMemberHashId(userId) ?? userId
+    : userId;
+}
+
+export function authorIdentityKey(identity: AuthorIdentity): string {
+  return JSON.stringify([
+    identity.platformId,
+    canonicalizeAuthorUserId(identity.platformId, identity.userId),
+  ]);
 }
 
 export function createInitialState(): BlacklistState {
@@ -217,46 +244,58 @@ function parseTag(value: unknown, strict: boolean): CocoonTag | null {
   return { tagId, name };
 }
 
+function hasExactAuthorKeys(
+  value: Record<string, unknown>,
+  schemaVersion: 1 | 2 | 3 | 4 | 5,
+): boolean {
+  if (schemaVersion <= 3) {
+    return true;
+  }
+  const keys = [
+    "userId",
+    "memberHashId",
+    "authorNameAtCapture",
+    "tagId",
+    "blacklistedAt",
+    "blockSource",
+  ];
+  return hasExactKeys(
+    value,
+    schemaVersion === STORAGE_SCHEMA_VERSION
+      ? ["platformId", ...keys]
+      : keys,
+  );
+}
+
 function parseAuthor(
   value: unknown,
   validTagIds: ReadonlySet<string>,
-  schemaVersion: 1 | 2 | 3 | 4,
+  schemaVersion: 1 | 2 | 3 | 4 | 5,
 ): BlacklistedAuthor | null {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !hasExactAuthorKeys(value, schemaVersion)) {
     return null;
   }
 
-  if (
-    schemaVersion === STORAGE_SCHEMA_VERSION &&
-    !hasExactKeys(value, [
-      "userId",
-      "memberHashId",
-      "authorNameAtCapture",
-      "tagId",
-      "blacklistedAt",
-      "blockSource",
-    ])
-  ) {
-    return null;
-  }
-
+  const platformId = schemaVersion === STORAGE_SCHEMA_VERSION
+    ? value.platformId
+    : ZHIHU_PLATFORM_ID;
   const { userId, memberHashId, authorNameAtCapture, tagId, blacklistedAt } = value;
   const migratedFromV1 = schemaVersion === 1;
   const blockSource = schemaVersion >= 3 ? value.blockSource : "direct";
-  const parsedMemberHashId = schemaVersion === STORAGE_SCHEMA_VERSION
+  const parsedMemberHashId = schemaVersion >= 4
     ? memberHashId === null
       ? null
       : normalizeMemberHashId(memberHashId)
     : null;
 
   if (
+    !isValidPlatformId(platformId) ||
     !isNonEmptyTrimmedString(userId) ||
     typeof authorNameAtCapture !== "string" ||
     !isNonEmptyTrimmedString(tagId) ||
     !validTagIds.has(tagId) ||
-    (schemaVersion === STORAGE_SCHEMA_VERSION &&
-      memberHashId !== null &&
-      parsedMemberHashId === null) ||
+    (schemaVersion >= 4 && memberHashId !== null && parsedMemberHashId === null) ||
+    (platformId !== ZHIHU_PLATFORM_ID && memberHashId !== null) ||
     (!migratedFromV1 &&
       blacklistedAt !== null &&
       !isValidBlacklistTimestamp(blacklistedAt)) ||
@@ -267,7 +306,8 @@ function parseAuthor(
   }
 
   return {
-    userId: normalizeMemberHashId(userId) ?? userId,
+    platformId,
+    userId: canonicalizeAuthorUserId(platformId, userId),
     memberHashId: parsedMemberHashId,
     authorNameAtCapture,
     tagId,
@@ -289,19 +329,24 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
         value.schemaVersion as (typeof LEGACY_STORAGE_SCHEMA_VERSIONS)[number],
       )) ||
     !Array.isArray(value.tags) ||
-    !Array.isArray(value.authors) ||
-    (value.schemaVersion === STORAGE_SCHEMA_VERSION &&
-      !hasExactKeys(value, ["schemaVersion", "tags", "authors"]))
+    !Array.isArray(value.authors)
   ) {
     return { status: "malformed", state: fallback };
   }
 
-  const sourceSchemaVersion = value.schemaVersion as 1 | 2 | 3 | 4;
+  const sourceSchemaVersion = value.schemaVersion as 1 | 2 | 3 | 4 | 5;
+  if (
+    sourceSchemaVersion >= 4 &&
+    !hasExactKeys(value, ["schemaVersion", "tags", "authors"])
+  ) {
+    return { status: "malformed", state: fallback };
+  }
+
   const tags: CocoonTag[] = [];
   const tagIds = new Set<string>();
   const tagNames = new Set<string>();
   for (const valueTag of value.tags) {
-    const tag = parseTag(valueTag, sourceSchemaVersion === STORAGE_SCHEMA_VERSION);
+    const tag = parseTag(valueTag, sourceSchemaVersion >= 4);
     if (!tag || tagIds.has(tag.tagId) || tagNames.has(tagLabelKey(tag.name))) {
       return { status: "malformed", state: fallback };
     }
@@ -333,7 +378,7 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
     if (
       isRecord(valueAuthor) &&
       (valueAuthor.userId !== author.userId ||
-        (sourceSchemaVersion === STORAGE_SCHEMA_VERSION &&
+        (sourceSchemaVersion >= 4 &&
           valueAuthor.memberHashId !== author.memberHashId))
     ) {
       identifiersWereNormalized = true;
@@ -344,11 +389,15 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
       if (identifier === null) {
         continue;
       }
-      const existingOwner = identifierOwners.get(identifier);
+      const scopedIdentifier = authorIdentityKey({
+        platformId: author.platformId,
+        userId: identifier,
+      });
+      const existingOwner = identifierOwners.get(scopedIdentifier);
       if (existingOwner !== undefined && existingOwner !== authorIndex) {
         return { status: "malformed", state: fallback };
       }
-      identifierOwners.set(identifier, authorIndex);
+      identifierOwners.set(scopedIdentifier, authorIndex);
     }
     authors.push(author);
   }
@@ -364,13 +413,17 @@ export function parseBlacklistState(value: unknown): ParsedBlacklistState {
 
 function identifierOwnedByAnotherAuthor(
   state: BlacklistState,
+  platformId: string,
   identifier: string,
   userId: string,
 ): boolean {
-  const canonicalIdentifier = normalizeMemberHashId(identifier) ?? identifier;
-  const canonicalUserId = normalizeMemberHashId(userId) ?? userId;
+  const canonicalIdentifier = canonicalizeAuthorUserId(platformId, identifier);
+  const canonicalUserId = canonicalizeAuthorUserId(platformId, userId);
   return state.authors.some((author) => {
-    const authorUserId = normalizeMemberHashId(author.userId) ?? author.userId;
+    if (author.platformId !== platformId) {
+      return false;
+    }
+    const authorUserId = canonicalizeAuthorUserId(platformId, author.userId);
     const authorMemberHashId = author.memberHashId === null
       ? null
       : normalizeMemberHashId(author.memberHashId);
@@ -382,22 +435,36 @@ function identifierOwnedByAnotherAuthor(
 
 export function planMemberHashBackfill(
   state: BlacklistState,
-  userId: string,
+  identity: AuthorIdentity,
   memberHashId: string,
 ): MemberHashBackfillPlan {
   const canonicalMemberHashId = normalizeMemberHashId(memberHashId);
-  if (!isNonEmptyTrimmedString(userId) || canonicalMemberHashId === null) {
+  if (
+    identity.platformId !== ZHIHU_PLATFORM_ID ||
+    !isValidPlatformId(identity.platformId) ||
+    !isNonEmptyTrimmedString(identity.userId) ||
+    canonicalMemberHashId === null
+  ) {
     return { status: "invalid", state };
   }
 
-  const canonicalUserId = normalizeMemberHashId(userId) ?? userId;
+  const canonicalUserId = canonicalizeAuthorUserId(
+    identity.platformId,
+    identity.userId,
+  );
   const authorIndex = state.authors.findIndex(
     (author) =>
-      (normalizeMemberHashId(author.userId) ?? author.userId) === canonicalUserId,
+      author.platformId === identity.platformId &&
+      canonicalizeAuthorUserId(author.platformId, author.userId) === canonicalUserId,
   );
   if (
     authorIndex < 0 ||
-    identifierOwnedByAnotherAuthor(state, canonicalMemberHashId, canonicalUserId)
+    identifierOwnedByAnotherAuthor(
+      state,
+      identity.platformId,
+      canonicalMemberHashId,
+      canonicalUserId,
+    )
   ) {
     return { status: "invalid", state };
   }
@@ -434,16 +501,19 @@ export function planAuthorCommit(
     ? null
     : normalizeMemberHashId(input.memberHashId);
   if (
+    !isValidPlatformId(input.platformId) ||
     !isNonEmptyTrimmedString(input.userId) ||
-    (input.memberHashId !== null && canonicalMemberHashId === null)
+    (input.memberHashId !== null && canonicalMemberHashId === null) ||
+    (input.platformId !== ZHIHU_PLATFORM_ID && input.memberHashId !== null)
   ) {
     return { status: "invalid", state };
   }
 
-  const canonicalUserId = normalizeMemberHashId(input.userId) ?? input.userId;
+  const canonicalUserId = canonicalizeAuthorUserId(input.platformId, input.userId);
   const existing = state.authors.find(
     (author) =>
-      (normalizeMemberHashId(author.userId) ?? author.userId) === canonicalUserId,
+      author.platformId === input.platformId &&
+      canonicalizeAuthorUserId(author.platformId, author.userId) === canonicalUserId,
   );
   if (existing) {
     if (
@@ -454,7 +524,7 @@ export function planAuthorCommit(
     }
     const backfill = planMemberHashBackfill(
       state,
-      canonicalUserId,
+      { platformId: input.platformId, userId: canonicalUserId },
       canonicalMemberHashId,
     );
     return backfill.status === "ready"
@@ -463,11 +533,17 @@ export function planAuthorCommit(
   }
 
   if (
-    identifierOwnedByAnotherAuthor(state, canonicalUserId, canonicalUserId) ||
+    identifierOwnedByAnotherAuthor(
+      state,
+      input.platformId,
+      canonicalUserId,
+      canonicalUserId,
+    ) ||
     (canonicalMemberHashId !== null &&
       (canonicalMemberHashId === canonicalUserId ||
         identifierOwnedByAnotherAuthor(
           state,
+          input.platformId,
           canonicalMemberHashId,
           canonicalUserId,
         ))) ||
@@ -493,6 +569,7 @@ export function planAuthorCommit(
   }
 
   const author: BlacklistedAuthor = {
+    platformId: input.platformId,
     userId: canonicalUserId,
     memberHashId: canonicalMemberHashId,
     authorNameAtCapture: input.authorNameAtCapture,
@@ -514,18 +591,24 @@ export function planUpvoterCommit(
   state: BlacklistState,
   input: UpvoterCommitInput,
 ): CommitPlan {
-  const canonicalUserId = normalizeMemberHashId(input.userId) ?? input.userId;
+  if (
+    !isValidPlatformId(input.platformId) ||
+    !isNonEmptyTrimmedString(input.userId)
+  ) {
+    return { status: "invalid", state };
+  }
+  const canonicalUserId = canonicalizeAuthorUserId(input.platformId, input.userId);
   if (
     state.authors.some((author) =>
-      (normalizeMemberHashId(author.userId) ?? author.userId) === canonicalUserId ||
-      normalizeMemberHashId(author.memberHashId) === canonicalUserId
+      author.platformId === input.platformId &&
+      (canonicalizeAuthorUserId(author.platformId, author.userId) === canonicalUserId ||
+        normalizeMemberHashId(author.memberHashId) === canonicalUserId)
     )
   ) {
     return { status: "duplicate", state };
   }
 
   if (
-    !isNonEmptyTrimmedString(input.userId) ||
     typeof input.authorNameAtCapture !== "string" ||
     !isNonEmptyTrimmedString(input.tagId) ||
     !state.tags.some((tag) => tag.tagId === input.tagId) ||
@@ -535,6 +618,7 @@ export function planUpvoterCommit(
   }
 
   const author: BlacklistedAuthor = {
+    platformId: input.platformId,
     userId: canonicalUserId,
     memberHashId: null,
     authorNameAtCapture: input.authorNameAtCapture,
@@ -548,34 +632,52 @@ export function planUpvoterCommit(
   };
 }
 
-function canonicalUserId(userId: string): string {
-  return normalizeMemberHashId(userId) ?? userId;
+function canonicalIdentity(identity: AuthorIdentity): AuthorIdentity | null {
+  if (!isValidPlatformId(identity.platformId) || !isNonEmptyTrimmedString(identity.userId)) {
+    return null;
+  }
+  return {
+    platformId: identity.platformId,
+    userId: canonicalizeAuthorUserId(identity.platformId, identity.userId),
+  };
 }
 
 function authorOwnsIdentifier(
   author: BlacklistedAuthor,
+  platformId: string,
   identifier: string,
 ): boolean {
-  const canonicalIdentifier = canonicalUserId(identifier);
-  return canonicalUserId(author.userId) === canonicalIdentifier ||
+  if (author.platformId !== platformId) {
+    return false;
+  }
+  const canonicalIdentifier = canonicalizeAuthorUserId(platformId, identifier);
+  return canonicalizeAuthorUserId(platformId, author.userId) === canonicalIdentifier ||
     normalizeMemberHashId(author.memberHashId) === canonicalIdentifier;
 }
 
-function authorHasExactUserId(
+function authorHasExactIdentity(
   author: BlacklistedAuthor,
-  userId: string,
+  identity: AuthorIdentity,
 ): boolean {
-  return canonicalUserId(author.userId) === canonicalUserId(userId);
+  return author.platformId === identity.platformId &&
+    canonicalizeAuthorUserId(author.platformId, author.userId) ===
+      canonicalizeAuthorUserId(identity.platformId, identity.userId);
 }
 
 function isRestorableAuthor(author: BlacklistedAuthor): boolean {
   const canonicalMemberHashId = author.memberHashId === null
     ? null
     : normalizeMemberHashId(author.memberHashId);
-  return isNonEmptyTrimmedString(author.userId) &&
-    canonicalUserId(author.userId) === author.userId &&
-    (author.memberHashId === null || canonicalMemberHashId === author.memberHashId) &&
-    canonicalMemberHashId !== canonicalUserId(author.userId) &&
+  return isValidPlatformId(author.platformId) &&
+    isNonEmptyTrimmedString(author.userId) &&
+    canonicalizeAuthorUserId(author.platformId, author.userId) === author.userId &&
+    (author.memberHashId === null ||
+      (author.platformId === ZHIHU_PLATFORM_ID &&
+        canonicalMemberHashId === author.memberHashId)) &&
+    canonicalMemberHashId !== canonicalizeAuthorUserId(
+      author.platformId,
+      author.userId,
+    ) &&
     typeof author.authorNameAtCapture === "string" &&
     isNonEmptyTrimmedString(author.tagId) &&
     (author.blacklistedAt === null || isValidBlacklistTimestamp(author.blacklistedAt)) &&
@@ -585,13 +687,14 @@ function isRestorableAuthor(author: BlacklistedAuthor): boolean {
 
 export function planAuthorRemoval(
   state: BlacklistState,
-  userId: string,
+  identity: AuthorIdentity,
 ): AuthorRemovalPlan {
-  if (!isNonEmptyTrimmedString(userId)) {
+  const canonical = canonicalIdentity(identity);
+  if (!canonical) {
     return { status: "missing", state };
   }
   const index = state.authors.findIndex((author) =>
-    authorHasExactUserId(author, userId)
+    authorHasExactIdentity(author, canonical)
   );
   const removed = state.authors[index];
   if (index < 0 || !removed) {
@@ -619,9 +722,13 @@ export function planAuthorRestoration(
   }
   if (
     state.authors.some((author) =>
-      authorOwnsIdentifier(author, original.userId) ||
+      authorOwnsIdentifier(author, original.platformId, original.userId) ||
       (original.memberHashId !== null &&
-        authorOwnsIdentifier(author, original.memberHashId))
+        authorOwnsIdentifier(
+          author,
+          original.platformId,
+          original.memberHashId,
+        ))
     )
   ) {
     return { status: "conflict", state };
@@ -634,26 +741,29 @@ export function planAuthorRestoration(
 
 export function planAuthorBatchRemoval(
   state: BlacklistState,
-  userIds: readonly string[],
+  identities: readonly AuthorIdentity[],
 ): AuthorBatchRemovalPlan {
-  if (userIds.length === 0 || userIds.some((userId) => !isNonEmptyTrimmedString(userId))) {
+  const canonical = identities.map(canonicalIdentity);
+  if (identities.length === 0 || canonical.some((identity) => identity === null)) {
     return { status: "empty", state };
   }
-  const canonicalIds = new Set(userIds.map(canonicalUserId));
-  if (canonicalIds.size !== userIds.length) {
+  const keys = new Set(
+    (canonical as AuthorIdentity[]).map(authorIdentityKey),
+  );
+  if (keys.size !== identities.length) {
     return { status: "empty", state };
   }
-  const existingIds = new Set(state.authors.map(({ userId }) => canonicalUserId(userId)));
-  if ([...canonicalIds].some((userId) => !existingIds.has(userId))) {
+  const existingKeys = new Set(state.authors.map(authorIdentityKey));
+  if ([...keys].some((key) => !existingKeys.has(key))) {
     return { status: "missing", state };
   }
-  const authors = state.authors.filter(({ userId }) =>
-    !canonicalIds.has(canonicalUserId(userId))
+  const authors = state.authors.filter((author) =>
+    !keys.has(authorIdentityKey(author))
   );
   return {
     status: "ready",
     state: { ...state, authors },
-    removedCount: userIds.length,
+    removedCount: identities.length,
   };
 }
 

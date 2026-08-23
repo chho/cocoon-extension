@@ -213,7 +213,12 @@ export function createCommentFilterController(
             // Badge reporting is observational and must not fail open filtering.
           }
         }
-        if (hidden || userId === null || !isMemberHashId(userId)) {
+        if (
+          hidden ||
+          userId === null ||
+          stableUserIds.size === 0 ||
+          !isMemberHashId(userId)
+        ) {
           continue;
         }
         if (skipAliasOnce.get(commentRoot) === userId) {

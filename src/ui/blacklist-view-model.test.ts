@@ -7,6 +7,7 @@ import type {
 } from "../core/blacklist-rpc-contract.ts";
 import {
   formatLocalTime,
+  formatPlatformId,
   formatSource,
   managementResults,
   popupResults,
@@ -22,8 +23,10 @@ function author(
   tagId: string,
   blacklistedAt: string | null,
   source: BlacklistAuthorDto["source"] = "direct",
+  platformId = "zhihu",
 ): BlacklistAuthorDto {
   return {
+    platformId,
     userId,
     memberHashId: userId === "internal-newest" ? INTERNAL_HASH : null,
     authorName,
@@ -71,17 +74,46 @@ test("POPUP-004 author and tag search are local and case-insensitive", () => {
 
 test("MANAGE-001 tag filtering composes with case-insensitive author search", () => {
   deepStrictEqual(
-    names(managementResults(snapshot, "li", "reading", "desc")),
+    names(managementResults(snapshot, "li", "reading", null, "desc")),
     ["CHARLIE", "Alice"],
   );
-  deepStrictEqual(names(managementResults(snapshot, "", "work", "desc")), [
+  deepStrictEqual(names(managementResults(snapshot, "", "work", null, "desc")), [
     "Bravo",
     "Delta",
   ]);
 });
 
+test("PLATFORM-001/AC-090 platform filtering composes independently with author search, tag, and sorting", () => {
+  const multiPlatform: BlacklistSnapshotDto = {
+    tags: snapshot.tags,
+    authors: [
+      author("shared", "Shared old", "reading", "2024-01-01T00:00:00.000Z", "direct", "zhihu"),
+      author("shared", "Shared newest", "reading", "2026-01-01T00:00:00.000Z", "upvoter", "youtube"),
+      author("future", "Shared middle", "reading", "2025-01-01T00:00:00.000Z", "direct", "future-site"),
+      author("other", "Other", "work", "2023-01-01T00:00:00.000Z", "direct", "youtube"),
+    ],
+  };
+
+  deepStrictEqual(
+    names(managementResults(multiPlatform, "shared", "reading", "youtube", "desc")),
+    ["Shared newest"],
+  );
+  deepStrictEqual(
+    names(managementResults(multiPlatform, "shared", "reading", null, "asc")),
+    ["Shared old", "Shared middle", "Shared newest"],
+  );
+  deepStrictEqual(
+    names(managementResults(multiPlatform, "", null, "youtube", "asc")),
+    ["Other", "Shared newest"],
+  );
+  strictEqual(formatPlatformId("zhihu"), "知乎");
+  strictEqual(formatPlatformId("youtube"), "YouTube");
+  strictEqual(formatPlatformId("future-site"), "future-site");
+  strictEqual(formatSource(multiPlatform.authors[1]!.source), "来自点赞者");
+});
+
 test("MANAGE-001 timestamp ascending and descending keep null times last deterministically", () => {
-  deepStrictEqual(names(managementResults(snapshot, "", null, "asc")), [
+  deepStrictEqual(names(managementResults(snapshot, "", null, null, "asc")), [
     "Alice",
     "Echo",
     "CHARLIE",
@@ -89,7 +121,7 @@ test("MANAGE-001 timestamp ascending and descending keep null times last determi
     "Delta",
     "Zulu",
   ]);
-  deepStrictEqual(names(managementResults(snapshot, "", null, "desc")), [
+  deepStrictEqual(names(managementResults(snapshot, "", null, null, "desc")), [
     "Bravo",
     "CHARLIE",
     "Echo",

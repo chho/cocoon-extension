@@ -64,6 +64,7 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
     },
     async resolveAuthorIdentity(target) {
       return {
+        platformId: "zhihu",
         userId: target.profileUserIdAtClick ?? "",
         memberHashId: target.memberHashIdAtClick,
       };
@@ -132,6 +133,64 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
   strictEqual(comment.isConnected, true);
 });
 
+test("PLATFORM-001 applies only Zhihu stable IDs and aliases to both card and comment filters", () => {
+  const hash = "a".repeat(32);
+  const state: BlacklistState = {
+    ...createInitialState(),
+    authors: [
+      {
+        platformId: "youtube",
+        userId: "shared",
+        memberHashId: null,
+        authorNameAtCapture: "YouTube",
+        tagId: "default",
+        blacklistedAt: "2026-08-14T12:00:00.000Z",
+        blockSource: "direct",
+      },
+      {
+        platformId: "unknown-site",
+        userId: hash,
+        memberHashId: null,
+        authorNameAtCapture: "Unknown",
+        tagId: "default",
+        blacklistedAt: "2026-08-14T12:00:00.000Z",
+        blockSource: "direct",
+      },
+      {
+        platformId: "zhihu",
+        userId: "shared",
+        memberHashId: hash,
+        authorNameAtCapture: "Zhihu",
+        tagId: "default",
+        blacklistedAt: "2026-08-14T12:00:00.000Z",
+        blockSource: "direct",
+      },
+    ],
+  };
+  const cardSets: ReadonlySet<string>[] = [];
+  const commentSets: ReadonlySet<string>[] = [];
+  const root = {} as Node;
+
+  applyBlacklistRuntimeState(state, root, {
+    setCurrentState() {},
+    renderTagChoices() {},
+    cardFilter: {
+      loadStableUserIds(ids) {
+        cardSets.push(new Set(ids));
+      },
+    },
+    commentFilter: {
+      refreshStableUserIds(ids, receivedRoot) {
+        strictEqual(receivedRoot, root);
+        commentSets.push(new Set(ids));
+      },
+    },
+  });
+
+  deepStrictEqual([...cardSets[0] ?? []], ["shared", hash]);
+  deepStrictEqual([...commentSets[0] ?? []], ["shared", hash]);
+});
+
 test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshes current, retained, and replacement comments without side effects", async () => {
   const dom = new JSDOM(`<!doctype html><body>
     <div class="Comments-container" id="comments">
@@ -151,6 +210,7 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
     ...initialState,
     authors: [
       {
+        platformId: "zhihu",
         userId: "trigger-author-a",
         memberHashId: null,
         authorNameAtCapture: "Original Sanitized Name",
@@ -182,6 +242,7 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
     },
     async resolveAuthorIdentity(target) {
       return {
+        platformId: "zhihu",
         userId: target.profileUserIdAtClick ?? "",
         memberHashId: target.memberHashIdAtClick,
       };

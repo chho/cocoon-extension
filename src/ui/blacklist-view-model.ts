@@ -39,6 +39,7 @@ function compareAuthorIdentity(
   right: AuthorListItem,
 ): number {
   return left.author.authorName.localeCompare(right.author.authorName) ||
+    left.author.platformId.localeCompare(right.author.platformId) ||
     left.author.userId.localeCompare(right.author.userId);
 }
 
@@ -85,6 +86,7 @@ export function managementResults(
   snapshot: BlacklistSnapshotDto,
   query: string,
   tagId: string | null,
+  platformId: string | null,
   direction: TimeSortDirection,
 ): readonly AuthorListItem[] {
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
@@ -92,7 +94,8 @@ export function managementResults(
     .filter(({ author }) =>
       (!normalizedQuery ||
         author.authorName.toLocaleLowerCase("zh-CN").includes(normalizedQuery)) &&
-      (tagId === null || author.tagId === tagId)
+      (tagId === null || author.tagId === tagId) &&
+      (platformId === null || author.platformId === platformId)
     )
     .sort((left, right) => compareTimestamps(left, right, direction));
 }
@@ -108,6 +111,12 @@ export function summarizeBlacklist(
 
 export function formatSource(source: BlacklistAuthorDto["source"]): string {
   return source === "direct" ? "手动屏蔽" : "来自点赞者";
+}
+
+export function formatPlatformId(platformId: string): string {
+  if (platformId === "zhihu") return "知乎";
+  if (platformId === "youtube") return "YouTube";
+  return platformId;
 }
 
 export function formatLocalTime(

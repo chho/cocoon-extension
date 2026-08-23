@@ -1,5 +1,6 @@
 import {
   DEFAULT_TAG_ID,
+  ZHIHU_PLATFORM_ID,
   createBlacklistTimestamp,
   planUpvoterCommit,
   type BlacklistState,
@@ -126,8 +127,9 @@ export function createRemoteBlockCoordinator(
       }
       const existing = parsed.state.authors.find(
         (author) =>
-          author.userId === request.userId ||
-          author.memberHashId === request.userId,
+          author.platformId === ZHIHU_PLATFORM_ID &&
+          (author.userId === request.userId ||
+            author.memberHashId === request.userId),
       );
       return existing?.blockSource === "direct" &&
         existing.blacklistedAt === request.expectedBlacklistedAt
@@ -176,6 +178,7 @@ export function createRemoteBlockCoordinator(
         ? request.tagId
         : DEFAULT_TAG_ID;
       const plan = planUpvoterCommit(parsed.state, {
+        platformId: ZHIHU_PLATFORM_ID,
         userId: request.userId,
         authorNameAtCapture: request.authorName,
         tagId: persistedTagId,

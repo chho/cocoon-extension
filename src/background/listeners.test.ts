@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import type { BadgeMessageResponse } from "../core/badge-message-contract.ts";
 import {
+  BLACKLIST_RPC_VERSION,
+  createBlacklistRpcRequest,
   createBlacklistRpcResponse,
   parseBlacklistRpcResponse,
 } from "../core/blacklist-rpc-contract.ts";
@@ -159,8 +161,13 @@ test("POPUP-009 malformed and unknown RPC messages remain unclaimed", async () =
   };
   for (const message of [
     { type: "future" },
-    { version: 1, type: "cocoon.blacklist.request", operation: "snapshot", input: {}, extra: true },
-    { version: 1, type: "cocoon.blacklist.request", operation: "restore-one", input: { author: { userId: "id" } } },
+    { ...createBlacklistRpcRequest("snapshot", {}), extra: true },
+    {
+      version: BLACKLIST_RPC_VERSION,
+      type: "cocoon.blacklist.request",
+      operation: "restore-one",
+      input: { author: { userId: "id" } },
+    },
   ]) {
     strictEqual(listener(message, sender, () => {}), false);
   }
@@ -182,12 +189,7 @@ test("BUG-013/AC-084 tabbed options RPC keeps the channel open and returns an ex
     runtimeId,
     () => { throw new Error("unexpected failure"); },
   );
-  strictEqual(listener({
-    version: 1,
-    type: "cocoon.blacklist.request",
-    operation: "snapshot",
-    input: {},
-  }, {
+  strictEqual(listener(createBlacklistRpcRequest("snapshot", {}), {
     id: runtimeId,
     url: `chrome-extension://${runtimeId}/options/options.html`,
     tab: { id: 2 },
@@ -205,12 +207,7 @@ test("POPUP-009 handler failures return a valid fail-closed RPC response", async
     runtimeId,
     () => { failures += 1; },
   );
-  strictEqual(listener({
-    version: 1,
-    type: "cocoon.blacklist.request",
-    operation: "snapshot",
-    input: {},
-  }, {
+  strictEqual(listener(createBlacklistRpcRequest("snapshot", {}), {
     id: runtimeId,
     url: `chrome-extension://${runtimeId}/popup/popup.html`,
   }, (value) => responses.push(value)), true);

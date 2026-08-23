@@ -111,6 +111,7 @@ function createNamedExclusiveLockManager() {
 
 function directAuthor(userId: string, tagId = "default") {
   return {
+    platformId: "zhihu",
     userId,
     memberHashId: null,
     authorNameAtCapture: `Direct ${userId}`,
@@ -246,6 +247,7 @@ function createHarness(
 function upvoterRequest(userId = "voter-user") {
   return {
     source: "upvoter" as const,
+    platformId: "zhihu",
     userId,
     authorName: `Voter ${userId}`,
     tagId: "default",
@@ -268,7 +270,7 @@ function userIdsBySlot(countPerSlot: number): readonly string[][] {
   return slots;
 }
 
-test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v4 record", async () => {
+test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v5 Zhihu record", async () => {
   const initial: BlacklistState = {
     ...createInitialState(),
     tags: [...createInitialState().tags, { tagId: "chosen", name: "Chosen" }],
@@ -289,6 +291,7 @@ test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v
   });
   deepStrictEqual(harness.state().authors, [
     {
+      platformId: "zhihu",
       userId: "voter-user",
       memberHashId: null,
       authorNameAtCapture: "Voter voter-user",
@@ -297,7 +300,7 @@ test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v
       blockSource: "upvoter",
     },
   ]);
-  strictEqual(harness.state().schemaVersion, 4);
+  strictEqual(harness.state().schemaVersion, 5);
   strictEqual(isValidBlacklistTimestamp(harness.state().authors[0]?.blacklistedAt), true);
   strictEqual(harness.runtime(), harness.state());
   strictEqual(
@@ -335,6 +338,53 @@ test("REMOTE-002 direct requests retain the remote POST path without local write
     ),
     true,
   );
+});
+
+test("PLATFORM-001 a non-Zhihu record never authorizes a Zhihu remote POST", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [{
+      ...directAuthor("shared-user"),
+      platformId: "youtube",
+    }],
+  };
+  const harness = createHarness(initial);
+
+  const result = await harness.coordinator.block({
+    source: "direct",
+    userId: "shared-user",
+    expectedBlacklistedAt: TIMESTAMP,
+  });
+
+  deepStrictEqual(result, { status: "skipped", reason: "existing" });
+  strictEqual(harness.counts().posts, 0);
+  strictEqual(harness.counts().writes, 0);
+  deepStrictEqual(harness.state(), initial);
+});
+
+test("PLATFORM-001 a cross-platform same ID does not suppress a new Zhihu upvoter record", async () => {
+  const youtube = {
+    ...directAuthor("shared-user"),
+    platformId: "youtube",
+  };
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [youtube],
+  };
+  const harness = createHarness(initial);
+
+  const result = await harness.coordinator.block(upvoterRequest("shared-user"));
+
+  deepStrictEqual(result, { status: "success", persistedUpvoter: true });
+  deepStrictEqual(harness.state().authors.map(({ platformId, userId }) => ({
+    platformId,
+    userId,
+  })), [
+    { platformId: "youtube", userId: "shared-user" },
+    { platformId: "zhihu", userId: "shared-user" },
+  ]);
+  strictEqual(harness.counts().posts, 0);
+  strictEqual(harness.counts().writes, 1);
 });
 
 test("VOTER-014 falls back to default when the selected tag was deleted after scheduling", async () => {

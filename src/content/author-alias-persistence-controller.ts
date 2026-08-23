@@ -1,4 +1,5 @@
 import {
+  ZHIHU_PLATFORM_ID,
   normalizeMemberHashId,
   planMemberHashBackfill,
   type BlacklistState,
@@ -54,7 +55,7 @@ export function createAuthorAliasPersistenceController(
 
           const plan = planMemberHashBackfill(
             parsed.state,
-            userId,
+            { platformId: ZHIHU_PLATFORM_ID, userId },
             canonicalMemberHashId,
           );
           if (plan.status === "already-present") {
