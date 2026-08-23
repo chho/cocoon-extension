@@ -407,6 +407,29 @@ test("BADGE-006 corrupt or overflowing session state fails safely", async () => 
   strictEqual(storedState(overflow.storage, 7)?.count, Number.MAX_SAFE_INTEGER);
 });
 
+test("POPUP-001/002 status reads distinguish missing, malformed, and exact large counts", async () => {
+  const harness = createHarness();
+  deepStrictEqual(await harness.controller.getStatusState(7), { status: "missing" });
+  harness.storage.values.set(badgeStorageKey(7), {
+    generation: GENERATION_A,
+    count: 12_345,
+  });
+  deepStrictEqual(await harness.controller.getStatusState(7), {
+    status: "valid",
+    state: { generation: GENERATION_A, count: 12_345 },
+  });
+  for (const invalid of [
+    { generation: GENERATION_A, count: 1, extra: true },
+    { generation: GENERATION_A, count: -1 },
+    { generation: "short", count: 1 },
+  ]) {
+    harness.storage.values.set(badgeStorageKey(7), invalid);
+    deepStrictEqual(await harness.controller.getStatusState(7), { status: "invalid" });
+  }
+  harness.storage.failGet = true;
+  deepStrictEqual(await harness.controller.getStatusState(7), { status: "invalid" });
+});
+
 test("BADGE-006 storage and Action failures report failure without rolling back committed counts", async () => {
   const storageFailure = createHarness();
   storageFailure.storage.failSet = true;

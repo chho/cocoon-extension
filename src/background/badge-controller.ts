@@ -13,7 +13,7 @@ const LOCK_NAME_PREFIX = "cocoon-badge-tab:";
 const GENERATION_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 export const BADGE_BACKGROUND_COLOR = "#5F6368";
 
-interface BadgeSessionState {
+export interface BadgeSessionState {
   readonly generation: string;
   readonly count: number;
 }
@@ -51,6 +51,11 @@ export interface BadgeControllerDependencies {
   readonly locks: BadgeLockManager;
 }
 
+export type BadgeStatusStateRead =
+  | { readonly status: "valid"; readonly state: BadgeSessionState }
+  | { readonly status: "missing" }
+  | { readonly status: "invalid" };
+
 export interface BadgeController {
   handleMessage(
     message: unknown,
@@ -58,6 +63,7 @@ export interface BadgeController {
   ): Promise<BadgeMessageResponse>;
   clearForNavigation(tabId: number): Promise<boolean>;
   clearForRemoval(tabId: number): Promise<boolean>;
+  getStatusState(tabId: number): Promise<BadgeStatusStateRead>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -261,6 +267,24 @@ export function createBadgeController(
     },
     clearForRemoval(tabId) {
       return clear(tabId, false);
+    },
+    async getStatusState(tabId) {
+      if (!Number.isSafeInteger(tabId) || tabId < 0) {
+        return { status: "invalid" };
+      }
+      try {
+        const key = badgeStorageKey(tabId);
+        const values = await dependencies.storage.get(key);
+        if (!(key in values)) {
+          return { status: "missing" };
+        }
+        const state = parseBadgeSessionState(values[key]);
+        return state
+          ? { status: "valid", state }
+          : { status: "invalid" };
+      } catch {
+        return { status: "invalid" };
+      }
     },
   };
 }

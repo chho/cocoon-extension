@@ -82,6 +82,37 @@ export type TagDeletionPlan =
   | { readonly status: "missing"; readonly state: BlacklistState }
   | { readonly status: "ready"; readonly state: BlacklistState };
 
+export type AuthorRemovalPlan =
+  | { readonly status: "missing"; readonly state: BlacklistState }
+  | {
+      readonly status: "ready";
+      readonly state: BlacklistState;
+      readonly removed: BlacklistedAuthor;
+    };
+
+export type AuthorRestorationPlan =
+  | {
+      readonly status: "conflict" | "missing-tag" | "invalid";
+      readonly state: BlacklistState;
+    }
+  | { readonly status: "ready"; readonly state: BlacklistState };
+
+export type AuthorBatchRemovalPlan =
+  | { readonly status: "empty" | "missing"; readonly state: BlacklistState }
+  | {
+      readonly status: "ready";
+      readonly state: BlacklistState;
+      readonly removedCount: number;
+    };
+
+export type TagRenamePlan =
+  | {
+      readonly status: "protected" | "missing" | "invalid";
+      readonly state: BlacklistState;
+      readonly error?: "empty" | "too-long" | "duplicate";
+    }
+  | { readonly status: "unchanged" | "ready"; readonly state: BlacklistState };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -514,6 +545,147 @@ export function planUpvoterCommit(
   return {
     status: "ready",
     state: { ...state, authors: [...state.authors, author] },
+  };
+}
+
+function canonicalUserId(userId: string): string {
+  return normalizeMemberHashId(userId) ?? userId;
+}
+
+function authorOwnsIdentifier(
+  author: BlacklistedAuthor,
+  identifier: string,
+): boolean {
+  const canonicalIdentifier = canonicalUserId(identifier);
+  return canonicalUserId(author.userId) === canonicalIdentifier ||
+    normalizeMemberHashId(author.memberHashId) === canonicalIdentifier;
+}
+
+function authorHasExactUserId(
+  author: BlacklistedAuthor,
+  userId: string,
+): boolean {
+  return canonicalUserId(author.userId) === canonicalUserId(userId);
+}
+
+function isRestorableAuthor(author: BlacklistedAuthor): boolean {
+  const canonicalMemberHashId = author.memberHashId === null
+    ? null
+    : normalizeMemberHashId(author.memberHashId);
+  return isNonEmptyTrimmedString(author.userId) &&
+    canonicalUserId(author.userId) === author.userId &&
+    (author.memberHashId === null || canonicalMemberHashId === author.memberHashId) &&
+    canonicalMemberHashId !== canonicalUserId(author.userId) &&
+    typeof author.authorNameAtCapture === "string" &&
+    isNonEmptyTrimmedString(author.tagId) &&
+    (author.blacklistedAt === null || isValidBlacklistTimestamp(author.blacklistedAt)) &&
+    (author.blockSource === "direct" || author.blockSource === "upvoter") &&
+    (author.blockSource !== "upvoter" || author.blacklistedAt !== null);
+}
+
+export function planAuthorRemoval(
+  state: BlacklistState,
+  userId: string,
+): AuthorRemovalPlan {
+  if (!isNonEmptyTrimmedString(userId)) {
+    return { status: "missing", state };
+  }
+  const index = state.authors.findIndex((author) =>
+    authorHasExactUserId(author, userId)
+  );
+  const removed = state.authors[index];
+  if (index < 0 || !removed) {
+    return { status: "missing", state };
+  }
+  return {
+    status: "ready",
+    state: {
+      ...state,
+      authors: state.authors.filter((_, authorIndex) => authorIndex !== index),
+    },
+    removed,
+  };
+}
+
+export function planAuthorRestoration(
+  state: BlacklistState,
+  original: BlacklistedAuthor,
+): AuthorRestorationPlan {
+  if (!isRestorableAuthor(original)) {
+    return { status: "invalid", state };
+  }
+  if (!state.tags.some((tag) => tag.tagId === original.tagId)) {
+    return { status: "missing-tag", state };
+  }
+  if (
+    state.authors.some((author) =>
+      authorOwnsIdentifier(author, original.userId) ||
+      (original.memberHashId !== null &&
+        authorOwnsIdentifier(author, original.memberHashId))
+    )
+  ) {
+    return { status: "conflict", state };
+  }
+  return {
+    status: "ready",
+    state: { ...state, authors: [...state.authors, original] },
+  };
+}
+
+export function planAuthorBatchRemoval(
+  state: BlacklistState,
+  userIds: readonly string[],
+): AuthorBatchRemovalPlan {
+  if (userIds.length === 0 || userIds.some((userId) => !isNonEmptyTrimmedString(userId))) {
+    return { status: "empty", state };
+  }
+  const canonicalIds = new Set(userIds.map(canonicalUserId));
+  if (canonicalIds.size !== userIds.length) {
+    return { status: "empty", state };
+  }
+  const existingIds = new Set(state.authors.map(({ userId }) => canonicalUserId(userId)));
+  if ([...canonicalIds].some((userId) => !existingIds.has(userId))) {
+    return { status: "missing", state };
+  }
+  const authors = state.authors.filter(({ userId }) =>
+    !canonicalIds.has(canonicalUserId(userId))
+  );
+  return {
+    status: "ready",
+    state: { ...state, authors },
+    removedCount: userIds.length,
+  };
+}
+
+export function planTagRename(
+  state: BlacklistState,
+  tagId: string,
+  label: string,
+): TagRenamePlan {
+  if (tagId === DEFAULT_TAG_ID) {
+    return { status: "protected", state };
+  }
+  const tagIndex = state.tags.findIndex((tag) => tag.tagId === tagId);
+  const current = state.tags[tagIndex];
+  if (tagIndex < 0 || !current) {
+    return { status: "missing", state };
+  }
+  const otherTags = state.tags.filter((tag) => tag.tagId !== tagId);
+  const validation = validateNewTagLabel(label, otherTags);
+  if (validation.error) {
+    return { status: "invalid", state, error: validation.error };
+  }
+  if (current.name === validation.normalized) {
+    return { status: "unchanged", state };
+  }
+  return {
+    status: "ready",
+    state: {
+      ...state,
+      tags: state.tags.map((tag, index) =>
+        index === tagIndex ? { ...tag, name: validation.normalized } : tag
+      ),
+    },
   };
 }
 

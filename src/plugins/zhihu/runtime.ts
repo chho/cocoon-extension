@@ -65,6 +65,10 @@ import {
   resolveZhihuContentSource,
   type ZhihuContentSource,
 } from "../../content/zhihu-content-source.ts";
+import {
+  createBackgroundBlacklistLockClient,
+  type BackgroundBlacklistLease,
+} from "../../content/background-lock-client.ts";
 
 const CARD_SELECTOR = ".TopstoryItem";
 const CONTENT_SELECTOR = ".ContentItem[data-zop]";
@@ -76,7 +80,6 @@ const ENHANCED_CARD_CLASS = "cocoon-zhihu-card";
 export const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
 const CLOSE_BUTTON_CLASS = "cocoon-zhihu-card-close";
 const DRAWER_CLASS = "cocoon-tag-drawer";
-const STORAGE_LOCK_NAME = "cocoon-blacklist-storage";
 const PREFERENCES_LOCK_NAME = "cocoon-remote-preferences-storage";
 const BATCH_SIZE = 20;
 export const COMMENT_MUTATION_ATTRIBUTE_FILTER = Object.freeze([
@@ -184,6 +187,21 @@ export function createCardVisibilityController(
 }
 
 export function mountZhihuPlugin(context: SitePluginMountContext): void {
+const storageLockClient = createBackgroundBlacklistLockClient(chrome.runtime);
+let activeStorageLease: BackgroundBlacklistLease | null = null;
+const withStorageLock = async <T>(
+  operation: () => Promise<T>,
+): Promise<T> => storageLockClient.runExclusive(async (lease) => {
+  if (activeStorageLease !== null) {
+    throw new Error("A blacklist storage lease is already active.");
+  }
+  activeStorageLease = lease;
+  try {
+    return await operation();
+  } finally {
+    activeStorageLease = null;
+  }
+});
 const cardTargetIds = new WeakMap<HTMLElement, string>();
 const resolveMemberUserId = createMemberUserIdResolver(fetch);
 let currentState: BlacklistState = createInitialState();
@@ -313,23 +331,21 @@ function replaceRuntimeState(state: BlacklistState): void {
 }
 
 async function readStoredState(): Promise<ReturnType<typeof parseBlacklistState>> {
-  const values = await chrome.storage.local.get(STORAGE_KEY);
-  return parseBlacklistState(values[STORAGE_KEY] as unknown);
+  if (activeStorageLease === null) {
+    throw new Error("Blacklist reads require an active background lease.");
+  }
+  return activeStorageLease.readState();
+}
+
+async function readStoredStateExclusive(): Promise<
+  ReturnType<typeof parseBlacklistState>
+> {
+  return withStorageLock(readStoredState);
 }
 
 function reportMalformedStorage(): void {
   console.error(
     "[Cocoon] 本地黑名单数据格式无效，已安全回退为空黑名单。",
-  );
-}
-
-async function withStorageLock<T>(
-  operation: () => Promise<T>,
-): Promise<T> {
-  return navigator.locks.request(
-    STORAGE_LOCK_NAME,
-    { mode: "exclusive" },
-    operation,
   );
 }
 
@@ -357,7 +373,10 @@ async function tryWithRemoteBlockUserLock<T>(
 }
 
 async function writeStoredState(state: BlacklistState): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  if (activeStorageLease === null) {
+    throw new Error("Blacklist writes require an active background lease.");
+  }
+  await activeStorageLease.writeState(state);
 }
 
 async function readStoredRemotePreferences(): Promise<
@@ -964,7 +983,7 @@ const remoteBackgroundRunner = createRemoteBackgroundRunner<
           onProgress,
         });
       },
-      readState: readStoredState,
+      readState: readStoredStateExclusive,
       coordinator: remoteBlockCoordinator,
       reportMalformedStorage,
       reportProgress() {},

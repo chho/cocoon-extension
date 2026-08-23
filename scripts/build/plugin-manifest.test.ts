@@ -222,6 +222,10 @@ test("ARCH-005 manifest composition generates exact stable content resources fro
       service_worker: "assets/background.js",
       type: "module",
     },
+    options_ui: {
+      page: "options/options.html",
+      open_in_tab: true,
+    },
     permissions: ["storage"],
   });
   const manifest = composeManifest(
@@ -237,6 +241,10 @@ test("ARCH-005 manifest composition generates exact stable content resources fro
     run_at: "document_idle",
   }]);
   deepStrictEqual(manifest.permissions, ["storage"]);
+  deepStrictEqual(manifest.options_ui, {
+    page: "options/options.html",
+    open_in_tab: true,
+  });
   strictEqual("host_permissions" in manifest, false);
   strictEqual("content_scripts" in base, false);
 });
@@ -261,6 +269,30 @@ test("BADGE-006 base Manifest requires the stable module Service Worker", () => 
         permissions: ["storage"],
       }),
       /module service worker assets\/background\.js/,
+    );
+  }
+});
+
+test("MANAGE-001 base Manifest requires the exact tabbed options page contract", () => {
+  for (const optionsUi of [
+    undefined,
+    { page: "options/options.html", open_in_tab: false },
+    { page: "options/other.html", open_in_tab: true },
+    { page: "options/options.html", open_in_tab: true, extra: true },
+  ]) {
+    throws(
+      () => parseBaseManifest({
+        manifest_version: 3,
+        name: "Cocoon",
+        version: "0.2.0",
+        background: {
+          service_worker: "assets/background.js",
+          type: "module",
+        },
+        options_ui: optionsUi,
+        permissions: ["storage"],
+      }),
+      /options_ui must be exactly options\/options\.html opened in a tab/,
     );
   }
 });

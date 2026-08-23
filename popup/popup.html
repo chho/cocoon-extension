@@ -6,7 +6,39 @@
     <title>Cocoon</title>
   </head>
   <body>
-    <main id="app"></main>
+    <main>
+      <header class="popup-header">
+        <h1>Cocoon</h1>
+        <p id="page-status" class="status" aria-live="polite">正在检查…</p>
+      </header>
+
+      <section class="count-section" aria-labelledby="count-label">
+        <strong id="count" class="count">0</strong>
+        <p id="count-label">本页已拦截 <span id="count-inline">0</span> 条内容</p>
+        <p id="connection-error" class="connection-error" hidden>Cocoon 无法连接当前页面。</p>
+      </section>
+
+      <section class="summary" aria-label="本地屏蔽摘要">
+        <span><strong id="author-total">—</strong> 位作者</span>
+        <span><strong id="tag-total">—</strong> 个标签</span>
+      </section>
+
+      <section class="records-section" aria-labelledby="records-title">
+        <h2 id="records-title">最近屏蔽</h2>
+        <label class="visually-hidden" for="search">搜索作者或标签</label>
+        <input id="search" type="search" autocomplete="off" placeholder="搜索作者或标签" aria-controls="records">
+        <p id="data-message" class="data-message" role="status">正在读取本地数据…</p>
+        <ul id="records" class="records" aria-live="polite"></ul>
+      </section>
+
+      <div id="undo-strip" class="undo-strip" role="status" hidden>
+        <span>已解除屏蔽</span>
+        <button id="undo" type="button" disabled>撤销</button>
+      </div>
+      <p id="save-error" class="save-error" role="alert" hidden>更改未保存，请重试。</p>
+
+      <button id="manage" class="manage" type="button">管理全部</button>
+    </main>
     <script type="module" src="/src/popup/main.ts"></script>
   </body>
 </html>

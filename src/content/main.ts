@@ -2,10 +2,12 @@ import { startSitePluginWithBadgeReset } from "./badge-bootstrap.ts";
 import { createBadgeReporter } from "./badge-reporter.ts";
 import { createSitePluginBootstrap } from "../core/plugin/bootstrap.ts";
 import { discoverSitePluginRegistry } from "../core/plugin/discovery.ts";
+import { registerContentStatusPing } from "./status-ping.ts";
 
 async function startContentScript(): Promise<void> {
+  const generation = crypto.randomUUID();
   const badgeReporter = createBadgeReporter({
-    generation: crypto.randomUUID(),
+    generation,
     async sendMessage(message) {
       return chrome.runtime.sendMessage(message);
     },
@@ -20,7 +22,9 @@ async function startContentScript(): Promise<void> {
     badgeReporter,
   );
 
-  if (result.status === "invalid-registry") {
+  if (result.status === "mounted") {
+    registerContentStatusPing(generation);
+  } else if (result.status === "invalid-registry") {
     console.error("[Cocoon] 站点插件注册表无效，内容脚本已安全停止。");
   } else if (result.status === "multiple-matches") {
     console.error("[Cocoon] 当前页面匹配多个站点插件，内容脚本已安全停止。");

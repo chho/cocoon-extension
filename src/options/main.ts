@@ -1,16 +1,15 @@
-import "./popup.css";
+import "./options.css";
 
 import { createBlacklistRpcClient } from "../ui/background-rpc.ts";
-import { bootstrapPopup } from "./app.ts";
+import { bootstrapOptions } from "./app.ts";
 
-bootstrapPopup({
+bootstrapOptions({
   document,
-  window,
   rpc: createBlacklistRpcClient(async (message) =>
     chrome.runtime.sendMessage(message)
   ),
   storageChanges: chrome.storage.onChanged,
-  async openOptionsPage() {
-    await chrome.runtime.openOptionsPage();
+  requestFrame(callback) {
+    return requestAnimationFrame(callback);
   },
 });

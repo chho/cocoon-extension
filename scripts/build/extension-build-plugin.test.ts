@@ -1,7 +1,8 @@
 import { deepStrictEqual, match, ok, rejects } from "node:assert/strict";
+import { realpathSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { runInNewContext } from "node:vm";
 
@@ -31,6 +32,8 @@ interface FixtureProjectPaths {
   readonly discoveryPath: string;
   readonly contentEntryPath: string;
   readonly backgroundEntryPath: string;
+  readonly popupHtmlPath: string;
+  readonly optionsHtmlPath: string;
   readonly baseManifestPath: string;
   readonly outDir: string;
 }
@@ -185,12 +188,18 @@ async function writeFixtureProject(
   const discoveryPath = join(projectRoot, "src/core/plugin/discovery.ts");
   const contentEntryPath = join(projectRoot, "src/content/main.ts");
   const backgroundEntryPath = join(projectRoot, "src/background/main.ts");
+  const popupHtmlPath = join(projectRoot, "popup/popup.html");
+  const optionsHtmlPath = join(projectRoot, "options/options.html");
   const baseManifestPath = join(projectRoot, "public/manifest.json");
   const outDir = join(projectRoot, "dist");
 
   await mkdir(join(projectRoot, "src/core/plugin"), { recursive: true });
   await mkdir(join(projectRoot, "src/content"), { recursive: true });
   await mkdir(join(projectRoot, "src/background"), { recursive: true });
+  await mkdir(join(projectRoot, "src/popup"), { recursive: true });
+  await mkdir(join(projectRoot, "src/options"), { recursive: true });
+  await mkdir(join(projectRoot, "popup"), { recursive: true });
+  await mkdir(join(projectRoot, "options"), { recursive: true });
   await mkdir(join(projectRoot, "public"), { recursive: true });
   await writeFile(
     baseManifestPath,
@@ -198,9 +207,16 @@ async function writeFixtureProject(
       manifest_version: 3,
       name: "Cocoon build fixture",
       version: "0.2.0",
+      action: {
+        default_popup: "popup/popup.html",
+      },
       background: {
         service_worker: "assets/background.js",
         type: "module",
+      },
+      options_ui: {
+        page: "options/options.html",
+        open_in_tab: true,
       },
       permissions: ["storage"],
     })}\n`,
@@ -229,6 +245,34 @@ async function writeFixtureProject(
     backgroundEntryPath,
     `globalThis.__COCOON_BACKGROUND_FIXTURE__ = true;\n`,
   );
+  await writeFile(
+    join(projectRoot, "src/popup/main.ts"),
+    `import "./popup.css";\n` +
+      `document.body.dataset.popupFixture = "ready";\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/popup/popup.css"),
+    `.popup-fixture { color: black; }\n`,
+  );
+  await writeFile(
+    popupHtmlPath,
+    `<!doctype html><html><head><meta charset="UTF-8"><title>Popup</title></head>` +
+      `<body class="popup-fixture"><script type="module" src="/src/popup/main.ts"></script></body></html>\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/options/main.ts"),
+    `import "./options.css";\n` +
+      `document.body.dataset.optionsFixture = "ready";\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/options/options.css"),
+    `.options-fixture { color: black; }\n`,
+  );
+  await writeFile(
+    optionsHtmlPath,
+    `<!doctype html><html><head><meta charset="UTF-8"><title>Options</title></head>` +
+      `<body class="options-fixture"><script type="module" src="/src/options/main.ts"></script></body></html>\n`,
+  );
 
   return {
     projectRoot,
@@ -236,6 +280,8 @@ async function writeFixtureProject(
     discoveryPath,
     contentEntryPath,
     backgroundEntryPath,
+    popupHtmlPath,
+    optionsHtmlPath,
     baseManifestPath,
     outDir,
   };
@@ -249,7 +295,7 @@ function createFixtureBuildConfig(
 ): InlineConfig {
   return {
     configFile: false,
-    root: fixture.projectRoot,
+    root: realpathSync(fixture.projectRoot),
     publicDir: false,
     clearScreen: false,
     logLevel: "silent",
@@ -269,10 +315,16 @@ function createFixtureBuildConfig(
       rollupOptions: {
         input: includeBackground
           ? {
-            content: fixture.contentEntryPath,
-            background: fixture.backgroundEntryPath,
+            popup: realpathSync(fixture.popupHtmlPath),
+            options: realpathSync(fixture.optionsHtmlPath),
+            content: realpathSync(fixture.contentEntryPath),
+            background: realpathSync(fixture.backgroundEntryPath),
           }
-          : { content: fixture.contentEntryPath },
+          : {
+            popup: realpathSync(fixture.popupHtmlPath),
+            options: realpathSync(fixture.optionsHtmlPath),
+            content: realpathSync(fixture.contentEntryPath),
+          },
         output: {
           entryFileNames: "assets/[name].js",
           chunkFileNames: "assets/[name].js",
@@ -339,6 +391,27 @@ async function readBuildOutputSnapshot(
   };
 }
 
+async function assertBuiltPageAssets(
+  outDir: string,
+  htmlPath: string,
+): Promise<void> {
+  const html = await readFile(join(outDir, htmlPath), "utf8");
+  const references = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
+    .map((matchResult) => matchResult[1])
+    .filter((reference): reference is string => reference !== undefined);
+  const scriptReferences = references.filter((reference) => reference.endsWith(".js"));
+  const styleReferences = references.filter((reference) => reference.endsWith(".css"));
+  ok(scriptReferences.length >= 1, `${htmlPath} must reference JavaScript`);
+  ok(styleReferences.length >= 1, `${htmlPath} must reference CSS`);
+  for (const reference of [...scriptReferences, ...styleReferences]) {
+    const assetPath = reference.startsWith("/")
+      ? resolve(outDir, reference.replace(/^\/+/, ""))
+      : resolve(outDir, dirname(htmlPath), reference);
+    const contents = await readFile(assetPath, "utf8");
+    ok(contents.length > 0, `${htmlPath} asset ${reference} must not be empty`);
+  }
+}
+
 async function readBuiltState(
   outDir: string,
 ): Promise<{
@@ -356,6 +429,15 @@ async function readBuiltState(
     service_worker: "assets/background.js",
     type: "module",
   });
+  deepStrictEqual(manifest.options_ui, {
+    page: "options/options.html",
+    open_in_tab: true,
+  });
+  deepStrictEqual(manifest.action, {
+    default_popup: "popup/popup.html",
+  });
+  await assertBuiltPageAssets(outDir, "popup/popup.html");
+  await assertBuiltPageAssets(outDir, "options/options.html");
   const contentScripts = manifest.content_scripts;
   if (!Array.isArray(contentScripts) || contentScripts.length !== 1) {
     throw new Error("Fixture Manifest has invalid content_scripts");

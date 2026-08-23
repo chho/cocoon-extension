@@ -10,9 +10,13 @@ import {
   isValidBlacklistTimestamp,
   normalizeMemberHashId,
   parseBlacklistState,
+  planAuthorBatchRemoval,
   planAuthorCommit,
+  planAuthorRemoval,
+  planAuthorRestoration,
   planMemberHashBackfill,
   planTagDeletion,
+  planTagRename,
   planUpvoterCommit,
   resolveInitializedState,
   runtimeStateAfterPersistence,
@@ -319,4 +323,108 @@ test("only advances runtime state after persistence succeeds", () => {
   const candidate: BlacklistState = { ...previous, authors: [author("stable-user")] };
   strictEqual(runtimeStateAfterPersistence(previous, candidate, false), previous);
   strictEqual(runtimeStateAfterPersistence(previous, candidate, true), candidate);
+});
+
+test("POPUP-005 removal returns and preserves the exact original record", () => {
+  const original = {
+    ...author("stable-user", HASH_A),
+    authorNameAtCapture: "Original Name",
+    tagId: "reading",
+    blacklistedAt: "2025-01-02T03:04:05.006Z",
+    blockSource: "upvoter" as const,
+  };
+  const state: BlacklistState = {
+    ...createInitialState(),
+    tags: [...createInitialState().tags, { tagId: "reading", name: "Reading" }],
+    authors: [original, author("other-user", HASH_B)],
+  };
+  const plan = planAuthorRemoval(state, "stable-user");
+  strictEqual(plan.status, "ready");
+  if (plan.status !== "ready") return;
+  strictEqual(plan.removed, original);
+  deepStrictEqual(plan.removed, original);
+  deepStrictEqual(plan.state.authors, [state.authors[1]]);
+  deepStrictEqual(plan.state.tags, state.tags);
+  strictEqual(planAuthorRemoval(state, HASH_A).status, "missing");
+});
+
+test("POPUP-005 exact restoration rejects author and tag conflicts without overwriting", () => {
+  const original = { ...author("restore", HASH_A), tagId: "reading" };
+  const state: BlacklistState = {
+    ...createInitialState(),
+    tags: [...createInitialState().tags, { tagId: "reading", name: "Reading" }],
+    authors: [author("concurrent")],
+  };
+  const ready = planAuthorRestoration(state, original);
+  strictEqual(ready.status, "ready");
+  if (ready.status !== "ready") return;
+  strictEqual(ready.state.authors[0], state.authors[0]);
+  strictEqual(ready.state.authors[1], original);
+
+  for (const conflicting of [
+    { ...state, authors: [...state.authors, author("restore")] },
+    { ...state, authors: [...state.authors, author("different", HASH_A)] },
+  ]) {
+    const conflict = planAuthorRestoration(conflicting, original);
+    strictEqual(conflict.status, "conflict");
+    strictEqual(conflict.state, conflicting);
+  }
+  const missingTag = planAuthorRestoration(
+    { ...state, tags: createInitialState().tags },
+    original,
+  );
+  strictEqual(missingTag.status, "missing-tag");
+  strictEqual(missingTag.state.authors[0], state.authors[0]);
+  strictEqual(
+    planAuthorRestoration(state, { ...original, blacklistedAt: "invalid" }).status,
+    "invalid",
+  );
+});
+
+test("MANAGE-001 batch removal is exact and atomic", () => {
+  const state: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("one"), author("two", HASH_A), author("three")],
+  };
+  const ready = planAuthorBatchRemoval(state, ["one", "three"]);
+  strictEqual(ready.status, "ready");
+  if (ready.status !== "ready") return;
+  strictEqual(ready.removedCount, 2);
+  deepStrictEqual(ready.state.authors, [state.authors[1]]);
+  strictEqual(ready.state.authors[0], state.authors[1]);
+
+  for (const ids of [["one", "missing"], ["one", "one"], [], [" one"]]) {
+    const rejected = planAuthorBatchRemoval(state, ids);
+    strictEqual(rejected.status === "ready", false);
+    strictEqual(rejected.state, state);
+  }
+});
+
+test("MANAGE-002 tag rename enforces default, trim, code-point, and duplicate rules", () => {
+  const state: BlacklistState = {
+    ...createInitialState(),
+    tags: [
+      ...createInitialState().tags,
+      { tagId: "reading", name: "Reading" },
+      { tagId: "work", name: "Work" },
+    ],
+    authors: [{ ...author("one", HASH_A), tagId: "reading" }],
+  };
+  for (const [tagId, name, status] of [
+    [DEFAULT_TAG_ID, "Changed", "protected"],
+    ["missing", "Changed", "missing"],
+    ["reading", "  ", "invalid"],
+    ["reading", "wOrK", "invalid"],
+    ["reading", "😀".repeat(31), "invalid"],
+    ["reading", "Reading", "unchanged"],
+  ] as const) {
+    const plan = planTagRename(state, tagId, name);
+    strictEqual(plan.status, status);
+    strictEqual(plan.state, state);
+  }
+  const ready = planTagRename(state, "reading", "  Personal  ");
+  strictEqual(ready.status, "ready");
+  if (ready.status !== "ready") return;
+  deepStrictEqual(ready.state.tags[1], { tagId: "reading", name: "Personal" });
+  strictEqual(ready.state.authors[0], state.authors[0]);
 });

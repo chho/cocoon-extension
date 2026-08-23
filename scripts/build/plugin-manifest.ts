@@ -197,6 +197,17 @@ export function parseBaseManifest(value: unknown): ExtensionManifest {
       "base Manifest must define the module service worker assets/background.js",
     );
   }
+  const optionsUi = value.options_ui;
+  if (
+    !isRecord(optionsUi) ||
+    Object.keys(optionsUi).length !== 2 ||
+    optionsUi.page !== "options/options.html" ||
+    optionsUi.open_in_tab !== true
+  ) {
+    throw buildError(
+      "base Manifest options_ui must be exactly options/options.html opened in a tab",
+    );
+  }
   return { ...value };
 }
 

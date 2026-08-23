@@ -12,14 +12,6 @@ export interface InitializeBlacklistStateDependencies {
 export async function initializeBlacklistState(
   dependencies: InitializeBlacklistStateDependencies,
 ): Promise<ParsedBlacklistState> {
-  const initialRead = await dependencies.readState();
-  if (
-    initialRead.status !== "missing" &&
-    initialRead.status !== "migrated"
-  ) {
-    return initialRead;
-  }
-
   return dependencies.withExclusiveLock(async () => {
     const latestRead = await dependencies.readState();
     if (
