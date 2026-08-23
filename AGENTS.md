@@ -62,14 +62,22 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 npm ci
 npm test
 npm run typecheck
+npm run format
+npm run format:check
+npm run lint
+npm run check
 npm run build
 npm run dev
 npm run snapshot:zhihu
 ```
 
 - `npm ci`：按已提交的 lockfile 进行可复现安装；只有明确变更依赖时才使用 `npm install` 并同步提交 lockfile。
-- `npm test`：运行 background、内容逻辑、RPC、Popup、options、UI、插件 registry、构建/Manifest 和快照纯函数测试。
+- `npm test`：运行 background、内容逻辑、RPC、Popup、options、UI、插件 registry、构建/Manifest、快照和工程工具纯函数测试。
 - `npm run typecheck`：执行严格 TypeScript 类型检查。
+- `npm run format`：格式化新增违规和内容已变化的债务文件，但默认跳过内容哈希完全未变的既有格式债务；可在 `--` 后传入维护范围内的具体文件进行显式迁移。
+- `npm run format:check`：检查维护中的源码、脚本、扩展页面、样式和配置；既有格式债务必须与内容哈希基线精确一致，新增、变化、已解决、缺失或失效的条目都会失败。
+- `npm run lint`：仅扫描根配置、`src/**` 和 `scripts/**` 中维护的 JS/MJS/TS；错误必须清零，warning 必须逐条匹配内容敏感基线。
+- `npm run check`：依次运行格式检查、lint、测试和完整构建。
 - `npm run build`：先进行类型检查，再扫描插件 descriptor、构建四个入口并生成最终 `dist/manifest.json`。
 - `npm run dev`：监听源码变化并持续重新构建。
 - `npm run snapshot:zhihu`：显式连接现有 Chrome，生成包含真实作者标识的本地最小知乎快照。
@@ -77,6 +85,8 @@ npm run snapshot:zhihu
 每次修改代码、测试、Manifest 或构建配置后，至少运行：
 
 ```bash
+npm run format:check
+npm run lint
 npm test
 npm run typecheck
 npm run build
@@ -171,6 +181,52 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 插件模块导入必须无浏览器副作用；只有成功选择后才可且只可调用一次 `mount()`，并由所选插件注册 DOM observer、storage listener、锁和网络接线。
 - 当前只有知乎插件，不表示或暗示已支持 YouTube 或其他网站。增加站点前必须另行确认身份、DOM、storage 命名空间、Manifest 范围和验收需求。
 
+## 工程质量与模块边界
+
+这些目标用于约束复杂度和职责，而不是鼓励为了数字机械拆函数。拆分必须形成可命名、可测试且依赖方向清楚的边界；不得用只转发一次的碎片 helper 隐藏复杂度。
+
+### 格式、规模与复杂度
+
+- Prettier `printWidth` 为 100，代码和配置以 100 列为目标；不可拆分且拆分会改变语义或可读性的 URL、正则、选择器、协议字符串和其他完整字符串可以超过 100 列。
+- 函数通常不超过 50 个逻辑行（忽略空行和纯注释行）。超过 80 个逻辑行必须拆分；确实不能拆分时，开发报告必须说明职责边界、风险和保留理由。
+- 控制流嵌套不超过 3 层；优先使用 guard clause、提前返回或提取有业务含义的步骤，不能仅为满足规则改写成更难读的布尔表达式。
+- 圈复杂度目标不超过 10；超过 12 必须重构为可独立验证的决策或阶段。10～12 需要确认分支仍属于同一职责并有覆盖关键路径的测试。
+- 函数最多使用 4 个位置参数；更多输入改用有明确名称的 options 对象。不要把本应分离的职责仅包装进一个巨型 options 对象。
+- 生产模块目标不超过 500 个逻辑行；超过 700 行必须在开发报告中给出按职责拆分的具体计划。测试文件可以更长，但必须按行为或场景分组，并提取重复 fixture、driver 和断言 helper。
+- 既有超限文件和函数执行非回归规则：本次修改不得增加其逻辑行、复杂度、嵌套或职责面；新增职责必须提取到新模块。若修复无法避免短期增加，必须报告增量、原因和后续拆分计划。
+
+### 单一职责与依赖方向
+
+- “单一职责”指模块只有一个可陈述的变化原因。例如 schema 规则变化不应迫使 DOM adapter 或 Chrome listener 同时改写；页面选择器变化不应进入领域状态迁移；消息接线变化不应改动纯排序或冲突规则。
+- 纯领域层负责身份、schema、迁移、验证、排序、冲突与状态转换：输入输出显式，不读取 DOM、`chrome.*`、网络、时钟或模块级可变状态。
+- 站点 adapter 只把已验证的站点 DOM/响应转换为领域输入，并把领域决定应用回页面；知乎 selector、端点和成员 alias 不得泄漏到跨站核心层。
+- 扩展 wiring 只负责 Manifest 入口、Chrome 事件/RPC、storage、锁和生命周期接线；listener 应委托给领域或 controller，不在回调内复制业务规则。
+- 依赖方向保持为 wiring/站点 adapter 依赖领域契约，而不是领域层反向依赖浏览器实现。跨边界使用最小接口，以便用确定性 fake 测试。
+
+### 异步、并发与生命周期
+
+- 不允许 floating Promise。每个 Promise 必须被 `await`、明确 `return`，或在确实 fire-and-forget 时用 `void` 启动并在内部收敛错误；Node test runner 接管的 `test(...)` 注册调用是工具配置中的明确安全例外。
+- 所有 storage read-modify-write、导入/迁移、alias 补写和会产生重复副作用的网络/DOM 操作必须在既有锁或等价单飞机制内完成；锁内重读权威状态，保证重试、重复消息和并发 listener 不会重复写入、POST 或注入。
+- 网络、消息、长任务和可等待 UI 必须定义合理的 timeout 或取消边界。成功、超时、取消、抛错和 worker/port 中断都必须收敛到可再次操作的稳定状态，并在 `finally` 中释放锁、listener、timer、observer 和临时 DOM。
+- Service Worker 随时可能终止；跨事件权威状态写入 `chrome.storage.local` / `chrome.storage.session`。模块内缓存只能是可丢弃优化，事件处理必须能够从持久状态重建且保持幂等。
+
+### 外部数据、DOM 与可访问性
+
+- Storage、RPC、`postMessage`、网络 JSON、DOM dataset、文件导入和插件 descriptor 一律以 `unknown` 进入系统；先校验对象形状、精确键、类型、范围、长度、版本和 discriminant，再缩窄为领域类型。不得用类型断言代替运行时校验。
+- Schema 迁移必须幂等、失败安全并保持不变量；每个受支持旧版本、当前版本、未知未来版本、缺失/额外字段、损坏数据和重复迁移都要有测试。写回只能发生在完整验证和迁移成功之后。
+- DOM 扫描和批量更新通过 `requestAnimationFrame` 分批调度，必要时主动让出主线程；动态页面操作必须幂等，重复 observer 通知不能重复按钮、listener、请求或计数。
+- controller 必须拥有并清理自己创建的 observer、listener、timer、port 和临时节点；卸载、重挂载、抽屉关闭和页面生命周期结束后不得留下活动副作用。
+- 注入 UI 使用语义化原生控件，提供可访问名称、键盘操作、可见 focus、合理焦点恢复和状态文本；不得只靠颜色表达状态，并尊重受限尺寸、长文本和缩放。
+
+### 测试、依赖、注释与工具基线
+
+- 回归测试面向可观察行为和不变量，而不是复制实现步骤；固定时间、随机数、网络、storage 和 DOM 调度，避免真实计时等待、顺序偶然性、共享全局状态及依赖线上页面。失败用例应在修复前稳定复现。
+- 复杂分支使用表驱动或按行为分组的测试，明确成功、边界、超时/取消、并发重复和失败收敛；测试名称说明条件与结果。
+- 新依赖必须解决现有平台能力不能合理解决的问题，并报告用途、维护/供应链成本、bundle/runtime 影响和许可证；优先 devDependency，禁止为方便而扩大 MV3 权限、host scope 或引入远程运行时代码。
+- 注释解释约束、风险和“为什么”，尤其是锁、迁移、浏览器缺陷和安全边界；不要复述代码，也不要保留与实现不一致的注释。可由名称和类型表达的规则应优先写进结构与测试。
+- ESLint 明确排除 `docs/**`、`dist/**`、`node_modules/**` 和 `.pi/**`。TS 与维护中的 `scripts/**/*.mjs` 都执行 type-aware Promise 和 misused Promise error 规则；`node:test` 的 `test(...)` 注册是唯一 safe-call 例外。type import 与 switch 穷尽性规则仅用于 TS。既有 recommended、复杂度和规模债务暂为 warning，`scripts/tooling/eslint-warning-baseline.json` 按相对路径、rule/message identity、完整消息、规范化源码行和重复次数锁定；新增、替换、恶化或已解决但未清理的 warning 都会失败。
+- Prettier 会扫描全部维护中的代码/配置目标；`scripts/tooling/prettier-baseline.json` 只记录引入工具时已经存在的未格式化文件及其内容哈希。新增违规、内容已变化的债务、文件缺失、已清除但未移除或越界条目都会使 `format:check` 失败。默认 `npm run format` 跳过哈希完全未变的债务，格式化其余违规并清理对应条目，避免无关全仓重排；不得把新文件加入基线来绕过格式化。
+
 ## Chrome Extension 规则
 
 - 始终使用 Manifest V3，不得引入 Manifest V2 API。
@@ -248,11 +304,9 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 ## TypeScript 与代码风格
 
-- 保持 `strict` 类型检查通过。
-- 不使用 `any`；为外部数据定义最小必要接口。
-- 优先使用 `const`，仅在需要重新赋值时使用 `let`。
-- 函数职责保持单一，DOM 查询和数据解析应便于独立调整。
-- 使用 `async/await`，不要新增 `.then()` 链。
+- 保持 `strict` 类型检查通过，不使用 `any`；外部数据按 unknown-first 规则校验后再缩窄。
+- 优先使用 `const`，仅在需要重新赋值时使用 `let`；类型导入使用 `import type` 或 inline type specifier。
+- 使用 `async/await`，不要新增 `.then()` 链；Promise 所有权、并发和失败路径遵循上文规则。
 - 不使用 `eval()`、`new Function()` 或其他违反扩展 CSP 的实现。
 - 不要依赖内容脚本中的全局可变状态保存持久数据；需要持久化时使用 `chrome.storage`。
 
@@ -268,6 +322,8 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 仅修改普通文档时，只要求执行 `git diff --check`，并核对文档引用与事实准确性；以下测试、类型检查、构建和产物项仅适用于代码、测试、Manifest 或构建配置变更。其余安全、敏感数据和真实浏览器报告项始终适用。
 
+- [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run format:check` 通过
+- [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run lint` 通过且 warning 逐条匹配内容敏感基线
 - [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm test` 通过
 - [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run typecheck` 通过
 - [ ] 若本次涉及代码、测试、Manifest 或构建配置，`npm run build` 通过
