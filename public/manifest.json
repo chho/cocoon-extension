@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Cocoon",
   "version": "0.2.0",
-  "description": "Adds useful controls to the Zhihu home feed.",
+  "description": "Adds quiet, local controls to supported content feeds.",
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Cocoon"

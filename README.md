@@ -4,7 +4,7 @@
 
 ### Quiet controls for a noisy feed.
 
-Cocoon is a local-first Chrome extension for shaping the Zhihu home feed around the people you choose to see—or stop seeing.
+Cocoon is a local-first Chrome extension that gives you quiet, precise control over who appears in the feeds you browse.
 
 `×` &nbsp;→&nbsp; `tag` &nbsp;→&nbsp; `quiet`
 
@@ -18,7 +18,7 @@ Cocoon is a local-first Chrome extension for shaping the Zhihu home feed around 
 
 A feed is easier to live with when its controls are close to the content.
 
-Cocoon adds one deliberately small action to each supported Zhihu feed card. Choose a tag, and Cocoon remembers the author locally, hides matching cards and comments, and continues filtering as the feed updates.
+Cocoon adds one deliberately small action to each feed card supported by a bundled site plugin. Choose a tag, and Cocoon remembers the author locally, hides matching cards and comments, and continues filtering as the feed updates.
 
 No dashboard to configure before browsing. No cloud account. No decorative noise.
 
@@ -34,11 +34,11 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 ### In the feed
 
-- Adds a minimal `×` control to supported cards on the Zhihu home feed.
+- Adds a minimal `×` control to cards supported by the active site plugin.
 - Opens a compact tag drawer before taking action.
 - Hides current and newly inserted cards from locally blocked authors.
 - Hides comments and replies from the same authors.
-- Adds the same blocking entry point to supported Zhihu author hover cards.
+- Adds the same blocking entry point to supported author surfaces.
 
 ### In the popup
 
@@ -55,9 +55,9 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 - Imports or exports a strictly validated JSON backup.
 - Supports atomic merge and confirmed replace-all imports.
 
-### Optional Zhihu actions
+### Site-specific actions
 
-The tag drawer contains two independent options. Both are off by default and remember their most recently saved state.
+The current Zhihu plugin adds two independent options to the tag drawer. Both are off by default and remember their most recently saved state.
 
 - **Block this author on Zhihu** — also sends a same-origin request that changes the signed-in Zhihu account's real block list.
 - **Hide voters of this content** — reads the answer's voters or article's likers and adds eligible users to Cocoon's local blacklist. It does **not** remotely block those voters on Zhihu.
@@ -65,15 +65,15 @@ The tag drawer contains two independent options. Both are off by default and rem
 > [!IMPORTANT]
 > When **Block this author on Zhihu** is enabled, choosing a tag authorizes the account-level block immediately. Cocoon does not show a second confirmation dialog. Review the visible checkbox before choosing a tag.
 
-## Supported pages
+## Supported sites
 
-Cocoon currently runs only on the exact Zhihu home page:
+Cocoon uses build-time site plugins so each integration can define its own page scope, identity model, and capabilities. The current release ships one plugin, limited to this exact page:
 
 ```text
 https://www.zhihu.com/
 ```
 
-Platform-aware records in imported data do not imply support for YouTube or any other website. Additional sites require their own reviewed plugin, page scope, identity model, and acceptance criteria.
+A platform label in imported data does not mean that platform is supported. Each additional site requires its own reviewed plugin and acceptance criteria.
 
 ## Install from source
 
@@ -98,23 +98,23 @@ The production extension is generated in `dist/`.
 2. Enable **Developer mode**.
 3. Select **Load unpacked**.
 4. Choose the generated `dist/` directory—not the repository root.
-5. Open or refresh `https://www.zhihu.com/`.
+5. Open or refresh a page listed under [Supported sites](#supported-sites).
 
-After changing the Manifest or a content script, rebuild the project, reload the extension, and refresh the Zhihu page.
+After changing the Manifest or a content script, rebuild the project, reload the extension, and refresh the supported page.
 
 ## Data & privacy
 
 Cocoon currently stores the following data in `chrome.storage.local`:
 
 - platform identifier;
-- stable author identifier and an optional verified Zhihu alias;
+- stable author identifier and an optional verified site-specific alias;
 - author display name captured at the time of blocking;
 - tag association;
 - block source;
 - first-blocked timestamp;
-- the two optional Zhihu-action preferences.
+- preferences for site-specific actions implemented by the active plugin.
 
-Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to the existing Zhihu origin and are made only for implemented identity resolution, voter lookup, or explicitly enabled account-level actions.
+Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to origins declared by bundled site plugins and are made only for implemented identity resolution, content-related lookup, or explicitly enabled account-level actions. The current build makes such requests only to the supported page's existing origin.
 
 Exported JSON files contain local author and tag records. Treat them as personal data: store them securely and inspect their destination before sharing.
 
@@ -128,7 +128,7 @@ Cocoon requests one Chrome extension permission:
 | --- | --- |
 | `storage` | Saves the local blacklist, tags, preferences, migrations, and temporary per-tab badge state. |
 
-The content script scope is generated from the bundled Zhihu plugin descriptor and is limited to `https://www.zhihu.com/`. Cocoon does not request `<all_urls>`, `tabs`, `scripting`, `downloads`, or `unlimitedStorage`.
+Content script scope is generated from bundled site plugin descriptors. The current build is limited to the exact page listed under [Supported sites](#supported-sites). Cocoon does not request `<all_urls>`, `tabs`, `scripting`, `downloads`, or `unlimitedStorage`.
 
 ## Development
 
@@ -149,7 +149,7 @@ options/                    Management-page HTML entry
 src/background/             Service worker and serialized storage operations
 src/content/                Shared filtering and blacklist logic
 src/core/plugin/            Strict plugin contracts, discovery, and registry
-src/plugins/zhihu/          Zhihu descriptor, runtime wiring, and styles
+src/plugins/<id>/           Site descriptors, runtime wiring, and styles
 src/options/                Management-page behavior and views
 src/popup/                  Popup behavior and views
 scripts/build/              Plugin scanning and Manifest composition
@@ -184,7 +184,7 @@ For behavior changes, consult `docs/blacklist-spec.md` before implementation.
 
 ## Known boundary
 
-Zhihu's DOM and same-origin API contracts can change without notice. Cocoon validates known structures and fails safely where possible, but a future Zhihu update may require a new extension release.
+Supported websites can change their DOM and same-origin API contracts without notice. Cocoon validates the structures declared by each plugin and fails safely where possible, but a site update may require a new extension release.
 
 Real-browser acceptance remains separate from automated tests.
 
@@ -192,12 +192,12 @@ Real-browser acceptance remains separate from automated tests.
 
 Cocoon is licensed under the [Apache License 2.0](LICENSE).
 
-The license applies to the source code. It does not grant permission to use third-party trademarks, including the Zhihu name or branding, beyond descriptive use permitted by law.
+The license applies to the source code. It does not grant permission to use third-party trademarks beyond descriptive use permitted by law.
 
 ---
 
 <div align="center">
 
-**Cocoon is an independent project and is not affiliated with, endorsed by, or maintained by Zhihu.**
+**Cocoon is an independent project and is not affiliated with, endorsed by, or maintained by the platforms it supports.**
 
 </div>
