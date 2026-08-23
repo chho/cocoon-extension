@@ -8,15 +8,25 @@
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/background/*.test.ts src/content/*.test.ts src/core/*.test.ts src/core/plugin/*.test.ts src/options/*.test.ts src/popup/*.test.ts src/ui/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs",
+    "test": "node --test src/background/*.test.ts src/content/*.test.ts src/core/*.test.ts src/core/plugin/*.test.ts src/options/*.test.ts src/popup/*.test.ts src/ui/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs scripts/tooling/*.test.mjs",
+    "format": "node scripts/tooling/format.mjs",
+    "format:check": "node scripts/tooling/check-format.mjs",
+    "lint": "node scripts/tooling/check-eslint.mjs",
+    "check": "npm run format:check && npm run lint && npm test && npm run build",
     "snapshot:zhihu": "node scripts/capture-zhihu-snapshot.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/chrome": "^0.1.31",
     "@types/jsdom": "28.0.1",
     "@types/node": "^24.10.0",
+    "eslint": "^10.9.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.11.0",
     "jsdom": "29.0.0",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
     "vite": "^7.1.12"
   }
 }
