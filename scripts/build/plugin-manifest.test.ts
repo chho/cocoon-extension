@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import {
   composeManifest,
   parseBaseManifest,
+  readBaseManifest,
   scanSitePlugins,
 } from "./plugin-manifest.ts";
 
@@ -247,6 +248,26 @@ test("ARCH-005 manifest composition generates exact stable content resources fro
   });
   strictEqual("host_permissions" in manifest, false);
   strictEqual("content_scripts" in base, false);
+});
+
+test("MANAGE-004 actual source Manifest keeps Blob transfer free of downloads permission", async () => {
+  const base = await readBaseManifest(join(
+    import.meta.dirname,
+    "../../public/manifest.json",
+  ));
+  const manifest = composeManifest(
+    base,
+    [{ descriptor: { id: "zhihu", matches: ["https://www.zhihu.com/"] } }],
+    { js: "assets/content.js", css: "assets/content.css" },
+  );
+
+  deepStrictEqual(base.permissions, ["storage"]);
+  deepStrictEqual(manifest.permissions, ["storage"]);
+  strictEqual((manifest.permissions as readonly string[]).includes("downloads"), false);
+  deepStrictEqual(manifest.options_ui, {
+    page: "options/options.html",
+    open_in_tab: true,
+  });
 });
 
 test("BADGE-006 base Manifest requires the stable module Service Worker", () => {

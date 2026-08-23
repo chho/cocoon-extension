@@ -116,14 +116,17 @@ h1 {
 }
 
 .page-message[hidden],
-.write-error[hidden] {
+.write-error[hidden],
+.transfer-error[hidden] {
   display: none;
 }
 
-.write-error {
+.write-error,
+.transfer-error {
   color: #6c4d45;
 }
 
+.transfer-panel,
 .authors-panel,
 .tags-panel {
   margin-top: 34px;
@@ -145,6 +148,109 @@ h1 {
 .section-heading > p {
   color: #68716b;
   font-size: 12px;
+}
+
+.transfer-panel {
+  padding-top: 30px;
+  border-top: 1px solid #d9ded9;
+}
+
+.transfer-heading-row {
+  align-items: center;
+}
+
+.transfer-workbench {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(250px, auto) auto;
+  align-items: end;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #d9ded9;
+  border-radius: 6px;
+  background: #f3f5f2;
+}
+
+.file-picker {
+  display: grid;
+  gap: 6px;
+  color: #68716b;
+  font-size: 11px;
+}
+
+.file-picker input {
+  width: 100%;
+  padding: 5px 8px;
+  background: #fbfcfa;
+}
+
+#import-mode {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+#import-mode legend {
+  margin-bottom: 6px;
+  color: #68716b;
+  font-size: 11px;
+}
+
+#import-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #4b554e;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#import-mode input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #63766a;
+}
+
+.secondary-action,
+.primary-action {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #9aa69e;
+  border-radius: 4px;
+  background: transparent;
+  color: #34443a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary-action {
+  border-color: #63766a;
+  background: #63766a;
+  color: #fbfcfa;
+}
+
+.secondary-action:disabled,
+.primary-action:disabled {
+  border-color: #c9ceca;
+  background: transparent;
+  color: #929993;
+  cursor: default;
+}
+
+.transfer-status,
+.transfer-error {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.transfer-status {
+  color: #68716b;
 }
 
 .toolbar {
@@ -510,7 +616,8 @@ dialog p {
   margin-top: 22px;
 }
 
-#batch-confirm {
+#batch-confirm,
+#replace-confirm {
   border-color: #63766a;
   background: #63766a;
   color: #fbfcfa;
@@ -528,8 +635,14 @@ dialog p {
     flex-direction: column;
   }
 
-  .toolbar {
+  .toolbar,
+  .transfer-workbench {
     grid-template-columns: 1fr;
+  }
+
+  #import-mode {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .table-header {

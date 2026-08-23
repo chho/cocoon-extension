@@ -13,8 +13,11 @@ import type {
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundRpcContract from "../core/blacklist-rpc-contract.ts?background-copy";
 
-const { createBlacklistRpcResponse, parseBlacklistRpcRequest } =
-  backgroundRpcContract as typeof RpcContractModule;
+const {
+  createBlacklistRpcResponse,
+  isBlacklistTransferOperation,
+  parseBlacklistRpcRequest,
+} = backgroundRpcContract as typeof RpcContractModule;
 
 export type BadgeRuntimeMessageListener = (
   message: unknown,
@@ -38,27 +41,42 @@ export interface BlacklistRpcHandler {
   handle(request: BlacklistRpcRequest): Promise<BlacklistRpcResponse>;
 }
 
-export function isAuthorizedUiSender(
+function authorizedUiPath(
   sender: UiMessageSender,
   runtimeId: string,
-): boolean {
+): string | null {
   if (sender.id !== runtimeId || !sender.url) {
-    return false;
+    return null;
   }
   try {
     const url = new URL(sender.url);
     return url.protocol === "chrome-extension:" &&
-      url.hostname === runtimeId &&
-      url.username === "" &&
-      url.password === "" &&
-      url.port === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (url.pathname === "/popup/popup.html" ||
-        url.pathname === "/options/options.html");
+        url.hostname === runtimeId &&
+        url.username === "" &&
+        url.password === "" &&
+        url.port === "" &&
+        url.search === "" &&
+        url.hash === ""
+      ? url.pathname
+      : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function isAuthorizedUiSender(
+  sender: UiMessageSender,
+  runtimeId: string,
+): boolean {
+  const path = authorizedUiPath(sender, runtimeId);
+  return path === "/popup/popup.html" || path === "/options/options.html";
+}
+
+export function isAuthorizedTransferSender(
+  sender: UiMessageSender,
+  runtimeId: string,
+): boolean {
+  return authorizedUiPath(sender, runtimeId) === "/options/options.html";
 }
 
 export function createBlacklistRuntimeMessageListener(
@@ -68,7 +86,12 @@ export function createBlacklistRuntimeMessageListener(
 ): BlacklistRuntimeMessageListener {
   return (message, sender, sendResponse) => {
     const request = parseBlacklistRpcRequest(message);
-    if (!request || !isAuthorizedUiSender(sender, runtimeId)) {
+    if (
+      !request ||
+      !isAuthorizedUiSender(sender, runtimeId) ||
+      (isBlacklistTransferOperation(request.operation) &&
+        !isAuthorizedTransferSender(sender, runtimeId))
+    ) {
       return false;
     }
     void (async () => {

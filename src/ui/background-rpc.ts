@@ -1,5 +1,6 @@
 import {
   createBlacklistRpcRequest,
+  isWithinBlacklistRpcLimit,
   parseBlacklistRpcResponse,
   type BlacklistAuthorDto,
   type BlacklistAuthorIdentityDto,
@@ -27,9 +28,11 @@ export function createBlacklistRpcClient(
 ): BlacklistRpcClient {
   return {
     async request(operation, input = {}) {
-      const response = await sendMessage(
-        createBlacklistRpcRequest(operation, input),
-      );
+      const request = createBlacklistRpcRequest(operation, input);
+      if (!isWithinBlacklistRpcLimit(request)) {
+        throw new BlacklistRpcClientError();
+      }
+      const response = await sendMessage(request);
       const parsed = parseBlacklistRpcResponse(response, operation);
       if (!parsed) {
         throw new BlacklistRpcClientError();

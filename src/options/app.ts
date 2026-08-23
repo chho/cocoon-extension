@@ -1,8 +1,13 @@
 import {
+  MAX_BLACKLIST_TRANSFER_BYTES,
+  createBlacklistTransferFilename,
+  parseBlacklistTransferJson,
+  serializeBlacklistTransfer,
   type BlacklistAuthorDto,
   type BlacklistAuthorIdentityDto,
   type BlacklistSnapshotDto,
   type BlacklistTagDto,
+  type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
 import type { BlacklistRpcClient } from "../ui/background-rpc.ts";
 import {
@@ -33,6 +38,8 @@ export interface OptionsAppDependencies {
   readonly rpc: BlacklistRpcClient;
   readonly storageChanges: ChangeEventSource;
   readonly requestFrame: (callback: () => void) => number;
+  readonly readFileText: (file: File) => Promise<string>;
+  readonly downloadJson: (json: string, filename: string) => void;
 }
 
 export interface OptionsApp {
@@ -63,6 +70,13 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
   const tagTotal = requiredElement<HTMLElement>(document, "#tag-total");
   const pageMessage = requiredElement<HTMLElement>(document, "#page-message");
   const writeError = requiredElement<HTMLElement>(document, "#write-error");
+  const transferPanel = requiredElement<HTMLElement>(document, "#transfer-panel");
+  const exportData = requiredElement<HTMLButtonElement>(document, "#export-data");
+  const importFile = requiredElement<HTMLInputElement>(document, "#import-file");
+  const importMode = requiredElement<HTMLFieldSetElement>(document, "#import-mode");
+  const importData = requiredElement<HTMLButtonElement>(document, "#import-data");
+  const transferStatus = requiredElement<HTMLElement>(document, "#transfer-status");
+  const transferError = requiredElement<HTMLElement>(document, "#transfer-error");
   const authorSearch = requiredElement<HTMLInputElement>(document, "#author-search");
   const tagFilter = requiredElement<HTMLSelectElement>(document, "#tag-filter");
   const platformFilter = requiredElement<HTMLSelectElement>(document, "#platform-filter");
@@ -81,6 +95,12 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     cancel: requiredElement<HTMLButtonElement>(document, "#batch-cancel"),
     confirm: requiredElement<HTMLButtonElement>(document, "#batch-confirm"),
   });
+  const replaceDialogController = createConfirmationDialogController({
+    dialog: requiredElement<HTMLDialogElement>(document, "#replace-dialog"),
+    description: requiredElement<HTMLElement>(document, "#replace-dialog-description"),
+    cancel: requiredElement<HTMLButtonElement>(document, "#replace-cancel"),
+    confirm: requiredElement<HTMLButtonElement>(document, "#replace-confirm"),
+  });
 
   let snapshot: BlacklistSnapshotDto | null = null;
   let writesEnabled = false;
@@ -89,6 +109,9 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
   let renderFrame: number | null = null;
   let selectedTagId: string | null = null;
   let selectedPlatformId: string | null = null;
+  let transfer: BlacklistTransferEnvelope | null = null;
+  let transferPending = false;
+  let fileReadSequence = 0;
   const selectedIdentities = new Map<string, BlacklistAuthorIdentityDto>();
   const tagIdByFilterToken = new Map<string, string>();
   const platformIdByFilterToken = new Map<string, string>();
@@ -98,9 +121,22 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     return JSON.stringify([identity.platformId, identity.userId]);
   }
 
+  function writesAvailable(): boolean {
+    return writesEnabled && !transferPending;
+  }
+
   function updateBatchAction(): void {
     removeSelected.textContent = `解除所选（${selectedIdentities.size}）`;
     removeSelected.disabled = !writesEnabled || selectedIdentities.size === 0;
+  }
+
+  function updateTransferControls(): void {
+    exportData.disabled = !writesEnabled || transferPending;
+    importFile.disabled = !writesEnabled || transferPending;
+    importMode.disabled = !writesEnabled || transferPending;
+    importData.disabled = !writesEnabled || transferPending || transfer === null;
+    if (transferPending) transferPanel.setAttribute("aria-busy", "true");
+    else transferPanel.removeAttribute("aria-busy");
   }
 
   function showWriteError(message = "更改未保存，请重试。"): void {
@@ -350,6 +386,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     renderPlatformFilter();
     renderTags();
     resetAuthorList();
+    updateTransferControls();
   }
 
   function showUnreadableStorage(): void {
@@ -366,6 +403,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     renderTags();
     renderAuthors();
     updateBatchAction();
+    updateTransferControls();
   }
 
   const refreshController = createLatestRefreshController<BlacklistSnapshotDto>({
@@ -388,6 +426,190 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       return;
     }
     await refreshController.request();
+  }
+
+  function clearTransferError(): void {
+    transferError.hidden = true;
+    transferError.textContent = "";
+  }
+
+  function showTransferError(message: string): void {
+    transferError.textContent = message;
+    transferError.hidden = false;
+    transferError.focus();
+  }
+
+  function setTransferPending(pending: boolean): void {
+    transferPending = pending;
+    updateTransferControls();
+  }
+
+  function transferFailureMessage(error: string | null): string {
+    if (error === "transfer-conflict") {
+      return "导入内容与本地标签或稳定标识冲突，未进行更改。";
+    }
+    if (error === "transfer-too-large") {
+      return "导入数据超过 8 MiB 限制，未进行更改。";
+    }
+    if (error === "invalid-transfer") {
+      return "导入文件无效或格式不受支持，未进行更改。";
+    }
+    if (error === "storage-unreadable") {
+      return "本地数据无法读取，Cocoon 未进行修改。";
+    }
+    return "导入未保存，请重试。";
+  }
+
+  async function exportTransfer(): Promise<void> {
+    if (!writesAvailable()) return;
+    clearTransferError();
+    transferStatus.textContent = "正在准备导出…";
+    setTransferPending(true);
+    try {
+      const response = await rpc.request("export-json");
+      const exported = response.data.transfer;
+      if (!response.ok || !exported) {
+        transferStatus.textContent = "未导出数据。";
+        if (response.error === "storage-unreadable") {
+          showUnreadableStorage();
+        }
+        showTransferError(
+          response.error === "storage-unreadable"
+            ? "本地数据无法读取，Cocoon 未进行修改。"
+            : response.error === "transfer-too-large"
+            ? "导出数据超过 8 MiB 限制。"
+            : "无法导出本地数据，请重试。",
+        );
+        return;
+      }
+      const json = serializeBlacklistTransfer(exported);
+      const filename = createBlacklistTransferFilename(exported.exportedAt);
+      if (!json || !filename) {
+        transferStatus.textContent = "未导出数据。";
+        showTransferError("无法导出本地数据，请重试。");
+        return;
+      }
+      dependencies.downloadJson(json, filename);
+      transferStatus.textContent = `已导出 ${exported.authors.length} 位作者和 ${exported.tags.length} 个标签。`;
+      transferStatus.focus();
+    } catch {
+      transferStatus.textContent = "未导出数据。";
+      showTransferError("无法导出本地数据，请重试。");
+    } finally {
+      setTransferPending(false);
+    }
+  }
+
+  async function importTransfer(
+    operation: "import-merge" | "import-replace",
+  ): Promise<void> {
+    const selectedTransfer = transfer;
+    if (!writesAvailable() || !selectedTransfer) return;
+    clearTransferError();
+    clearWriteError();
+    transferStatus.textContent = operation === "import-merge"
+      ? "正在合并导入…"
+      : "正在替换本地记录…";
+    setTransferPending(true);
+    try {
+      const response = await rpc.request(operation, {
+        transfer: selectedTransfer,
+      });
+      if (!response.ok) {
+        transferStatus.textContent = "未导入数据。";
+        if (response.error === "storage-unreadable") {
+          showUnreadableStorage();
+        } else {
+          await refreshController.request();
+        }
+        showTransferError(transferFailureMessage(response.error));
+        return;
+      }
+      await refreshController.request();
+      if (!writesEnabled) {
+        transferStatus.textContent = "无法确认导入后的本地数据。";
+        showTransferError("导入完成后无法重新读取本地数据。");
+        return;
+      }
+      transfer = null;
+      importFile.value = "";
+      transferStatus.textContent = operation === "import-merge"
+        ? `合并完成；文件包含 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`
+        : `已替换为 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`;
+      transferStatus.focus();
+    } catch {
+      transferStatus.textContent = "未导入数据。";
+      await refreshController.request();
+      showTransferError("导入未保存，请重试。");
+    } finally {
+      setTransferPending(false);
+    }
+  }
+
+  async function readSelectedTransferFile(): Promise<void> {
+    const sequence = ++fileReadSequence;
+    const file = importFile.files?.[0] ?? null;
+    transfer = null;
+    clearTransferError();
+    if (!file) {
+      transferStatus.textContent = "请选择 Cocoon 导出的 JSON 文件。";
+      updateTransferControls();
+      return;
+    }
+    if (file.size > MAX_BLACKLIST_TRANSFER_BYTES) {
+      transferStatus.textContent = "未选择可导入的数据。";
+      showTransferError("导入文件超过 8 MiB 限制。");
+      updateTransferControls();
+      return;
+    }
+
+    setTransferPending(true);
+    transferStatus.textContent = "正在校验导入文件…";
+    try {
+      const json = await dependencies.readFileText(file);
+      if (sequence !== fileReadSequence) return;
+      const parsed = parseBlacklistTransferJson(json);
+      if (parsed.status !== "valid") {
+        transferStatus.textContent = "未选择可导入的数据。";
+        showTransferError(
+          parsed.status === "too-large"
+            ? "导入文件超过 8 MiB 限制。"
+            : "导入文件无效或格式不受支持。",
+        );
+        return;
+      }
+      transfer = parsed.transfer;
+      transferStatus.textContent = `已校验 ${transfer.authors.length} 位作者和 ${transfer.tags.length} 个标签。`;
+    } catch {
+      if (sequence !== fileReadSequence) return;
+      transferStatus.textContent = "未选择可导入的数据。";
+      showTransferError("无法读取导入文件，请重新选择。");
+    } finally {
+      if (sequence === fileReadSequence) {
+        setTransferPending(false);
+      }
+    }
+  }
+
+  function requestImport(): void {
+    if (!writesAvailable() || !transfer) return;
+    const mode = document.querySelector<HTMLInputElement>(
+      "input[name='import-mode']:checked",
+    )?.value;
+    if (mode !== "replace") {
+      void importTransfer("import-merge");
+      return;
+    }
+    const selectedTransfer = transfer;
+    replaceDialogController.openWithDescription(
+      `将用文件中的 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签替换当前列表。现有设置会保留。`,
+      importData,
+      () => {
+        if (transfer === selectedTransfer) {
+          void importTransfer("import-replace");
+        }
+      },
+    );
   }
 
   async function removeOne(author: BlacklistAuthorDto, button: HTMLButtonElement): Promise<void> {
@@ -493,6 +715,9 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       void removeMany(identities);
     });
   });
+  exportData.addEventListener("click", () => { void exportTransfer(); });
+  importFile.addEventListener("change", () => { void readSelectedTransferFile(); });
+  importData.addEventListener("click", requestImport);
   dependencies.storageChanges.addListener((changes, areaName) => {
     if (areaName === "local" && "cocoonBlacklistState" in changes) {
       void refreshController.request();

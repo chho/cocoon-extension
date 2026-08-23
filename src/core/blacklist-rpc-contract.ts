@@ -2,6 +2,12 @@ export const BLACKLIST_RPC_VERSION = 2 as const;
 export const BLACKLIST_RPC_REQUEST_TYPE = "cocoon.blacklist.request" as const;
 export const BLACKLIST_RPC_RESPONSE_TYPE = "cocoon.blacklist.response" as const;
 
+export const BLACKLIST_TRANSFER_PRODUCT = "cocoon-blacklist" as const;
+export const BLACKLIST_TRANSFER_FORMAT_VERSION = 1 as const;
+export const BLACKLIST_TRANSFER_SCHEMA_VERSION = 5 as const;
+export const MAX_BLACKLIST_TRANSFER_BYTES = 8 * 1024 * 1024;
+export const MAX_BLACKLIST_TRANSFER_AUTHORS = 20_000;
+export const MAX_BLACKLIST_TRANSFER_TAGS = 2_000;
 export const MAX_PLATFORM_ID_ASCII_LENGTH = 64;
 export const MAX_STABLE_ID_CODE_POINTS = 512;
 export const MAX_AUTHOR_NAME_CODE_POINTS = 500;
@@ -21,7 +27,10 @@ export type BlacklistRpcOperation =
   | "restore-one"
   | "remove-many"
   | "rename-tag"
-  | "delete-tag";
+  | "delete-tag"
+  | "export-json"
+  | "import-merge"
+  | "import-replace";
 
 export interface BlacklistAuthorIdentityDto {
   readonly platformId: string;
@@ -47,6 +56,37 @@ export interface BlacklistSnapshotDto {
   readonly tags: readonly BlacklistTagDto[];
 }
 
+export interface BlacklistTransferAuthor {
+  readonly platformId: string;
+  readonly userId: string;
+  readonly memberHashId: string | null;
+  readonly authorNameAtCapture: string;
+  readonly tagId: string;
+  readonly blacklistedAt: string | null;
+  readonly blockSource: "direct" | "upvoter";
+}
+
+export interface BlacklistTransferTag {
+  readonly tagId: string;
+  readonly name: string;
+}
+
+export interface BlacklistTransferEnvelope {
+  readonly product: typeof BLACKLIST_TRANSFER_PRODUCT;
+  readonly formatVersion: typeof BLACKLIST_TRANSFER_FORMAT_VERSION;
+  readonly exportedAt: string;
+  readonly schemaVersion: typeof BLACKLIST_TRANSFER_SCHEMA_VERSION;
+  readonly authors: readonly BlacklistTransferAuthor[];
+  readonly tags: readonly BlacklistTransferTag[];
+}
+
+export type BlacklistTransferParseResult =
+  | {
+      readonly status: "valid";
+      readonly transfer: BlacklistTransferEnvelope;
+    }
+  | { readonly status: "invalid" | "too-large" };
+
 export type CurrentPageStatus = "running" | "unsupported" | "connection-error";
 
 export type BlacklistRpcRequest =
@@ -58,7 +98,10 @@ export type BlacklistRpcRequest =
       readonly identities: readonly BlacklistAuthorIdentityDto[];
     }>
   | RpcRequest<"rename-tag", { readonly tagId: string; readonly name: string }>
-  | RpcRequest<"delete-tag", { readonly tagId: string }>;
+  | RpcRequest<"delete-tag", { readonly tagId: string }>
+  | RpcRequest<"export-json", Record<never, never>>
+  | RpcRequest<"import-merge", { readonly transfer: BlacklistTransferEnvelope }>
+  | RpcRequest<"import-replace", { readonly transfer: BlacklistTransferEnvelope }>;
 
 interface RpcRequest<Operation extends BlacklistRpcOperation, Input> {
   readonly version: typeof BLACKLIST_RPC_VERSION;
@@ -72,13 +115,17 @@ export type BlacklistRpcError =
   | "save-failed"
   | "conflict"
   | "not-found"
-  | "invalid-tag";
+  | "invalid-tag"
+  | "invalid-transfer"
+  | "transfer-conflict"
+  | "transfer-too-large";
 
 export interface BlacklistRpcData {
   readonly status: CurrentPageStatus | null;
   readonly count: number | null;
   readonly snapshot: BlacklistSnapshotDto | null;
   readonly removed: BlacklistAuthorDto | null;
+  readonly transfer: BlacklistTransferEnvelope | null;
 }
 
 export interface BlacklistRpcResponse {
@@ -98,6 +145,14 @@ const OPERATIONS: readonly BlacklistRpcOperation[] = [
   "remove-many",
   "rename-tag",
   "delete-tag",
+  "export-json",
+  "import-merge",
+  "import-replace",
+];
+const TRANSFER_OPERATIONS: readonly BlacklistRpcOperation[] = [
+  "export-json",
+  "import-merge",
+  "import-replace",
 ];
 const ERRORS: readonly BlacklistRpcError[] = [
   "storage-unreadable",
@@ -105,6 +160,9 @@ const ERRORS: readonly BlacklistRpcError[] = [
   "conflict",
   "not-found",
   "invalid-tag",
+  "invalid-transfer",
+  "transfer-conflict",
+  "transfer-too-large",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -156,6 +214,197 @@ function scopedIdentifierKey(platformId: string, identifier: string): string {
 
 function isEmptyInput(value: unknown): value is Record<never, never> {
   return isRecord(value) && hasExactKeys(value, []);
+}
+
+export function blacklistJsonByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+export function blacklistRpcJsonByteLength(value: unknown): number | null {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string"
+      ? blacklistJsonByteLength(serialized)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isWithinBlacklistRpcLimit(value: unknown): boolean {
+  const size = blacklistRpcJsonByteLength(value);
+  return size !== null && size <= MAX_BLACKLIST_TRANSFER_BYTES;
+}
+
+function parseTransferTag(value: unknown): BlacklistTransferTag | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["tagId", "name"]) ||
+    !isTrimmedNonEmpty(value.tagId) ||
+    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
+    !isTrimmedNonEmpty(value.name) ||
+    codePointLength(value.name) > MAX_TRANSFER_TAG_NAME_CODE_POINTS
+  ) {
+    return null;
+  }
+  return { tagId: value.tagId, name: value.name };
+}
+
+function parseTransferAuthor(value: unknown): BlacklistTransferAuthor | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "platformId",
+      "userId",
+      "memberHashId",
+      "authorNameAtCapture",
+      "tagId",
+      "blacklistedAt",
+      "blockSource",
+    ]) ||
+    !isPlatformId(value.platformId) ||
+    !isCanonicalUserId(value.platformId, value.userId) ||
+    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS ||
+    (value.memberHashId !== null &&
+      (value.platformId !== ZHIHU_PLATFORM_ID ||
+        typeof value.memberHashId !== "string" ||
+        !MEMBER_HASH_PATTERN.test(value.memberHashId) ||
+        codePointLength(value.memberHashId) > MAX_STABLE_ID_CODE_POINTS)) ||
+    value.memberHashId === value.userId ||
+    typeof value.authorNameAtCapture !== "string" ||
+    codePointLength(value.authorNameAtCapture) > MAX_AUTHOR_NAME_CODE_POINTS ||
+    !isTrimmedNonEmpty(value.tagId) ||
+    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
+    (value.blacklistedAt !== null && !isValidTimestamp(value.blacklistedAt)) ||
+    (value.blockSource !== "direct" && value.blockSource !== "upvoter") ||
+    (value.blockSource === "upvoter" && value.blacklistedAt === null)
+  ) {
+    return null;
+  }
+  return {
+    platformId: value.platformId,
+    userId: value.userId,
+    memberHashId: value.memberHashId as string | null,
+    authorNameAtCapture: value.authorNameAtCapture,
+    tagId: value.tagId,
+    blacklistedAt: value.blacklistedAt as string | null,
+    blockSource: value.blockSource,
+  };
+}
+
+export function parseBlacklistTransferEnvelope(
+  value: unknown,
+): BlacklistTransferParseResult {
+  const byteLength = blacklistRpcJsonByteLength(value);
+  if (byteLength === null) {
+    return { status: "invalid" };
+  }
+  if (byteLength > MAX_BLACKLIST_TRANSFER_BYTES) {
+    return { status: "too-large" };
+  }
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "product",
+      "formatVersion",
+      "exportedAt",
+      "schemaVersion",
+      "authors",
+      "tags",
+    ]) ||
+    value.product !== BLACKLIST_TRANSFER_PRODUCT ||
+    value.formatVersion !== BLACKLIST_TRANSFER_FORMAT_VERSION ||
+    !isValidTimestamp(value.exportedAt) ||
+    value.schemaVersion !== BLACKLIST_TRANSFER_SCHEMA_VERSION ||
+    !Array.isArray(value.authors) ||
+    value.authors.length > MAX_BLACKLIST_TRANSFER_AUTHORS ||
+    !Array.isArray(value.tags) ||
+    value.tags.length > MAX_BLACKLIST_TRANSFER_TAGS
+  ) {
+    return { status: "invalid" };
+  }
+
+  const authors = value.authors.map(parseTransferAuthor);
+  const tags = value.tags.map(parseTransferTag);
+  if (authors.some((author) => author === null) || tags.some((tag) => tag === null)) {
+    return { status: "invalid" };
+  }
+  const parsedAuthors = authors as BlacklistTransferAuthor[];
+  const parsedTags = tags as BlacklistTransferTag[];
+  const tagIds = new Set<string>();
+  const tagNames = new Set<string>();
+  for (const tag of parsedTags) {
+    const nameKey = tag.name.toLowerCase();
+    if (tagIds.has(tag.tagId) || tagNames.has(nameKey)) {
+      return { status: "invalid" };
+    }
+    tagIds.add(tag.tagId);
+    tagNames.add(nameKey);
+  }
+  if (
+    parsedTags.find(({ tagId }) => tagId === DEFAULT_TAG_ID)?.name !== "default"
+  ) {
+    return { status: "invalid" };
+  }
+
+  const identifiers = new Set<string>();
+  for (const author of parsedAuthors) {
+    if (!tagIds.has(author.tagId)) {
+      return { status: "invalid" };
+    }
+    for (const identifier of [author.userId, author.memberHashId]) {
+      if (identifier === null) continue;
+      const key = scopedIdentifierKey(author.platformId, identifier);
+      if (identifiers.has(key)) {
+        return { status: "invalid" };
+      }
+      identifiers.add(key);
+    }
+  }
+
+  return {
+    status: "valid",
+    transfer: {
+      product: BLACKLIST_TRANSFER_PRODUCT,
+      formatVersion: BLACKLIST_TRANSFER_FORMAT_VERSION,
+      exportedAt: value.exportedAt,
+      schemaVersion: BLACKLIST_TRANSFER_SCHEMA_VERSION,
+      authors: parsedAuthors,
+      tags: parsedTags,
+    },
+  };
+}
+
+export function parseBlacklistTransferJson(
+  json: string,
+): BlacklistTransferParseResult {
+  if (blacklistJsonByteLength(json) > MAX_BLACKLIST_TRANSFER_BYTES) {
+    return { status: "too-large" };
+  }
+  try {
+    return parseBlacklistTransferEnvelope(JSON.parse(json) as unknown);
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+export function serializeBlacklistTransfer(
+  transfer: BlacklistTransferEnvelope,
+): string | null {
+  const parsed = parseBlacklistTransferEnvelope(transfer);
+  if (parsed.status !== "valid") {
+    return null;
+  }
+  const json = JSON.stringify(parsed.transfer);
+  return blacklistJsonByteLength(json) <= MAX_BLACKLIST_TRANSFER_BYTES
+    ? json
+    : null;
+}
+
+export function createBlacklistTransferFilename(exportedAt: string): string | null {
+  return isValidTimestamp(exportedAt)
+    ? `cocoon-blacklist-${exportedAt.slice(0, 10)}.json`
+    : null;
 }
 
 function parseIdentity(value: unknown): BlacklistAuthorIdentityDto | null {
@@ -234,7 +483,9 @@ function parseSnapshot(value: unknown): BlacklistSnapshotDto | null {
     !isRecord(value) ||
     !hasExactKeys(value, ["authors", "tags"]) ||
     !Array.isArray(value.authors) ||
-    !Array.isArray(value.tags)
+    value.authors.length > MAX_BLACKLIST_TRANSFER_AUTHORS ||
+    !Array.isArray(value.tags) ||
+    value.tags.length > MAX_BLACKLIST_TRANSFER_TAGS
   ) {
     return null;
   }
@@ -271,8 +522,15 @@ function isOperation(value: unknown): value is BlacklistRpcOperation {
   return typeof value === "string" && OPERATIONS.includes(value as BlacklistRpcOperation);
 }
 
+export function isBlacklistTransferOperation(
+  operation: BlacklistRpcOperation,
+): boolean {
+  return TRANSFER_OPERATIONS.includes(operation);
+}
+
 export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | null {
   if (
+    !isWithinBlacklistRpcLimit(value) ||
     !isRecord(value) ||
     !hasExactKeys(value, ["version", "type", "operation", "input"]) ||
     value.version !== BLACKLIST_RPC_VERSION ||
@@ -284,7 +542,8 @@ export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | 
   const input = value.input;
   if (
     (value.operation === "status" ||
-      value.operation === "snapshot") &&
+      value.operation === "snapshot" ||
+      value.operation === "export-json") &&
     isEmptyInput(input)
   ) {
     return value as unknown as BlacklistRpcRequest;
@@ -339,6 +598,13 @@ export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | 
   ) {
     return value as unknown as BlacklistRpcRequest;
   }
+  if (
+    (value.operation === "import-merge" || value.operation === "import-replace") &&
+    hasExactKeys(input, ["transfer"]) &&
+    parseBlacklistTransferEnvelope(input.transfer).status === "valid"
+  ) {
+    return value as unknown as BlacklistRpcRequest;
+  }
   return null;
 }
 
@@ -350,23 +616,55 @@ function hasValidResponseShape(
 ): boolean {
   if (operation === "status") {
     return ok && error === null && data.status !== null && data.count !== null &&
-      data.snapshot === null && data.removed === null &&
+      data.snapshot === null && data.removed === null && data.transfer === null &&
       (data.status !== "unsupported" || data.count === 0);
   }
-  if (data.status !== null || data.count !== null) return false;
+  if (data.status !== null || data.count !== null) {
+    return false;
+  }
   if (operation === "snapshot") {
-    return data.removed === null && (ok
+    return data.removed === null && data.transfer === null && (ok
       ? error === null && data.snapshot !== null
       : error === "storage-unreadable" && data.snapshot === null);
+  }
+  if (operation === "export-json") {
+    return data.snapshot === null && data.removed === null && (ok
+      ? error === null && data.transfer !== null
+      : data.transfer === null &&
+        (error === "storage-unreadable" ||
+          error === "save-failed" ||
+          error === "transfer-too-large"));
+  }
+  if (operation === "import-merge" || operation === "import-replace") {
+    if (data.removed !== null || data.transfer !== null) return false;
+    return ok
+      ? error === null && data.snapshot !== null
+      : data.snapshot === null &&
+        (error === "storage-unreadable" ||
+          error === "save-failed" ||
+          error === "invalid-transfer" ||
+          error === "transfer-conflict" ||
+          error === "transfer-too-large");
+  }
+  if (data.transfer !== null) {
+    return false;
   }
   if (ok) {
     return error === null && data.snapshot !== null &&
       (operation === "remove-one" ? data.removed !== null : data.removed === null);
   }
-  if (data.removed !== null) return false;
-  if (error === "storage-unreadable") return data.snapshot === null;
-  if (error === "save-failed") return data.snapshot !== null;
-  if (data.snapshot === null) return false;
+  if (data.removed !== null) {
+    return false;
+  }
+  if (error === "storage-unreadable") {
+    return data.snapshot === null;
+  }
+  if (error === "save-failed") {
+    return data.snapshot !== null;
+  }
+  if (data.snapshot === null) {
+    return false;
+  }
   if (operation === "remove-one" || operation === "remove-many") {
     return error === "not-found";
   }
@@ -382,6 +680,7 @@ export function parseBlacklistRpcResponse(
   expectedOperation: BlacklistRpcOperation,
 ): BlacklistRpcResponse | null {
   if (
+    !isWithinBlacklistRpcLimit(value) ||
     !isRecord(value) ||
     !hasExactKeys(value, ["version", "type", "operation", "ok", "data", "error"]) ||
     value.version !== BLACKLIST_RPC_VERSION ||
@@ -389,16 +688,17 @@ export function parseBlacklistRpcResponse(
     value.operation !== expectedOperation ||
     typeof value.ok !== "boolean" ||
     !isRecord(value.data) ||
-    !hasExactKeys(value.data, ["status", "count", "snapshot", "removed"])
+    !hasExactKeys(value.data, ["status", "count", "snapshot", "removed", "transfer"])
   ) {
     return null;
   }
-  const { status, count, snapshot, removed } = value.data;
+  const { status, count, snapshot, removed, transfer } = value.data;
   if (
     (status !== null && status !== "running" && status !== "unsupported" && status !== "connection-error") ||
     (count !== null && (!Number.isSafeInteger(count) || (count as number) < 0)) ||
     (snapshot !== null && parseSnapshot(snapshot) === null) ||
     (removed !== null && parseAuthor(removed) === null) ||
+    (transfer !== null && parseBlacklistTransferEnvelope(transfer).status !== "valid") ||
     (value.error !== null &&
       (typeof value.error !== "string" || !ERRORS.includes(value.error as BlacklistRpcError)))
   ) {
@@ -439,6 +739,7 @@ export function createBlacklistRpcResponse(
       count: data.count ?? null,
       snapshot: data.snapshot ?? null,
       removed: data.removed ?? null,
+      transfer: data.transfer ?? null,
     },
     error,
   };

@@ -13,6 +13,7 @@ import {
   type BlacklistAuthorDto,
   type BlacklistRpcOperation,
   type BlacklistRpcRequest,
+  type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
 import { createBlacklistManagementController } from "./blacklist-management-controller.ts";
 
@@ -70,6 +71,7 @@ function createHarness(
     readonly separateValues?: Record<string, unknown>;
     readonly beforeLock?: (storage: MemoryStorage) => void;
     readonly failLock?: boolean;
+    readonly now?: () => Date;
   } = {},
 ) {
   const storage = new MemoryStorage(value, options.separateValues);
@@ -89,6 +91,7 @@ function createHarness(
         return { status: "unsupported", count: 0 };
       },
     },
+    options.now,
   );
   return { storage, controller, lockCalls: () => lockCalls };
 }
@@ -110,6 +113,29 @@ function dto(value: BlacklistState["authors"][number]): BlacklistAuthorDto {
     blacklistedAt: value.blacklistedAt,
     source: value.blockSource,
   };
+}
+
+function transfer(
+  authors: BlacklistTransferEnvelope["authors"] = [],
+  tags: BlacklistTransferEnvelope["tags"] = [
+    { tagId: DEFAULT_TAG_ID, name: "default" },
+  ],
+): BlacklistTransferEnvelope {
+  return {
+    product: "cocoon-blacklist",
+    formatVersion: 1,
+    exportedAt: TIME,
+    schemaVersion: 5,
+    authors,
+    tags,
+  };
+}
+
+function transferRequest(
+  operation: "import-merge" | "import-replace",
+  value: BlacklistTransferEnvelope,
+): BlacklistRpcRequest {
+  return createBlacklistRpcRequest(operation, { transfer: value });
 }
 
 test("POPUP-009 snapshot initializes missing schema v5 once and returns an exact contract", async () => {
@@ -301,4 +327,217 @@ test("MANAGE-001 save failure returns the latest rollback snapshot without chang
   strictEqual(response.data.snapshot?.authors.length, 1);
   deepStrictEqual(harness.storage.value, state);
   deepStrictEqual(harness.storage.sets, []);
+});
+
+test("AC-089 locked export re-reads latest state, emits exact data, and does not write valid storage", async () => {
+  const initial: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("stale")],
+  };
+  const latest: BlacklistState = {
+    ...createInitialState(),
+    tags: [
+      ...createInitialState().tags,
+      { tagId: "work", name: "Work" },
+    ],
+    authors: [
+      author("latest", { tagId: "work", memberHashId: HASH }),
+      author("same-id", { platformId: "youtube" }),
+    ],
+  };
+  const harness = createHarness(initial, {
+    beforeLock(storage) {
+      storage.value = latest;
+    },
+    now: () => new Date(TIME),
+  });
+
+  const response = await harness.controller.handle(request("export-json"));
+
+  strictEqual(response.ok, true);
+  deepStrictEqual(response.data.transfer, transfer(latest.authors, latest.tags));
+  deepStrictEqual(harness.storage.sets, []);
+  strictEqual(harness.lockCalls(), 1);
+});
+
+test("AC-089 export initializes migrated storage in one write but failures produce zero writes", async () => {
+  const migrated = {
+    schemaVersion: 4,
+    tags: [{ tagId: "default", name: "default" }],
+    authors: [{
+      userId: "legacy",
+      memberHashId: null,
+      authorNameAtCapture: "Legacy",
+      tagId: "default",
+      blacklistedAt: TIME,
+      blockSource: "direct",
+    }],
+  };
+  const success = createHarness(migrated, { now: () => new Date(TIME) });
+  const exported = await success.controller.handle(request("export-json"));
+  strictEqual(exported.ok, true);
+  strictEqual(success.storage.sets.length, 1);
+  strictEqual((success.storage.value as BlacklistState).authors[0]?.platformId, "zhihu");
+
+  for (const harness of [
+    createHarness({ ...migrated, extra: true }),
+    createHarness(createInitialState(), { failLock: true }),
+    createHarness(createInitialState(), { now: () => new Date(Number.NaN) }),
+  ]) {
+    const response = await harness.controller.handle(request("export-json"));
+    strictEqual(response.ok, false);
+    deepStrictEqual(harness.storage.sets, []);
+  }
+});
+
+test("AC-089 merge re-reads under lock, writes once atomically, and keeps local duplicate records exact", async () => {
+  const preserved = author("same", {
+    authorNameAtCapture: "Preserved",
+    blacklistedAt: "2020-01-02T03:04:05.006Z",
+    blockSource: "upvoter",
+  });
+  const latest: BlacklistState = {
+    ...createInitialState(),
+    authors: [preserved, author("concurrent")],
+  };
+  const imported = transfer([
+    author("same", { authorNameAtCapture: "Imported" }),
+    author("new", { platformId: "youtube" }),
+  ]);
+  const harness = createHarness(createInitialState(), {
+    beforeLock(storage) {
+      storage.value = latest;
+    },
+  });
+
+  const response = await harness.controller.handle(
+    transferRequest("import-merge", imported),
+  );
+
+  strictEqual(response.ok, true);
+  strictEqual(harness.storage.sets.length, 1);
+  deepStrictEqual((harness.storage.value as BlacklistState).authors, [
+    preserved,
+    latest.authors[1],
+    imported.authors[1],
+  ]);
+  deepStrictEqual(response.data.snapshot?.authors.map(({ platformId, userId }) => ({
+    platformId,
+    userId,
+  })), [
+    { platformId: "zhihu", userId: "same" },
+    { platformId: "zhihu", userId: "concurrent" },
+    { platformId: "youtube", userId: "new" },
+  ]);
+});
+
+test("AC-089 unchanged merge performs zero writes while migrated merge persists exactly once", async () => {
+  const existing: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("same")],
+  };
+  const unchanged = createHarness(existing);
+  const unchangedResponse = await unchanged.controller.handle(
+    transferRequest("import-merge", transfer([author("same")])),
+  );
+  strictEqual(unchangedResponse.ok, true);
+  deepStrictEqual(unchanged.storage.sets, []);
+
+  const migrated = createHarness({
+    schemaVersion: 4,
+    tags: [{ tagId: "default", name: "default" }],
+    authors: [],
+  });
+  const migratedResponse = await migrated.controller.handle(
+    transferRequest("import-merge", transfer()),
+  );
+  strictEqual(migratedResponse.ok, true);
+  strictEqual(migrated.storage.sets.length, 1);
+  deepStrictEqual(migrated.storage.value, createInitialState());
+});
+
+test("AC-089 replace reports exact counts, writes once, and touches only blacklist state", async () => {
+  const settings = { cocoonRemotePreferences: { schemaVersion: 1, enabled: true } };
+  const harness = createHarness(
+    { ...createInitialState(), authors: [author("old")] },
+    { separateValues: settings },
+  );
+  const imported = transfer(
+    [
+      author("same", { platformId: "zhihu", tagId: "work" }),
+      author("same", { platformId: "youtube" }),
+    ],
+    [
+      { tagId: "default", name: "default" },
+      { tagId: "work", name: "Work" },
+    ],
+  );
+
+  const response = await harness.controller.handle(
+    transferRequest("import-replace", imported),
+  );
+
+  strictEqual(response.ok, true);
+  strictEqual(response.data.snapshot?.authors.length, 2);
+  strictEqual(response.data.snapshot?.tags.length, 2);
+  strictEqual(harness.storage.setPayloads.length, 1);
+  deepStrictEqual(Object.keys(harness.storage.setPayloads[0] ?? {}), [STORAGE_KEY]);
+  deepStrictEqual(harness.storage.separateValues, settings);
+  deepStrictEqual(harness.storage.value, {
+    schemaVersion: 5,
+    authors: imported.authors,
+    tags: imported.tags,
+  });
+});
+
+test("AC-089 invalid, conflict, unreadable, lock, and write failures produce zero successful writes", async () => {
+  const conflictState: BlacklistState = {
+    ...createInitialState(),
+    authors: [author("owner", { memberHashId: HASH })],
+  };
+  const conflict = createHarness(conflictState);
+  const conflictResponse = await conflict.controller.handle(
+    transferRequest("import-merge", transfer([author(HASH)])),
+  );
+  strictEqual(conflictResponse.ok, false);
+  strictEqual(conflictResponse.error, "transfer-conflict");
+  deepStrictEqual(conflict.storage.sets, []);
+
+  const malformed = createHarness({ ...createInitialState(), extra: true });
+  const malformedResponse = await malformed.controller.handle(
+    transferRequest("import-replace", transfer()),
+  );
+  strictEqual(malformedResponse.ok, false);
+  strictEqual(malformedResponse.error, "storage-unreadable");
+  deepStrictEqual(malformed.storage.sets, []);
+
+  const lockFailure = createHarness(createInitialState(), { failLock: true });
+  const lockResponse = await lockFailure.controller.handle(
+    transferRequest("import-replace", transfer()),
+  );
+  strictEqual(lockResponse.ok, false);
+  strictEqual(lockResponse.error, "storage-unreadable");
+  deepStrictEqual(lockFailure.storage.sets, []);
+
+  const writeFailure = createHarness(createInitialState());
+  writeFailure.storage.failSet = true;
+  const writeResponse = await writeFailure.controller.handle(
+    transferRequest("import-replace", transfer([author("new")])),
+  );
+  strictEqual(writeResponse.ok, false);
+  strictEqual(writeResponse.error, "save-failed");
+  deepStrictEqual(writeFailure.storage.sets, []);
+
+  const invalidTransfer = {
+    ...transfer(),
+    product: "invalid",
+  } as unknown as BlacklistTransferEnvelope;
+  const invalid = createHarness(createInitialState());
+  const invalidResponse = await invalid.controller.handle(
+    transferRequest("import-replace", invalidTransfer),
+  );
+  strictEqual(invalidResponse.ok, false);
+  strictEqual(invalidResponse.error, "invalid-transfer");
+  strictEqual(invalid.lockCalls(), 0);
+  deepStrictEqual(invalid.storage.sets, []);
 });

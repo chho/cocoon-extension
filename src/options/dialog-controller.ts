@@ -7,6 +7,11 @@ export interface ConfirmationDialogElements {
 
 export interface ConfirmationDialogController {
   open(count: number, invoker: HTMLElement, onConfirm: () => void): void;
+  openWithDescription(
+    description: string,
+    invoker: HTMLElement,
+    onConfirm: () => void,
+  ): void;
   close(): void;
 }
 
@@ -62,17 +67,33 @@ export function createConfirmationDialogController(
     }
   });
 
+  function openWithDescription(
+    description: string,
+    invoker: HTMLElement,
+    onConfirm: () => void,
+  ): void {
+    if (!description || elements.dialog.open) {
+      return;
+    }
+    restoreFocus = invoker;
+    confirmAction = onConfirm;
+    elements.description.textContent = description;
+    elements.dialog.showModal();
+    elements.cancel.focus();
+  }
+
   return {
     open(count, invoker, onConfirm) {
       if (!Number.isSafeInteger(count) || count <= 0) {
         return;
       }
-      restoreFocus = invoker;
-      confirmAction = onConfirm;
-      elements.description.textContent = `确定解除所选的 ${count} 位作者吗？`;
-      elements.dialog.showModal();
-      elements.cancel.focus();
+      openWithDescription(
+        `确定解除所选的 ${count} 位作者吗？`,
+        invoker,
+        onConfirm,
+      );
     },
+    openWithDescription,
     close,
   };
 }

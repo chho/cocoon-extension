@@ -18,6 +18,11 @@ import type {
 // @ts-expect-error Vite resolves the query-qualified copy during bundling.
 import * as backgroundRpcContract from "../core/blacklist-rpc-contract.ts?background-copy";
 import type { BlacklistLockCoordinator } from "./blacklist-lock-coordinator.ts";
+import {
+  createBlacklistTransferEnvelope,
+  planBlacklistTransferMerge,
+  planBlacklistTransferReplace,
+} from "./blacklist-transfer-planner.ts";
 import type { CurrentPageStatusResult } from "./status-controller.ts";
 
 const {
@@ -30,8 +35,11 @@ const {
   planTagDeletion,
   planTagRename,
 } = backgroundBlacklistState as typeof BlacklistStateModule;
-const { createBlacklistRpcResponse } =
-  backgroundRpcContract as typeof RpcContractModule;
+const {
+  createBlacklistRpcResponse,
+  isWithinBlacklistRpcLimit,
+  parseBlacklistTransferEnvelope,
+} = backgroundRpcContract as typeof RpcContractModule;
 
 interface LocalStorageArea {
   get(key: string): Promise<Record<string, unknown>>;
@@ -88,10 +96,17 @@ function toSnapshot(state: BlacklistState): BlacklistSnapshotDto {
   };
 }
 
+function responseWithinLimit(
+  response: BlacklistRpcResponse,
+): BlacklistRpcResponse | null {
+  return isWithinBlacklistRpcLimit(response) ? response : null;
+}
+
 export function createBlacklistManagementController(
   storage: LocalStorageArea,
   lock: Pick<BlacklistLockCoordinator, "runExclusive">,
-  statusController: StatusController
+  statusController: StatusController,
+  now: () => Date = () => new Date(),
 ): BlacklistManagementController {
   async function readLatest(): Promise<ReturnType<typeof parseBlacklistState>> {
     const values = await storage.get(STORAGE_KEY);
@@ -112,21 +127,189 @@ export function createBlacklistManagementController(
   }
 
   async function snapshotResponse(
-    request: Extract<BlacklistRpcRequest, { readonly operation: "snapshot" }>,
+    request: BlacklistRpcRequest,
   ): Promise<BlacklistRpcResponse> {
     try {
       return await lock.runExclusive(async () => {
         const state = await readInitializedLocked();
-        return state
-          ? createBlacklistRpcResponse(request.operation, true, {
-            snapshot: toSnapshot(state),
-          })
-          : createBlacklistRpcResponse(
+        if (!state) {
+          return createBlacklistRpcResponse(
             request.operation,
             false,
             {},
             "storage-unreadable",
           );
+        }
+        return responseWithinLimit(
+          createBlacklistRpcResponse(request.operation, true, {
+            snapshot: toSnapshot(state),
+          }),
+        ) ?? createBlacklistRpcResponse(
+          request.operation,
+          false,
+          {},
+          "storage-unreadable",
+        );
+      });
+    } catch {
+      return createBlacklistRpcResponse(
+        request.operation,
+        false,
+        {},
+        "storage-unreadable",
+      );
+    }
+  }
+
+  async function exportResponse(): Promise<BlacklistRpcResponse> {
+    try {
+      return await lock.runExclusive(async () => {
+        const parsed = await readLatest();
+        if (parsed.status === "malformed") {
+          return createBlacklistRpcResponse(
+            "export-json",
+            false,
+            {},
+            "storage-unreadable",
+          );
+        }
+        let exportedAt: string;
+        try {
+          exportedAt = now().toISOString();
+        } catch {
+          return createBlacklistRpcResponse(
+            "export-json",
+            false,
+            {},
+            "storage-unreadable",
+          );
+        }
+        const transfer = createBlacklistTransferEnvelope(
+          parsed.state,
+          exportedAt,
+        );
+        const validatedTransfer = parseBlacklistTransferEnvelope(transfer);
+        if (validatedTransfer.status !== "valid") {
+          return createBlacklistRpcResponse(
+            "export-json",
+            false,
+            {},
+            validatedTransfer.status === "too-large"
+              ? "transfer-too-large"
+              : "storage-unreadable",
+          );
+        }
+        const success = createBlacklistRpcResponse("export-json", true, {
+          transfer,
+        });
+        if (!responseWithinLimit(success)) {
+          return createBlacklistRpcResponse(
+            "export-json",
+            false,
+            {},
+            "transfer-too-large",
+          );
+        }
+        if (parsed.status === "missing" || parsed.status === "migrated") {
+          try {
+            await storage.set({ [STORAGE_KEY]: parsed.state });
+          } catch {
+            return createBlacklistRpcResponse(
+              "export-json",
+              false,
+              {},
+              "save-failed",
+            );
+          }
+        }
+        return success;
+      });
+    } catch {
+      return createBlacklistRpcResponse(
+        "export-json",
+        false,
+        {},
+        "storage-unreadable",
+      );
+    }
+  }
+
+  async function importResponse(
+    request: Extract<
+      BlacklistRpcRequest,
+      { readonly operation: "import-merge" | "import-replace" }
+    >,
+  ): Promise<BlacklistRpcResponse> {
+    const parsedTransfer = parseBlacklistTransferEnvelope(request.input.transfer);
+    if (parsedTransfer.status !== "valid") {
+      return createBlacklistRpcResponse(
+        request.operation,
+        false,
+        {},
+        parsedTransfer.status === "too-large"
+          ? "transfer-too-large"
+          : "invalid-transfer",
+      );
+    }
+
+    try {
+      return await lock.runExclusive(async () => {
+        const parsed = await readLatest();
+        if (parsed.status === "malformed") {
+          return createBlacklistRpcResponse(
+            request.operation,
+            false,
+            {},
+            "storage-unreadable",
+          );
+        }
+
+        let candidate: BlacklistState;
+        let unchanged = false;
+        if (request.operation === "import-merge") {
+          const plan = planBlacklistTransferMerge(
+            parsed.state,
+            parsedTransfer.transfer,
+          );
+          if (plan.status === "conflict") {
+            return createBlacklistRpcResponse(
+              request.operation,
+              false,
+              {},
+              "transfer-conflict",
+            );
+          }
+          candidate = plan.state;
+          unchanged = plan.status === "unchanged" && parsed.status === "valid";
+        } else {
+          candidate = planBlacklistTransferReplace(parsedTransfer.transfer);
+        }
+
+        const success = createBlacklistRpcResponse(request.operation, true, {
+          snapshot: toSnapshot(candidate),
+        });
+        if (!responseWithinLimit(success)) {
+          return createBlacklistRpcResponse(
+            request.operation,
+            false,
+            {},
+            "transfer-too-large",
+          );
+        }
+        if (unchanged) {
+          return success;
+        }
+        try {
+          await storage.set({ [STORAGE_KEY]: candidate });
+        } catch {
+          return createBlacklistRpcResponse(
+            request.operation,
+            false,
+            {},
+            "save-failed",
+          );
+        }
+        return success;
       });
     } catch {
       return createBlacklistRpcResponse(
@@ -139,7 +322,17 @@ export function createBlacklistManagementController(
   }
 
   async function mutate(
-    request: Exclude<BlacklistRpcRequest, { readonly operation: "status" | "snapshot" }>,
+    request: Exclude<
+      BlacklistRpcRequest,
+      {
+        readonly operation:
+          | "status"
+          | "snapshot"
+          | "export-json"
+          | "import-merge"
+          | "import-replace";
+      }
+    >,
   ): Promise<BlacklistRpcResponse> {
     try {
       return await lock.runExclusive(async () => {
@@ -240,6 +433,18 @@ export function createBlacklistManagementController(
           }
         }
 
+        const success = createBlacklistRpcResponse(request.operation, true, {
+          snapshot: toSnapshot(candidate),
+          removed: removed ? toAuthorDto(removed) : null,
+        });
+        if (!responseWithinLimit(success)) {
+          return createBlacklistRpcResponse(
+            request.operation,
+            false,
+            {},
+            "storage-unreadable",
+          );
+        }
         try {
           await storage.set({ [STORAGE_KEY]: candidate });
         } catch {
@@ -250,10 +455,7 @@ export function createBlacklistManagementController(
             "save-failed",
           );
         }
-        return createBlacklistRpcResponse(request.operation, true, {
-          snapshot: toSnapshot(candidate),
-          removed: removed ? toAuthorDto(removed) : null,
-        });
+        return success;
       });
     } catch {
       return createBlacklistRpcResponse(
@@ -284,8 +486,12 @@ export function createBlacklistManagementController(
       if (request.operation === "snapshot") {
         return snapshotResponse(request);
       }
-
-
+      if (request.operation === "export-json") {
+        return exportResponse();
+      }
+      if (request.operation === "import-merge" || request.operation === "import-replace") {
+        return importResponse(request);
+      }
       return mutate(request);
     },
   };

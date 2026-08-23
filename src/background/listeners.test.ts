@@ -198,6 +198,58 @@ test("BUG-013/AC-084 tabbed options RPC keeps the channel open and returns an ex
   strictEqual(parseBlacklistRpcResponse(responses[0], "snapshot"), response);
 });
 
+test("MANAGE-004 every transfer RPC is claimed only for the exact options page", async () => {
+  const runtimeId = "abcdefghijklmnopabcdefghijklmnop";
+  const transfer = {
+    product: "cocoon-blacklist",
+    formatVersion: 1,
+    exportedAt: "2026-08-22T10:00:00.000Z",
+    schemaVersion: 5,
+    authors: [],
+    tags: [{ tagId: "default", name: "default" }],
+  } as const;
+  const requests = [
+    createBlacklistRpcRequest("export-json", {}),
+    createBlacklistRpcRequest("import-merge", { transfer }),
+    createBlacklistRpcRequest("import-replace", { transfer }),
+  ] as const;
+  const responses: unknown[] = [];
+  let calls = 0;
+  const listener = createBlacklistRuntimeMessageListener(
+    {
+      async handle(request) {
+        calls += 1;
+        return request.operation === "export-json"
+          ? createBlacklistRpcResponse("export-json", false, {}, "storage-unreadable")
+          : createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
+      },
+    },
+    runtimeId,
+    () => { throw new Error("unexpected failure"); },
+  );
+
+  for (const request of requests) {
+    strictEqual(listener(request, {
+      id: runtimeId,
+      url: `chrome-extension://${runtimeId}/popup/popup.html`,
+    }, () => { throw new Error("Popup transfer request must remain unclaimed"); }), false);
+    strictEqual(listener(request, {
+      id: runtimeId,
+      url: `chrome-extension://${runtimeId}/options/options.html`,
+      tab: { id: 2 },
+    }, (value) => responses.push(value)), true);
+  }
+  await settle();
+
+  strictEqual(calls, 3);
+  for (const [index, request] of requests.entries()) {
+    strictEqual(
+      parseBlacklistRpcResponse(responses[index], request.operation)?.operation,
+      request.operation,
+    );
+  }
+});
+
 test("POPUP-009 handler failures return a valid fail-closed RPC response", async () => {
   const runtimeId = "abcdefghijklmnopabcdefghijklmnop";
   let failures = 0;

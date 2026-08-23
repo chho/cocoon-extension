@@ -1,19 +1,41 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
 import {
+  MAX_BLACKLIST_TRANSFER_BYTES,
   createBlacklistRpcResponse,
   type BlacklistSnapshotDto,
   type BlacklistRpcOperation,
   type BlacklistRpcResponse,
+  type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
 import {
   createBlacklistRpcClient,
   type BlacklistRpcClient,
 } from "../ui/background-rpc.ts";
-import { bootstrapOptions } from "./app.ts";
+import {
+  bootstrapOptions as bootstrapProductionOptions,
+  type OptionsAppDependencies,
+} from "./app.ts";
+
+type OptionsTestDependencies =
+  & Omit<OptionsAppDependencies, "readFileText" | "downloadJson">
+  & Partial<Pick<OptionsAppDependencies, "readFileText" | "downloadJson">>;
+
+function bootstrapOptions(
+  dependencies: OptionsTestDependencies,
+): ReturnType<typeof bootstrapProductionOptions> {
+  return bootstrapProductionOptions({
+    async readFileText() {
+      return "";
+    },
+    downloadJson() {},
+    ...dependencies,
+  });
+}
 
 const SNAPSHOT: BlacklistSnapshotDto = {
   authors: [{
@@ -31,10 +53,50 @@ const SNAPSHOT: BlacklistSnapshotDto = {
   ],
 };
 
+const TRANSFER: BlacklistTransferEnvelope = {
+  product: "cocoon-blacklist",
+  formatVersion: 1,
+  exportedAt: "2026-08-22T10:00:00.000Z",
+  schemaVersion: 5,
+  authors: [
+    {
+      platformId: "zhihu",
+      userId: "transfer/zhihu user",
+      memberHashId: null,
+      authorNameAtCapture: "Transfer Zhihu",
+      tagId: "default",
+      blacklistedAt: "2026-08-21T10:00:00.000Z",
+      blockSource: "direct",
+    },
+    {
+      platformId: "youtube",
+      userId: "transfer-youtube",
+      memberHashId: null,
+      authorNameAtCapture: "Transfer YouTube",
+      tagId: "reading",
+      blacklistedAt: "2026-08-20T10:00:00.000Z",
+      blockSource: "upvoter",
+    },
+  ],
+  tags: [
+    { tagId: "default", name: "default" },
+    { tagId: "reading", name: "Reading" },
+  ],
+};
+
 function fixture(): JSDOM {
   const dom = new JSDOM(`<!doctype html><body>
     <span id="author-total"></span><span id="tag-total"></span>
     <p id="page-message"></p><p id="write-error" tabindex="-1" hidden></p>
+    <section id="transfer-panel">
+      <button id="export-data"></button><input id="import-file" type="file">
+      <fieldset id="import-mode">
+        <input type="radio" name="import-mode" value="merge" checked>
+        <input type="radio" name="import-mode" value="replace">
+      </fieldset>
+      <button id="import-data"></button><p id="transfer-status" tabindex="-1"></p>
+      <p id="transfer-error" tabindex="-1" hidden></p>
+    </section>
     <input id="author-search"><select id="tag-filter"></select><select id="platform-filter"></select>
     <select id="time-sort"><option value="desc">desc</option><option value="asc">asc</option></select>
     <button id="remove-selected"></button>
@@ -42,6 +104,9 @@ function fixture(): JSDOM {
     <p id="list-summary"></p><h2 id="tags-heading" tabindex="-1"></h2><p id="tag-summary"></p><div id="tag-list"></div>
     <dialog id="batch-dialog"><p id="batch-dialog-description"></p>
       <button id="batch-cancel"></button><button id="batch-confirm"></button>
+    </dialog>
+    <dialog id="replace-dialog"><p id="replace-dialog-description"></p>
+      <button id="replace-cancel"></button><button id="replace-confirm"></button>
     </dialog>
   </body>`, {
     pretendToBeVisual: true,
@@ -52,6 +117,32 @@ function fixture(): JSDOM {
     dialog.close = () => { dialog.open = false; };
   }
   return dom;
+}
+
+test("MANAGE-005/AC-092 keeps transfer tools as the final main section", async () => {
+  const source = await readFile(
+    new URL("../../options/options.html", import.meta.url),
+    "utf8",
+  );
+  const document = new JSDOM(source).window.document;
+  const main = document.querySelector("main");
+  const tags = document.querySelector(".tags-panel");
+  const transfer = document.querySelector("#transfer-panel");
+  if (!main || !tags || !transfer) throw new Error("production sections missing");
+
+  const sections = [...main.querySelectorAll(":scope > section")];
+  strictEqual(sections.at(-1), transfer);
+  strictEqual(sections.indexOf(tags) < sections.indexOf(transfer), true);
+});
+
+function selectImportFile(dom: JSDOM, file: File | null): void {
+  const input = dom.window.document.querySelector<HTMLInputElement>("#import-file");
+  if (!input) throw new Error("import input missing");
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: file ? [file] : [],
+  });
+  input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
 }
 
 async function settle(): Promise<void> {
@@ -997,4 +1088,383 @@ test("PLATFORM-001/PROFILE-002/AC-090/AC-091 platform filtering and storage refr
   strictEqual(dom.window.document.activeElement === focused, false);
   strictEqual((dom.window.document.activeElement as HTMLAnchorElement).href, focused.href);
   strictEqual(list.querySelectorAll("span.author-name").length, 0);
+});
+
+test("MANAGE-004/AC-089 reads a local valid file, defaults to merge, reports exact counts, and rejects duplicate pending import", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  const pendingImport = deferredResponse();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("import-merge", pendingImport.promise);
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  let readFile: File | null = null;
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+    async readFileText(file) {
+      readFile = file;
+      return JSON.stringify(TRANSFER);
+    },
+    downloadJson() {},
+  });
+  await settle();
+
+  const file = new dom.window.File([JSON.stringify(TRANSFER)], "backup.json", {
+    type: "application/json",
+  }) as unknown as File;
+  selectImportFile(dom, file);
+  await settle();
+  strictEqual(readFile, file);
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已校验 2 位作者和 2 个标签。");
+  strictEqual(
+    dom.window.document.querySelector<HTMLInputElement>(
+      "input[name='import-mode'][value='merge']",
+    )?.checked,
+    true,
+  );
+  const importButton = dom.window.document.querySelector<HTMLButtonElement>("#import-data");
+  if (!importButton) throw new Error("import button missing");
+  strictEqual(importButton.disabled, false);
+  importButton.click();
+  importButton.click();
+  strictEqual(rpc.requestCounts.get("import-merge"), 1);
+  strictEqual(dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
+    "true");
+  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled,
+    true);
+  strictEqual(dom.window.document.querySelector<HTMLFieldSetElement>("#import-mode")?.disabled,
+    true);
+  deepStrictEqual(
+    rpc.requests.find(({ operation }) => operation === "import-merge")?.input,
+    { transfer: TRANSFER },
+  );
+
+  pendingImport.resolve(createBlacklistRpcResponse("import-merge", true, {
+    snapshot: SNAPSHOT,
+  }));
+  await settle();
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "合并完成；文件包含 2 位作者和 2 个标签。");
+  strictEqual(dom.window.document.activeElement?.id, "transfer-status");
+  strictEqual(importButton.disabled, true);
+  strictEqual(rpc.requestCounts.get("import-merge"), 1);
+});
+
+test("MANAGE-004/AC-089 replace inspects exact counts, cancels safely, confirms once, and restores focus", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("import-replace", createBlacklistRpcResponse("import-replace", true, {
+    snapshot: SNAPSHOT,
+  }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+    async readFileText() { return JSON.stringify(TRANSFER); },
+    downloadJson() {},
+  });
+  await settle();
+  selectImportFile(
+    dom,
+    new dom.window.File([JSON.stringify(TRANSFER)], "replace.json") as unknown as File,
+  );
+  await settle();
+
+  const merge = dom.window.document.querySelector<HTMLInputElement>(
+    "input[name='import-mode'][value='merge']",
+  );
+  const replace = dom.window.document.querySelector<HTMLInputElement>(
+    "input[name='import-mode'][value='replace']",
+  );
+  const importButton = dom.window.document.querySelector<HTMLButtonElement>("#import-data");
+  const dialog = dom.window.document.querySelector<HTMLDialogElement>("#replace-dialog");
+  const cancel = dom.window.document.querySelector<HTMLButtonElement>("#replace-cancel");
+  const confirm = dom.window.document.querySelector<HTMLButtonElement>("#replace-confirm");
+  if (!merge || !replace || !importButton || !dialog || !cancel || !confirm) {
+    throw new Error("replace controls missing");
+  }
+  merge.checked = false;
+  replace.checked = true;
+  importButton.focus();
+  importButton.click();
+  strictEqual(dialog.open, true);
+  strictEqual(dom.window.document.querySelector("#replace-dialog-description")?.textContent,
+    "将用文件中的 2 位作者和 2 个标签替换当前列表。现有设置会保留。");
+  strictEqual(dom.window.document.activeElement, cancel);
+  strictEqual(rpc.requestCounts.get("import-replace") ?? 0, 0);
+
+  cancel.click();
+  strictEqual(dialog.open, false);
+  strictEqual(dom.window.document.activeElement, importButton);
+  strictEqual(rpc.requestCounts.get("import-replace") ?? 0, 0);
+
+  importButton.click();
+  confirm.click();
+  confirm.click();
+  await settle();
+  strictEqual(rpc.requestCounts.get("import-replace"), 1);
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已替换为 2 位作者和 2 个标签。");
+  strictEqual(dom.window.document.activeElement?.id, "transfer-status");
+});
+
+test("MANAGE-004/AC-089 accepts the 8 MiB boundary and rejects oversized/read failures before import RPC", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("import-merge", createBlacklistRpcResponse("import-merge", true, {
+    snapshot: SNAPSHOT,
+  }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  let reads = 0;
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+    async readFileText(file) {
+      reads += 1;
+      if (file.name === "unreadable.json") throw new Error("read failed");
+      return file.name === "boundary.json"
+        ? JSON.stringify(TRANSFER)
+        : "{\"product\":\"unknown\"}";
+    },
+    downloadJson() {},
+  });
+  await settle();
+
+  const boundary = new dom.window.File(["{}"], "boundary.json") as unknown as File;
+  Object.defineProperty(boundary, "size", {
+    configurable: true,
+    value: MAX_BLACKLIST_TRANSFER_BYTES,
+  });
+  selectImportFile(dom, boundary);
+  await settle();
+  strictEqual(reads, 1);
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已校验 2 位作者和 2 个标签。");
+  dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.click();
+  await settle();
+  strictEqual(rpc.requestCounts.get("import-merge"), 1);
+
+  const oversized = new dom.window.File(["{}"], "oversized.json") as unknown as File;
+  Object.defineProperty(oversized, "size", {
+    configurable: true,
+    value: MAX_BLACKLIST_TRANSFER_BYTES + 1,
+  });
+  selectImportFile(dom, oversized);
+  await settle();
+  strictEqual(reads, 1);
+  strictEqual(rpc.requestCounts.get("import-merge"), 1);
+  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+    "导入文件超过 8 MiB 限制。");
+  strictEqual(dom.window.document.activeElement?.id, "transfer-error");
+
+  selectImportFile(
+    dom,
+    new dom.window.File(["{}"], "invalid.json") as unknown as File,
+  );
+  await settle();
+  strictEqual(reads, 2);
+  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+    "导入文件无效或格式不受支持。");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "未选择可导入的数据。");
+
+  selectImportFile(
+    dom,
+    new dom.window.File(["{}"], "unreadable.json") as unknown as File,
+  );
+  await settle();
+  strictEqual(reads, 3);
+  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+    "无法读取导入文件，请重新选择。");
+  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.disabled,
+    true);
+  strictEqual(rpc.requestCounts.get("import-merge"), 1);
+  strictEqual(rpc.requestCounts.get("import-replace") ?? 0, 0);
+});
+
+for (const failureCase of [
+  {
+    error: "invalid-transfer" as const,
+    message: "导入文件无效或格式不受支持，未进行更改。",
+  },
+  {
+    error: "transfer-conflict" as const,
+    message: "导入内容与本地标签或稳定标识冲突，未进行更改。",
+  },
+  {
+    error: "transfer-too-large" as const,
+    message: "导入数据超过 8 MiB 限制，未进行更改。",
+  },
+  {
+    error: "save-failed" as const,
+    message: "导入未保存，请重试。",
+  },
+  {
+    error: "storage-unreadable" as const,
+    message: "本地数据无法读取，Cocoon 未进行修改。",
+  },
+]) {
+  test(`MANAGE-004/AC-089 import ${failureCase.error} has no stale success or partial UI state`, async () => {
+    const dom = fixture();
+    const rpc = new RpcQueue();
+    rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+    rpc.push("import-merge", createBlacklistRpcResponse(
+      "import-merge",
+      false,
+      {},
+      failureCase.error,
+    ));
+    if (failureCase.error !== "storage-unreadable") {
+      rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
+        snapshot: SNAPSHOT,
+      }));
+    }
+    bootstrapOptions({
+      document: dom.window.document,
+      rpc,
+      storageChanges: { addListener() {} },
+      requestFrame(callback) { callback(); return 1; },
+      async readFileText() { return JSON.stringify(TRANSFER); },
+      downloadJson() {},
+    });
+    await settle();
+    selectImportFile(
+      dom,
+      new dom.window.File([JSON.stringify(TRANSFER)], "failure.json") as unknown as File,
+    );
+    await settle();
+    dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.click();
+    await settle();
+
+    strictEqual(rpc.requestCounts.get("import-merge"), 1);
+    strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+      failureCase.message);
+    strictEqual((dom.window.document.querySelector("#transfer-error") as HTMLElement).hidden,
+      false);
+    strictEqual(dom.window.document.activeElement?.id, "transfer-error");
+    strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+      "未导入数据。");
+    strictEqual(
+      dom.window.document.querySelector("#transfer-status")?.textContent?.startsWith("已"),
+      false,
+    );
+    strictEqual(dom.window.document.querySelector("#author-total")?.textContent,
+      failureCase.error === "storage-unreadable" ? "—" : "1");
+  });
+}
+
+test("MANAGE-004/AC-089 export uses exact JSON/filename, guards pending actions, and clears stale success on failure", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  const pendingExport = deferredResponse();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("export-json", pendingExport.promise);
+  rpc.push("export-json", createBlacklistRpcResponse(
+    "export-json",
+    false,
+    {},
+    "save-failed",
+  ));
+  const downloads: Array<{ json: string; filename: string }> = [];
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+    downloadJson(json, filename) { downloads.push({ json, filename }); },
+  });
+  await settle();
+
+  const exportButton = dom.window.document.querySelector<HTMLButtonElement>("#export-data");
+  if (!exportButton) throw new Error("export button missing");
+  exportButton.click();
+  exportButton.click();
+  strictEqual(rpc.requestCounts.get("export-json"), 1);
+  strictEqual(exportButton.disabled, true);
+  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled,
+    true);
+  strictEqual(dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
+    "true");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "正在准备导出…");
+
+  pendingExport.resolve(createBlacklistRpcResponse("export-json", true, {
+    transfer: TRANSFER,
+  }));
+  await settle();
+  strictEqual(downloads.length, 1);
+  deepStrictEqual(JSON.parse(downloads[0]!.json), TRANSFER);
+  strictEqual(downloads[0]!.filename, "cocoon-blacklist-2026-08-22.json");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已导出 2 位作者和 2 个标签。");
+  strictEqual(dom.window.document.activeElement?.id, "transfer-status");
+
+  exportButton.click();
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "正在准备导出…");
+  await settle();
+  strictEqual(downloads.length, 1);
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "未导出数据。");
+  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+    "无法导出本地数据，请重试。");
+  strictEqual(dom.window.document.activeElement?.id, "transfer-error");
+});
+
+test("MANAGE-004/AC-089 export storage failure enters read-only with an explicit storage error", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("export-json", createBlacklistRpcResponse(
+    "export-json",
+    false,
+    {},
+    "storage-unreadable",
+  ));
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) { callback(); return 1; },
+  });
+  await settle();
+  dom.window.document.querySelector<HTMLButtonElement>("#export-data")?.click();
+  await settle();
+
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
+    "未导出数据。");
+  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
+    "本地数据无法读取，Cocoon 未进行修改。");
+  strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "—");
+  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#export-data")?.disabled,
+    true);
+});
+
+test("MANAGE production storage listener performs a later validated refresh before re-enabling writes", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
+    requestFrame(callback) { callback(); return 1; },
+  });
+  await settle();
+  strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 0);
+  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  await settle();
+  strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 1);
+  strictEqual((dom.window.document.querySelector("#author-list button") as HTMLButtonElement).disabled, false);
 });
