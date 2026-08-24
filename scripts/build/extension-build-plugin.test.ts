@@ -71,10 +71,7 @@ class WatchBuildQueue {
     return outcome.error;
   }
 
-  waitForBuildOutcome(
-    label: string,
-    timeoutMs = 15_000,
-  ): Promise<BuildOutcome> {
+  waitForBuildOutcome(label: string, timeoutMs = 15_000): Promise<BuildOutcome> {
     const completed = this.#completed.shift();
     if (completed) {
       return Promise.resolve(completed);
@@ -136,9 +133,7 @@ class WatchBuildQueue {
 function isRollupWatcher(
   result: Awaited<ReturnType<typeof build>>,
 ): result is Rollup.RollupWatcher {
-  return !Array.isArray(result) &&
-    "on" in result &&
-    typeof result.on === "function";
+  return !Array.isArray(result) && "on" in result && typeof result.on === "function";
 }
 
 function parseFixtureState(value: unknown): FixtureRuntimeState {
@@ -147,10 +142,7 @@ function parseFixtureState(value: unknown): FixtureRuntimeState {
   }
   const state = value as Record<string, unknown>;
   for (const key of ["descriptorMatches", "runtimeMatches", "markers"] as const) {
-    if (
-      !Array.isArray(state[key]) ||
-      state[key].some((item) => typeof item !== "string")
-    ) {
+    if (!Array.isArray(state[key]) || state[key].some((item) => typeof item !== "string")) {
       throw new Error(`Fixture runtime state has invalid ${key}`);
     }
   }
@@ -168,10 +160,7 @@ async function writeFixturePlugin(
   marker: string,
 ): Promise<void> {
   await mkdir(directory, { recursive: true });
-  await writeFile(
-    join(directory, "plugin.json"),
-    `${JSON.stringify({ id, matches: [match] })}\n`,
-  );
+  await writeFile(join(directory, "plugin.json"), `${JSON.stringify({ id, matches: [match] })}\n`);
   await writeFile(
     join(directory, "plugin.ts"),
     `import descriptor from "./plugin.json";\n` +
@@ -181,9 +170,37 @@ async function writeFixturePlugin(
   await writeFile(join(directory, "plugin.css"), `.${id} { color: black; }\n`);
 }
 
-async function writeFixtureProject(
+async function writeFixtureExtensionPages(
   projectRoot: string,
-): Promise<FixtureProjectPaths> {
+  popupHtmlPath: string,
+  optionsHtmlPath: string,
+): Promise<void> {
+  await writeFile(
+    join(projectRoot, "src/popup/main.ts"),
+    `import "./popup.css";\n` + `document.body.dataset.popupFixture = "ready";\n`,
+  );
+  await writeFile(join(projectRoot, "src/popup/popup.css"), `.popup-fixture { color: black; }\n`);
+  await writeFile(
+    popupHtmlPath,
+    `<!doctype html><html><head><meta charset="UTF-8"><title>Popup</title></head>` +
+      `<body class="popup-fixture"><script type="module" src="/src/popup/main.ts"></script></body></html>\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/options/main.ts"),
+    `import "./options.css";\n` + `document.body.dataset.optionsFixture = "ready";\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/options/options.css"),
+    `.options-fixture { color: black; }\n`,
+  );
+  await writeFile(
+    optionsHtmlPath,
+    `<!doctype html><html><head><meta charset="UTF-8"><title>Options</title></head>` +
+      `<body class="options-fixture"><script type="module" src="/src/options/main.ts"></script></body></html>\n`,
+  );
+}
+
+async function writeFixtureProject(projectRoot: string): Promise<FixtureProjectPaths> {
   const pluginsRoot = join(projectRoot, "src/plugins");
   const discoveryPath = join(projectRoot, "src/core/plugin/discovery.ts");
   const contentEntryPath = join(projectRoot, "src/content/main.ts");
@@ -241,38 +258,8 @@ async function writeFixtureProject(
       `};\n`,
   );
 
-  await writeFile(
-    backgroundEntryPath,
-    `globalThis.__COCOON_BACKGROUND_FIXTURE__ = true;\n`,
-  );
-  await writeFile(
-    join(projectRoot, "src/popup/main.ts"),
-    `import "./popup.css";\n` +
-      `document.body.dataset.popupFixture = "ready";\n`,
-  );
-  await writeFile(
-    join(projectRoot, "src/popup/popup.css"),
-    `.popup-fixture { color: black; }\n`,
-  );
-  await writeFile(
-    popupHtmlPath,
-    `<!doctype html><html><head><meta charset="UTF-8"><title>Popup</title></head>` +
-      `<body class="popup-fixture"><script type="module" src="/src/popup/main.ts"></script></body></html>\n`,
-  );
-  await writeFile(
-    join(projectRoot, "src/options/main.ts"),
-    `import "./options.css";\n` +
-      `document.body.dataset.optionsFixture = "ready";\n`,
-  );
-  await writeFile(
-    join(projectRoot, "src/options/options.css"),
-    `.options-fixture { color: black; }\n`,
-  );
-  await writeFile(
-    optionsHtmlPath,
-    `<!doctype html><html><head><meta charset="UTF-8"><title>Options</title></head>` +
-      `<body class="options-fixture"><script type="module" src="/src/options/main.ts"></script></body></html>\n`,
-  );
+  await writeFile(backgroundEntryPath, `globalThis.__COCOON_BACKGROUND_FIXTURE__ = true;\n`);
+  await writeFixtureExtensionPages(projectRoot, popupHtmlPath, optionsHtmlPath);
 
   return {
     projectRoot,
@@ -315,28 +302,26 @@ function createFixtureBuildConfig(
       rollupOptions: {
         input: includeBackground
           ? {
-            popup: realpathSync(fixture.popupHtmlPath),
-            options: realpathSync(fixture.optionsHtmlPath),
-            content: realpathSync(fixture.contentEntryPath),
-            background: realpathSync(fixture.backgroundEntryPath),
-          }
+              popup: realpathSync(fixture.popupHtmlPath),
+              options: realpathSync(fixture.optionsHtmlPath),
+              content: realpathSync(fixture.contentEntryPath),
+              background: realpathSync(fixture.backgroundEntryPath),
+            }
           : {
-            popup: realpathSync(fixture.popupHtmlPath),
-            options: realpathSync(fixture.optionsHtmlPath),
-            content: realpathSync(fixture.contentEntryPath),
-          },
+              popup: realpathSync(fixture.popupHtmlPath),
+              options: realpathSync(fixture.optionsHtmlPath),
+              content: realpathSync(fixture.contentEntryPath),
+            },
         output: {
           entryFileNames: "assets/[name].js",
           chunkFileNames: "assets/[name].js",
           assetFileNames: "assets/[name][extname]",
           ...(forceBackgroundSharedChunk
             ? {
-              manualChunks(id: string) {
-                return id.endsWith("/src/background/shared.ts")
-                  ? "background-shared"
-                  : undefined;
-              },
-            }
+                manualChunks(id: string) {
+                  return id.endsWith("/src/background/shared.ts") ? "background-shared" : undefined;
+                },
+              }
             : {}),
         },
       },
@@ -344,13 +329,7 @@ function createFixtureBuildConfig(
   };
 }
 
-const SYMLINK_UNAVAILABLE_CODES = new Set([
-  "EACCES",
-  "ENOSYS",
-  "ENOTSUP",
-  "EOPNOTSUPP",
-  "EPERM",
-]);
+const SYMLINK_UNAVAILABLE_CODES = new Set(["EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"]);
 
 async function createDirectorySymlinkOrSkip(
   context: TestContext,
@@ -361,40 +340,28 @@ async function createDirectorySymlinkOrSkip(
     await symlink(target, path, "dir");
     return true;
   } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error
-      ? String(error.code)
-      : "unknown";
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : "unknown";
     if (!SYMLINK_UNAVAILABLE_CODES.has(code)) {
       throw error;
     }
-    context.skip(
-      `symbolic links are unavailable on this platform or filesystem (${code})`,
-    );
+    context.skip(`symbolic links are unavailable on this platform or filesystem (${code})`);
     return false;
   }
 }
 
-async function readBuildOutputSnapshot(
-  outDir: string,
-): Promise<BuildOutputSnapshot> {
+async function readBuildOutputSnapshot(outDir: string): Promise<BuildOutputSnapshot> {
   return {
     manifest: await readFile(join(outDir, "manifest.json"), "utf8"),
-    contentJavaScript: await readFile(
-      join(outDir, "assets/content.js"),
-      "utf8",
-    ),
-    backgroundJavaScript: await readFile(
-      join(outDir, "assets/background.js"),
-      "utf8",
-    ),
+    contentJavaScript: await readFile(join(outDir, "assets/content.js"), "utf8"),
+    backgroundJavaScript: await readFile(join(outDir, "assets/background.js"), "utf8"),
     contentCss: await readFile(join(outDir, "assets/content.css"), "utf8"),
   };
 }
 
-async function assertBuiltPageAssets(
-  outDir: string,
-  htmlPath: string,
-): Promise<void> {
+async function assertBuiltPageAssets(outDir: string, htmlPath: string): Promise<void> {
   const html = await readFile(join(outDir, htmlPath), "utf8");
   const references = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
     .map((matchResult) => matchResult[1])
@@ -412,9 +379,7 @@ async function assertBuiltPageAssets(
   }
 }
 
-async function readBuiltState(
-  outDir: string,
-): Promise<{
+async function readBuiltState(outDir: string): Promise<{
   readonly manifestMatches: readonly string[];
   readonly runtime: FixtureRuntimeState;
 }> {
@@ -447,18 +412,12 @@ async function readBuiltState(
     throw new Error("Fixture Manifest content script is invalid");
   }
   const matches = (contentScript as Record<string, unknown>).matches;
-  if (
-    !Array.isArray(matches) ||
-    matches.some((match) => typeof match !== "string")
-  ) {
+  if (!Array.isArray(matches) || matches.some((match) => typeof match !== "string")) {
     throw new Error("Fixture Manifest matches are invalid");
   }
 
   const sandbox: Record<string, unknown> = {};
-  runInNewContext(
-    await readFile(join(outDir, "assets/content.js"), "utf8"),
-    sandbox,
-  );
+  runInNewContext(await readFile(join(outDir, "assets/content.js"), "utf8"), sandbox);
   match(
     await readFile(join(outDir, "assets/background.js"), "utf8"),
     /__COCOON_BACKGROUND_FIXTURE__/,
@@ -477,14 +436,8 @@ async function assertBuildState(
 ): Promise<void> {
   const built = await readBuiltState(outDir);
   deepStrictEqual([...built.manifestMatches].sort(), [...expectedMatches].sort());
-  deepStrictEqual(
-    [...built.runtime.descriptorMatches].sort(),
-    [...expectedMatches].sort(),
-  );
-  deepStrictEqual(
-    [...built.runtime.runtimeMatches].sort(),
-    [...expectedMatches].sort(),
-  );
+  deepStrictEqual([...built.runtime.descriptorMatches].sort(), [...expectedMatches].sort());
+  deepStrictEqual([...built.runtime.runtimeMatches].sort(), [...expectedMatches].sort());
   deepStrictEqual([...built.runtime.markers].sort(), [...expectedMarkers].sort());
 }
 
@@ -499,10 +452,7 @@ async function waitForBuildState(
   let lastError: Error | null = null;
 
   while (Date.now() < deadline) {
-    const outcome = await builds.waitForBuildOutcome(
-      label,
-      Math.max(1, deadline - Date.now()),
-    );
+    const outcome = await builds.waitForBuildOutcome(label, Math.max(1, deadline - Date.now()));
     if (outcome.error) {
       lastError = outcome.error;
       continue;
@@ -538,10 +488,7 @@ test("BADGE-006 clean Vite build rejects a missing stable background entry befor
     await rejects(
       readFile(join(fixture.outDir, "manifest.json"), "utf8"),
       (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ENOENT",
+        typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT",
     );
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
@@ -590,13 +537,7 @@ test("ARCH-001 clean Vite build rejects a symlinked plugin before Manifest emiss
       "https://linked.example.com/*",
       "external-linked-runtime",
     );
-    if (
-      !await createDirectorySymlinkOrSkip(
-        context,
-        externalPluginPath,
-        linkedPluginPath,
-      )
-    ) {
+    if (!(await createDirectorySymlinkOrSkip(context, externalPluginPath, linkedPluginPath))) {
       return;
     }
 
@@ -607,10 +548,7 @@ test("ARCH-001 clean Vite build rejects a symlinked plugin before Manifest emiss
     await rejects(
       readFile(join(fixture.outDir, "manifest.json"), "utf8"),
       (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ENOENT",
+        typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT",
     );
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
@@ -628,12 +566,7 @@ test("ARCH-001/004 build watch keeps eager runtime discovery and Manifest scope 
   try {
     const fixture = await writeFixtureProject(projectRoot);
     const { outDir, pluginsRoot } = fixture;
-    await writeFixturePlugin(
-      join(pluginsRoot, "alpha"),
-      "alpha",
-      alphaMatch,
-      "alpha-runtime-v1",
-    );
+    await writeFixturePlugin(join(pluginsRoot, "alpha"), "alpha", alphaMatch, "alpha-runtime-v1");
 
     const result = await build(createFixtureBuildConfig(fixture, true));
     ok(isRollupWatcher(result), "Vite watch build must return a Rollup watcher");
@@ -644,12 +577,7 @@ test("ARCH-001/004 build watch keeps eager runtime discovery and Manifest scope 
     await assertBuildState(outDir, [alphaMatch], ["alpha-runtime-v1"]);
 
     const stagedBetaPath = join(projectRoot, "staged-beta");
-    await writeFixturePlugin(
-      stagedBetaPath,
-      "beta",
-      betaMatch,
-      "beta-runtime-v1",
-    );
+    await writeFixturePlugin(stagedBetaPath, "beta", betaMatch, "beta-runtime-v1");
     const addedBuild = builds.waitForSuccessfulBuild("plugin addition rebuild");
     await rename(stagedBetaPath, join(pluginsRoot, "beta"));
     await addedBuild;
@@ -664,13 +592,8 @@ test("ARCH-001/004 build watch keeps eager runtime discovery and Manifest scope 
       stagedDescriptorPath,
       `${JSON.stringify({ id: "beta", matches: [changedBetaMatch] })}\n`,
     );
-    const changedBuild = builds.waitForSuccessfulBuild(
-      "descriptor match rebuild",
-    );
-    await rename(
-      stagedDescriptorPath,
-      join(pluginsRoot, "beta/plugin.json"),
-    );
+    const changedBuild = builds.waitForSuccessfulBuild("descriptor match rebuild");
+    await rename(stagedDescriptorPath, join(pluginsRoot, "beta/plugin.json"));
     await changedBuild;
     await assertBuildState(
       outDir,
@@ -708,12 +631,7 @@ test("ARCH-001/004 Vite watch rejects a symlinked plugin and recovers atomically
       "alpha-runtime-v1",
     );
     const externalPluginPath = join(projectRoot, "external-linked-plugin");
-    await writeFixturePlugin(
-      externalPluginPath,
-      "linked",
-      linkedMatch,
-      "linked-runtime-v1",
-    );
+    await writeFixturePlugin(externalPluginPath, "linked", linkedMatch, "linked-runtime-v1");
 
     const result = await build(createFixtureBuildConfig(fixture, true));
     ok(isRollupWatcher(result), "Vite watch build must return a Rollup watcher");
@@ -721,11 +639,7 @@ test("ARCH-001/004 Vite watch rejects a symlinked plugin and recovers atomically
     builds = new WatchBuildQueue(watcher);
 
     await builds.waitForSuccessfulBuild("initial symlink recovery fixture build");
-    await assertBuildState(
-      fixture.outDir,
-      [alphaMatch],
-      ["alpha-runtime-v1"],
-    );
+    await assertBuildState(fixture.outDir, [alphaMatch], ["alpha-runtime-v1"]);
     const successfulOutput = await readBuildOutputSnapshot(fixture.outDir);
     match(
       successfulOutput.backgroundJavaScript,
@@ -734,37 +648,33 @@ test("ARCH-001/004 Vite watch rejects a symlinked plugin and recovers atomically
     );
 
     const linkedPluginPath = join(fixture.pluginsRoot, "linked");
-    if (
-      !await createDirectorySymlinkOrSkip(
-        context,
-        externalPluginPath,
-        linkedPluginPath,
-      )
-    ) {
+    if (!(await createDirectorySymlinkOrSkip(context, externalPluginPath, linkedPluginPath))) {
       return;
     }
-    const buildError = await builds.waitForFailedBuild(
-      "symlink rejection rebuild",
-    );
-    match(
-      buildError.message,
-      /\[Cocoon plugin build\] symbolic link is not allowed: linked/,
-    );
+    const buildError = await builds.waitForFailedBuild("symlink rejection rebuild");
+    match(buildError.message, /\[Cocoon plugin build\] symbolic link is not allowed: linked/);
     deepStrictEqual(
       await readBuildOutputSnapshot(fixture.outDir),
       successfulOutput,
       "failed rebuild must leave the previous Manifest and assets unchanged",
     );
 
+    const symlinkRemovalBuild = builds.waitForSuccessfulBuild("symlink removal rebuild");
     await rm(linkedPluginPath);
-    await rename(externalPluginPath, linkedPluginPath);
-    await waitForBuildState(
+    await symlinkRemovalBuild;
+    await assertBuildState(fixture.outDir, [alphaMatch], ["alpha-runtime-v1"]);
+
+    const stagedPluginPath = join(projectRoot, "staged-linked-plugin");
+    await writeFixturePlugin(stagedPluginPath, "linked", linkedMatch, "linked-runtime-v1");
+    const normalPluginRecoveryBuild = waitForBuildState(
       builds,
       fixture.outDir,
       [alphaMatch, linkedMatch],
       ["alpha-runtime-v1", "linked-runtime-v1"],
       "normal plugin recovery rebuild",
     );
+    await rename(stagedPluginPath, linkedPluginPath);
+    await normalPluginRecoveryBuild;
   } finally {
     builds?.cancel();
     if (watcher) {

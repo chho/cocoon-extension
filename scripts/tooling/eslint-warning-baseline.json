@@ -3,14 +3,6 @@
   "warnings": [
     {
       "path": "scripts/build/extension-build-plugin.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'writeFixtureProject' has too many lines (102). Maximum allowed is 80.",
-      "sourceLine": "async function writeFixtureProject(",
-      "count": 1
-    },
-    {
-      "path": "scripts/build/extension-build-plugin.test.ts",
       "ruleId": "max-params",
       "messageId": "exceed",
       "message": "Async function 'waitForBuildState' has too many parameters (5). Maximum allowed is 4.",

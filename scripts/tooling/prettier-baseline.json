@@ -10,10 +10,6 @@
       "sha256": "e8fa6ab6c56550fac19ab5641f8c807954429c7af68210f9f9517424d6617d20"
     },
     {
-      "path": "scripts/build/extension-build-plugin.test.ts",
-      "sha256": "5b43a0399949c4ce1fd6de9731fab6e44de8b413c6b897b54093195b249cfe07"
-    },
-    {
       "path": "scripts/build/extension-build-plugin.ts",
       "sha256": "7a3a15ec2411cc1c8ba416f1b4ae0ebbe3a6d1cc049dbffc7f9666e9ec219ff2"
     },
