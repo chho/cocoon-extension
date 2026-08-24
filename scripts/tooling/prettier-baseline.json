@@ -452,10 +452,6 @@
     {
       "path": "src/ui/zhihu-profile-url.ts",
       "sha256": "a239680ec8163842ccd881d25d348628f39a1735a25514c2dffae024a9b97680"
-    },
-    {
-      "path": "vite.config.ts",
-      "sha256": "86481734ad05f0092db3ae033ed942358a5d41fec4e2e12fd41d18b744ec521a"
     }
   ]
 }

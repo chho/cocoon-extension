@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="icons/icon-128.png" alt="" width="96" height="96">
+
 # Cocoon
 
 ### Quiet controls for a noisy feed.
@@ -157,7 +159,8 @@ src/core/plugin/            Strict plugin contracts, discovery, and registry
 src/plugins/<id>/           Site descriptors, runtime wiring, and styles
 src/options/                Management-page behavior and views
 src/popup/                  Popup behavior and views
-scripts/build/              Plugin scanning and Manifest composition
+scripts/build/              Plugin scanning, static assets, and Manifest composition
+icons/                      Extension branding assets at declared Chrome sizes
 docs/blacklist-spec.md      Product behavior and delivery source of truth
 public/manifest.json        Base Manifest fields
 ```

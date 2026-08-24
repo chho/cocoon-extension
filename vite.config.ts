@@ -2,10 +2,20 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 import { createExtensionBuildPlugin } from "./scripts/build/extension-build-plugin.ts";
+import { createStaticAssetsPlugin } from "./scripts/build/static-assets-plugin.ts";
+
+const iconAssets = [16, 32, 48, 128].map((size) => ({
+  sourcePath: `icons/icon-${size}.png`,
+  outputPath: `icons/icon-${size}.png`,
+}));
 
 export default defineConfig({
   publicDir: false,
   plugins: [
+    createStaticAssetsPlugin({
+      projectRoot: import.meta.dirname,
+      assets: iconAssets,
+    }),
     createExtensionBuildPlugin({ projectRoot: import.meta.dirname }),
   ],
   build: {
