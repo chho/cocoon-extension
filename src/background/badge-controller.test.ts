@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { BadgeMessage } from "../core/badge-message-contract.ts";
 import {
   BADGE_BACKGROUND_COLOR,
+  BADGE_TEXT_COLOR,
   badgeStorageKey,
   createBadgeController,
   formatBadgeCount,
@@ -25,10 +26,7 @@ function resetMessage(generation = GENERATION_A): BadgeMessage {
   };
 }
 
-function incrementMessage(
-  delta: number,
-  generation = GENERATION_A,
-): BadgeMessage {
+function incrementMessage(delta: number, generation = GENERATION_A): BadgeMessage {
   return {
     version: 1,
     type: "cocoon.badge.increment",
@@ -78,6 +76,10 @@ class MemoryAction implements BadgeAction {
     readonly tabId: number;
     readonly color: string;
   }> = [];
+  readonly textColorCalls: Array<{
+    readonly tabId: number;
+    readonly color: string;
+  }> = [];
   failText = false;
   failBackground = false;
 
@@ -91,10 +93,14 @@ class MemoryAction implements BadgeAction {
     this.backgroundCalls.push(details);
   }
 
-  async setBadgeText(details: {
+  async setBadgeTextColor(details: {
     readonly tabId: number;
-    readonly text: string;
+    readonly color: string;
   }): Promise<void> {
+    this.textColorCalls.push(details);
+  }
+
+  async setBadgeText(details: { readonly tabId: number; readonly text: string }): Promise<void> {
     if (this.failText) {
       throw new Error("text action failed");
     }
@@ -142,8 +148,7 @@ function storedState(
   tabId: number,
 ): { readonly generation: string; readonly count: number } | undefined {
   return storage.values.get(badgeStorageKey(tabId)) as
-    | { readonly generation: string; readonly count: number }
-    | undefined;
+    { readonly generation: string; readonly count: number } | undefined;
 }
 
 const MAIN_FRAME_SENDER = { tab: { id: 7 }, frameId: 0 } as const;
@@ -195,10 +200,7 @@ test("BADGE-004/006 invalid messages and senders have no state or Action effects
     [resetMessage(), {}],
     [incrementMessage(1), { tab: { id: 7 }, frameId: 2 }],
   ] as const) {
-    deepStrictEqual(
-      await harness.controller.handleMessage(message, sender),
-      { ok: false },
-    );
+    deepStrictEqual(await harness.controller.handleMessage(message, sender), { ok: false });
   }
   strictEqual(harness.storage.values.size, 0);
   strictEqual(harness.action.calls.length, 0);
@@ -206,26 +208,24 @@ test("BADGE-004/006 invalid messages and senders have no state or Action effects
 
 test("BADGE-001/004 resets and increments isolated per-tab exact session counts", async () => {
   const harness = createHarness();
+  deepStrictEqual(await harness.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER), {
+    ok: true,
+  });
+  deepStrictEqual(await harness.controller.handleMessage(incrementMessage(2), MAIN_FRAME_SENDER), {
+    ok: true,
+  });
   deepStrictEqual(
-    await harness.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER),
+    await harness.controller.handleMessage(resetMessage(GENERATION_B), {
+      tab: { id: 8 },
+      frameId: 0,
+    }),
     { ok: true },
   );
   deepStrictEqual(
-    await harness.controller.handleMessage(incrementMessage(2), MAIN_FRAME_SENDER),
-    { ok: true },
-  );
-  deepStrictEqual(
-    await harness.controller.handleMessage(
-      resetMessage(GENERATION_B),
-      { tab: { id: 8 }, frameId: 0 },
-    ),
-    { ok: true },
-  );
-  deepStrictEqual(
-    await harness.controller.handleMessage(
-      incrementMessage(5, GENERATION_B),
-      { tab: { id: 8 }, frameId: 0 },
-    ),
+    await harness.controller.handleMessage(incrementMessage(5, GENERATION_B), {
+      tab: { id: 8 },
+      frameId: 0,
+    }),
     { ok: true },
   );
 
@@ -247,6 +247,10 @@ test("BADGE-001/004 resets and increments isolated per-tab exact session counts"
     { tabId: 7, color: BADGE_BACKGROUND_COLOR },
     { tabId: 8, color: BADGE_BACKGROUND_COLOR },
   ]);
+  deepStrictEqual(harness.action.textColorCalls, [
+    { tabId: 7, color: BADGE_TEXT_COLOR },
+    { tabId: 8, color: BADGE_TEXT_COLOR },
+  ]);
 });
 
 test("BADGE-004 concurrent increments serialize without lost updates", async () => {
@@ -256,10 +260,13 @@ test("BADGE-004 concurrent increments serialize without lost updates", async () 
 
   const responses = await Promise.all(
     Array.from({ length: 40 }, () =>
-      harness.controller.handleMessage(incrementMessage(1), MAIN_FRAME_SENDER)
+      harness.controller.handleMessage(incrementMessage(1), MAIN_FRAME_SENDER),
     ),
   );
-  strictEqual(responses.every(({ ok }) => ok), true);
+  strictEqual(
+    responses.every(({ ok }) => ok),
+    true,
+  );
   strictEqual(storedState(harness.storage, 7)?.count, 40);
   strictEqual(harness.action.textByTab.get(7), "40");
 });
@@ -272,30 +279,17 @@ test("BADGE-004 serialized reset rejects stale old-generation deltas", async () 
     incrementMessage(2),
     MAIN_FRAME_SENDER,
   );
-  const reset = harness.controller.handleMessage(
-    resetMessage(GENERATION_B),
-    MAIN_FRAME_SENDER,
-  );
-  const staleIncrement = harness.controller.handleMessage(
-    incrementMessage(100),
-    MAIN_FRAME_SENDER,
-  );
+  const reset = harness.controller.handleMessage(resetMessage(GENERATION_B), MAIN_FRAME_SENDER);
+  const staleIncrement = harness.controller.handleMessage(incrementMessage(100), MAIN_FRAME_SENDER);
   const currentIncrement = harness.controller.handleMessage(
     incrementMessage(3, GENERATION_B),
     MAIN_FRAME_SENDER,
   );
 
-  deepStrictEqual(await Promise.all([
-    beforeResetIncrement,
-    reset,
-    staleIncrement,
-    currentIncrement,
-  ]), [
-    { ok: true },
-    { ok: true },
-    { ok: false },
-    { ok: true },
-  ]);
+  deepStrictEqual(
+    await Promise.all([beforeResetIncrement, reset, staleIncrement, currentIncrement]),
+    [{ ok: true }, { ok: true }, { ok: false }, { ok: true }],
+  );
   deepStrictEqual(storedState(harness.storage, 7), {
     generation: GENERATION_B,
     count: 3,
@@ -306,33 +300,25 @@ test("BADGE-004 navigation rejects stale generations and removal cleans only the
   const harness = createHarness();
   await harness.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER);
   await harness.controller.handleMessage(incrementMessage(4), MAIN_FRAME_SENDER);
-  await harness.controller.handleMessage(
-    resetMessage(GENERATION_B),
-    { tab: { id: 8 }, frameId: 0 },
-  );
+  await harness.controller.handleMessage(resetMessage(GENERATION_B), {
+    tab: { id: 8 },
+    frameId: 0,
+  });
 
   strictEqual(await harness.controller.clearForNavigation(7), true);
   strictEqual(storedState(harness.storage, 7), undefined);
   strictEqual(harness.action.textByTab.get(7), "");
   strictEqual(storedState(harness.storage, 8)?.count, 0);
-  deepStrictEqual(
-    await harness.controller.handleMessage(incrementMessage(10), MAIN_FRAME_SENDER),
-    { ok: false },
-  );
+  deepStrictEqual(await harness.controller.handleMessage(incrementMessage(10), MAIN_FRAME_SENDER), {
+    ok: false,
+  });
 
-  await harness.controller.handleMessage(
-    resetMessage(GENERATION_B),
-    MAIN_FRAME_SENDER,
-  );
+  await harness.controller.handleMessage(resetMessage(GENERATION_B), MAIN_FRAME_SENDER);
+  deepStrictEqual(await harness.controller.handleMessage(incrementMessage(10), MAIN_FRAME_SENDER), {
+    ok: false,
+  });
   deepStrictEqual(
-    await harness.controller.handleMessage(incrementMessage(10), MAIN_FRAME_SENDER),
-    { ok: false },
-  );
-  deepStrictEqual(
-    await harness.controller.handleMessage(
-      incrementMessage(2, GENERATION_B),
-      MAIN_FRAME_SENDER,
-    ),
+    await harness.controller.handleMessage(incrementMessage(2, GENERATION_B), MAIN_FRAME_SENDER),
     { ok: true },
   );
   strictEqual(storedState(harness.storage, 7)?.count, 2);
@@ -351,19 +337,21 @@ test("BADGE-004 a fresh controller resumes authoritative session state after wor
     action: harness.action,
     locks: harness.locks,
   });
-  deepStrictEqual(
-    await restartedController.handleMessage(incrementMessage(4), MAIN_FRAME_SENDER),
-    { ok: true },
-  );
+  deepStrictEqual(await restartedController.handleMessage(incrementMessage(4), MAIN_FRAME_SENDER), {
+    ok: true,
+  });
   strictEqual(storedState(harness.storage, 7)?.count, 13);
   strictEqual(harness.action.textByTab.get(7), "13");
 });
 
 test("BADGE-005 formats 0, 1, 999, 1000, and larger exact values", async () => {
-  deepStrictEqual(
-    [0, 1, 999, 1_000, 50_000].map(formatBadgeCount),
-    ["", "1", "999", "999+", "999+"],
-  );
+  deepStrictEqual([0, 1, 999, 1_000, 50_000].map(formatBadgeCount), [
+    "",
+    "1",
+    "999",
+    "999+",
+    "999+",
+  ]);
 
   const harness = createHarness();
   await harness.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER);
@@ -400,10 +388,9 @@ test("BADGE-006 corrupt or overflowing session state fails safely", async () => 
     generation: GENERATION_A,
     count: Number.MAX_SAFE_INTEGER,
   });
-  deepStrictEqual(
-    await overflow.controller.handleMessage(incrementMessage(1), MAIN_FRAME_SENDER),
-    { ok: false },
-  );
+  deepStrictEqual(await overflow.controller.handleMessage(incrementMessage(1), MAIN_FRAME_SENDER), {
+    ok: false,
+  });
   strictEqual(storedState(overflow.storage, 7)?.count, Number.MAX_SAFE_INTEGER);
 });
 
@@ -442,10 +429,9 @@ test("BADGE-006 storage and Action failures report failure without rolling back 
 
   const actionFailure = createHarness();
   actionFailure.action.failText = true;
-  deepStrictEqual(
-    await actionFailure.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER),
-    { ok: false },
-  );
+  deepStrictEqual(await actionFailure.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER), {
+    ok: false,
+  });
   deepStrictEqual(storedState(actionFailure.storage, 7), {
     generation: GENERATION_A,
     count: 0,
@@ -472,10 +458,7 @@ test("BADGE-006 storage and Action failures report failure without rolling back 
   await backgroundFailure.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER);
   backgroundFailure.action.failBackground = true;
   deepStrictEqual(
-    await backgroundFailure.controller.handleMessage(
-      incrementMessage(1),
-      MAIN_FRAME_SENDER,
-    ),
+    await backgroundFailure.controller.handleMessage(incrementMessage(1), MAIN_FRAME_SENDER),
     { ok: false },
   );
   strictEqual(storedState(backgroundFailure.storage, 7)?.count, 1);
@@ -489,14 +472,8 @@ test("BADGE-006 storage and Action failures report failure without rolling back 
   strictEqual(storedState(clearFailure.storage, 7)?.count, 0);
 
   const navigationActionFailure = createHarness();
-  await navigationActionFailure.controller.handleMessage(
-    resetMessage(),
-    MAIN_FRAME_SENDER,
-  );
+  await navigationActionFailure.controller.handleMessage(resetMessage(), MAIN_FRAME_SENDER);
   navigationActionFailure.action.failText = true;
-  strictEqual(
-    await navigationActionFailure.controller.clearForNavigation(7),
-    false,
-  );
+  strictEqual(await navigationActionFailure.controller.clearForNavigation(7), false);
   strictEqual(storedState(navigationActionFailure.storage, 7), undefined);
 });

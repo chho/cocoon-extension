@@ -11,7 +11,8 @@ const INCREMENT_MESSAGE_TYPE = "cocoon.badge.increment";
 const STORAGE_KEY_PREFIX = "cocoonBadgeTab:";
 const LOCK_NAME_PREFIX = "cocoon-badge-tab:";
 const GENERATION_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
-export const BADGE_BACKGROUND_COLOR = "#5F6368";
+export const BADGE_BACKGROUND_COLOR = "#0F5960";
+export const BADGE_TEXT_COLOR = "#FFF7E8";
 
 export interface BadgeSessionState {
   readonly generation: string;
@@ -29,6 +30,7 @@ export interface BadgeAction {
     readonly tabId: number;
     readonly color: string;
   }): Promise<void>;
+  setBadgeTextColor(details: { readonly tabId: number; readonly color: string }): Promise<void>;
   setBadgeText(details: { readonly tabId: number; readonly text: string }): Promise<void>;
 }
 
@@ -57,10 +59,7 @@ export type BadgeStatusStateRead =
   | { readonly status: "invalid" };
 
 export interface BadgeController {
-  handleMessage(
-    message: unknown,
-    sender: BadgeMessageSender,
-  ): Promise<BadgeMessageResponse>;
+  handleMessage(message: unknown, sender: BadgeMessageSender): Promise<BadgeMessageResponse>;
   clearForNavigation(tabId: number): Promise<boolean>;
   clearForRemoval(tabId: number): Promise<boolean>;
   getStatusState(tabId: number): Promise<BadgeStatusStateRead>;
@@ -70,14 +69,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
   const sortedExpected = [...expected].sort();
-  return actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index]);
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
 }
 
 function isGeneration(value: unknown): value is string {
@@ -121,9 +119,8 @@ export function parseBadgeMessage(value: unknown): BadgeMessage | null {
 
 export function getMainFrameTabId(sender: BadgeMessageSender): number | null {
   const tabId = sender.tab?.id;
-  return Number.isSafeInteger(tabId) && (tabId as number) >= 0 &&
-      sender.frameId === 0
-    ? tabId as number
+  return Number.isSafeInteger(tabId) && (tabId as number) >= 0 && sender.frameId === 0
+    ? (tabId as number)
     : null;
 }
 
@@ -154,13 +151,8 @@ export function formatBadgeCount(count: number): string {
   return count >= 1_000 ? "999+" : String(count);
 }
 
-export function createBadgeController(
-  dependencies: BadgeControllerDependencies,
-): BadgeController {
-  async function withTabLock<T>(
-    tabId: number,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+export function createBadgeController(dependencies: BadgeControllerDependencies): BadgeController {
+  async function withTabLock<T>(tabId: number, operation: () => Promise<T>): Promise<T> {
     return dependencies.locks.request(
       `${LOCK_NAME_PREFIX}${tabId}`,
       { mode: "exclusive" },
@@ -174,6 +166,10 @@ export function createBadgeController(
         tabId,
         color: BADGE_BACKGROUND_COLOR,
       });
+      await dependencies.action.setBadgeTextColor({
+        tabId,
+        color: BADGE_TEXT_COLOR,
+      });
     }
     await dependencies.action.setBadgeText({
       tabId,
@@ -181,10 +177,7 @@ export function createBadgeController(
     });
   }
 
-  async function reset(
-    tabId: number,
-    message: BadgeResetMessage,
-  ): Promise<boolean> {
+  async function reset(tabId: number, message: BadgeResetMessage): Promise<boolean> {
     try {
       return await withTabLock(tabId, async () => {
         const state: BadgeSessionState = {
@@ -200,10 +193,7 @@ export function createBadgeController(
     }
   }
 
-  async function increment(
-    tabId: number,
-    message: BadgeIncrementMessage,
-  ): Promise<boolean> {
+  async function increment(tabId: number, message: BadgeIncrementMessage): Promise<boolean> {
     try {
       return await withTabLock(tabId, async () => {
         const key = badgeStorageKey(tabId);
@@ -229,10 +219,7 @@ export function createBadgeController(
     }
   }
 
-  async function clear(
-    tabId: number,
-    clearAction: boolean,
-  ): Promise<boolean> {
+  async function clear(tabId: number, clearAction: boolean): Promise<boolean> {
     if (!Number.isSafeInteger(tabId) || tabId < 0) {
       return false;
     }
@@ -257,9 +244,10 @@ export function createBadgeController(
         return { ok: false };
       }
 
-      const ok = parsedMessage.type === RESET_MESSAGE_TYPE
-        ? await reset(tabId, parsedMessage)
-        : await increment(tabId, parsedMessage);
+      const ok =
+        parsedMessage.type === RESET_MESSAGE_TYPE
+          ? await reset(tabId, parsedMessage)
+          : await increment(tabId, parsedMessage);
       return { ok };
     },
     clearForNavigation(tabId) {
@@ -279,9 +267,7 @@ export function createBadgeController(
           return { status: "missing" };
         }
         const state = parseBadgeSessionState(values[key]);
-        return state
-          ? { status: "valid", state }
-          : { status: "invalid" };
+        return state ? { status: "valid", state } : { status: "invalid" };
       } catch {
         return { status: "invalid" };
       }

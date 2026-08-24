@@ -74,6 +74,9 @@ const badgeController = createBadgeController({
     async setBadgeBackgroundColor(details) {
       await chrome.action.setBadgeBackgroundColor(details);
     },
+    async setBadgeTextColor(details) {
+      await chrome.action.setBadgeTextColor(details);
+    },
     async setBadgeText(details) {
       await chrome.action.setBadgeText(details);
     },
@@ -119,7 +122,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     return;
   }
   void (async () => {
-    if (!await badgeController.clearForNavigation(tabId)) {
+    if (!(await badgeController.clearForNavigation(tabId))) {
       reportBadgeFailure();
     }
   })();
@@ -127,7 +130,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
-    if (!await badgeController.clearForRemoval(tabId)) {
+    if (!(await badgeController.clearForRemoval(tabId))) {
       reportBadgeFailure();
     }
   })();

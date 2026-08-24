@@ -50,14 +50,6 @@
       "sha256": "3fd2434bc0ad4d8c50fdd233deb1964af788f06f4caf9e3110cfc4d509c33a7c"
     },
     {
-      "path": "src/background/badge-controller.test.ts",
-      "sha256": "bcc0b275c68e30c36aa40eed7c9f2646443f42b3e39c56dff442f164c4928567"
-    },
-    {
-      "path": "src/background/badge-controller.ts",
-      "sha256": "30874adce16c5b909cf71077707034e6796f7936f55ae091953a7a359e8c6ba6"
-    },
-    {
       "path": "src/background/blacklist-lock-coordinator.test.ts",
       "sha256": "2647e28930d2217b2e9637a95634646f28ba81cd63e7ac6d4cfcc4f75741808f"
     },
@@ -88,10 +80,6 @@
     {
       "path": "src/background/listeners.ts",
       "sha256": "18f2355a762490dd09298fe47a22674a218cba26a7a73722f97f8f30bbefaadb"
-    },
-    {
-      "path": "src/background/main.ts",
-      "sha256": "5e64a56e43b63a7061ca9bdb8161d1fc85edc5fc74eb5b87b69c0c5bc7b4197a"
     },
     {
       "path": "src/background/status-controller.test.ts",

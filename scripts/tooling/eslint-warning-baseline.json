@@ -181,8 +181,8 @@
       "path": "src/background/badge-controller.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'createBadgeController' has too many lines (128). Maximum allowed is 50.",
-      "sourceLine": "export function createBadgeController(",
+      "message": "Function 'createBadgeController' has too many lines (117). Maximum allowed is 50.",
+      "sourceLine": "export function createBadgeController(dependencies: BadgeControllerDependencies): BadgeController {",
       "count": 1
     },
     {
