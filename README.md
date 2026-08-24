@@ -4,6 +4,11 @@
 
 ### Quiet controls for a noisy feed.
 
+[![CI](https://github.com/chho/cocoon-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/chho/cocoon-extension/actions/workflows/ci.yml)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/github/license/chho/cocoon-extension)](LICENSE)
+
 Cocoon is a local-first Chrome extension that gives you quiet, precise control over who appears in the feeds you browse.
 
 `×` &nbsp;→&nbsp; `tag` &nbsp;→&nbsp; `quiet`
