@@ -1,4 +1,7 @@
 import type { BadgeMessageResponse } from "../core/badge-message-contract.ts";
+import type * as ContentRpcContractModule from "../core/blacklist-content-rpc-contract.ts";
+// @ts-expect-error Vite resolves the background-only copy during bundling.
+import * as backgroundContentRpcContract from "../core/blacklist-content-rpc-contract.ts?background-copy";
 import {
   getMainFrameTabId,
   parseBadgeMessage,
@@ -6,18 +9,14 @@ import {
   type BadgeMessageSender,
 } from "./badge-controller.ts";
 import type * as RpcContractModule from "../core/blacklist-rpc-contract.ts";
-import type {
-  BlacklistRpcRequest,
-  BlacklistRpcResponse,
-} from "../core/blacklist-rpc-contract.ts";
+import type { BlacklistRpcRequest, BlacklistRpcResponse } from "../core/blacklist-rpc-contract.ts";
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundRpcContract from "../core/blacklist-rpc-contract.ts?background-copy";
 
-const {
-  createBlacklistRpcResponse,
-  isBlacklistTransferOperation,
-  parseBlacklistRpcRequest,
-} = backgroundRpcContract as typeof RpcContractModule;
+const { createBlacklistRpcResponse, isBlacklistTransferOperation, parseBlacklistRpcRequest } =
+  backgroundRpcContract as typeof RpcContractModule;
+const { createBlacklistContentResponse, parseBlacklistContentRequest } =
+  backgroundContentRpcContract as typeof ContentRpcContractModule;
 
 export type BadgeRuntimeMessageListener = (
   message: unknown,
@@ -28,7 +27,8 @@ export type BadgeRuntimeMessageListener = (
 export interface UiMessageSender {
   readonly id?: string;
   readonly url?: string;
-  readonly tab?: unknown;
+  readonly tab?: { readonly id?: number };
+  readonly frameId?: number;
 }
 
 export type BlacklistRuntimeMessageListener = (
@@ -41,22 +41,23 @@ export interface BlacklistRpcHandler {
   handle(request: BlacklistRpcRequest): Promise<BlacklistRpcResponse>;
 }
 
-function authorizedUiPath(
-  sender: UiMessageSender,
-  runtimeId: string,
-): string | null {
+export interface BlacklistContentRpcHandler {
+  handle(request: ContentRpcContractModule.BlacklistContentRequest): Promise<unknown>;
+}
+
+function authorizedUiPath(sender: UiMessageSender, runtimeId: string): string | null {
   if (sender.id !== runtimeId || !sender.url) {
     return null;
   }
   try {
     const url = new URL(sender.url);
     return url.protocol === "chrome-extension:" &&
-        url.hostname === runtimeId &&
-        url.username === "" &&
-        url.password === "" &&
-        url.port === "" &&
-        url.search === "" &&
-        url.hash === ""
+      url.hostname === runtimeId &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === "" &&
+      url.search === "" &&
+      url.hash === ""
       ? url.pathname
       : null;
   } catch {
@@ -64,19 +65,48 @@ function authorizedUiPath(
   }
 }
 
-export function isAuthorizedUiSender(
-  sender: UiMessageSender,
-  runtimeId: string,
-): boolean {
+export function isAuthorizedUiSender(sender: UiMessageSender, runtimeId: string): boolean {
   const path = authorizedUiPath(sender, runtimeId);
   return path === "/popup/popup.html" || path === "/options/options.html";
 }
 
-export function isAuthorizedTransferSender(
-  sender: UiMessageSender,
-  runtimeId: string,
-): boolean {
+export function isAuthorizedTransferSender(sender: UiMessageSender, runtimeId: string): boolean {
   return authorizedUiPath(sender, runtimeId) === "/options/options.html";
+}
+
+export function createBlacklistContentRuntimeMessageListener(
+  handler: BlacklistContentRpcHandler,
+  runtimeId: string,
+  reportFailure: () => void,
+): BlacklistRuntimeMessageListener {
+  return (message, sender, sendResponse) => {
+    const request = parseBlacklistContentRequest(message);
+    const tabId = sender.tab?.id;
+    if (
+      !request ||
+      sender.id !== runtimeId ||
+      sender.url !== "https://www.zhihu.com/" ||
+      !Number.isSafeInteger(tabId) ||
+      (tabId as number) < 0 ||
+      sender.frameId !== 0
+    ) {
+      return false;
+    }
+    void (async () => {
+      try {
+        const result = await handler.handle(request);
+        sendResponse(createBlacklistContentResponse(request.operation, true, result));
+      } catch {
+        reportFailure();
+        try {
+          sendResponse(createBlacklistContentResponse(request.operation, false));
+        } catch {
+          reportFailure();
+        }
+      }
+    })();
+    return true;
+  };
 }
 
 export function createBlacklistRuntimeMessageListener(
@@ -100,17 +130,13 @@ export function createBlacklistRuntimeMessageListener(
         response = await handler.handle(request);
       } catch {
         reportFailure();
-        response = request.operation === "status"
-          ? createBlacklistRpcResponse("status", true, {
-            status: "connection-error",
-            count: 0,
-          })
-          : createBlacklistRpcResponse(
-            request.operation,
-            false,
-            {},
-            "storage-unreadable",
-          );
+        response =
+          request.operation === "status"
+            ? createBlacklistRpcResponse("status", true, {
+                status: "connection-error",
+                count: 0,
+              })
+            : createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
       }
       try {
         sendResponse(response);
@@ -127,10 +153,7 @@ export function createBadgeRuntimeMessageListener(
   reportFailure: () => void,
 ): BadgeRuntimeMessageListener {
   return (message, sender, sendResponse) => {
-    if (
-      parseBadgeMessage(message) === null ||
-      getMainFrameTabId(sender) === null
-    ) {
+    if (parseBadgeMessage(message) === null || getMainFrameTabId(sender) === null) {
       return false;
     }
 

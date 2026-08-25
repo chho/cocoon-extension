@@ -5,6 +5,7 @@ import {
   DEFAULT_TAG_ID,
   createInitialState,
   parseBlacklistState,
+  planTagDeletion,
   type BlacklistState,
 } from "./blacklist-state.ts";
 import { createTagDeletionController } from "./tag-deletion-controller.ts";
@@ -59,40 +60,80 @@ function interaction() {
   };
 }
 
+function createTargetedDelete(options: {
+  readonly readState: () => unknown;
+  readonly persistState: (state: BlacklistState) => void;
+  readonly applyState: (state: BlacklistState) => void;
+  readonly beforeDelete?: () => void;
+  readonly failWrite?: boolean;
+}) {
+  let revision = 0;
+  return async (tagId: string) => {
+    options.beforeDelete?.();
+    const parsed = parseBlacklistState(options.readState());
+    if (parsed.status === "malformed") throw new Error("state unreadable");
+    const plan = planTagDeletion(parsed.state, tagId);
+    const base = {
+      baseRevision: revision,
+      revision,
+      authorCount: parsed.state.authors.length,
+      tagCount: parsed.state.tags.length,
+    };
+    if (plan.status !== "ready") {
+      return {
+        status: plan.status,
+        deletedTagId: null,
+        ...base,
+      };
+    }
+    if (options.failWrite) throw new Error("write failed");
+    options.persistState(plan.state);
+    options.applyState(plan.state);
+    revision += 1;
+    return {
+      status: "persisted" as const,
+      deletedTagId: tagId,
+      baseRevision: base.baseRevision,
+      revision,
+      authorCount: plan.state.authors.length,
+      tagCount: plan.state.tags.length,
+    };
+  };
+}
+
 test("TAG-014/015 deletion is one latest-state write and preserves author data", async () => {
   let stored = populatedState();
   let runtime = stored;
   const writes: BlacklistState[] = [];
   const event = interaction();
   const controller = createTagDeletionController({
-    async withExclusiveLock(operation) {
-      stored = {
-        ...stored,
-        authors: [
-          ...stored.authors,
-          {
-            platformId: "zhihu",
-            userId: "concurrent",
-            memberHashId: null,
-            authorNameAtCapture: "Concurrent",
-            tagId: "remove",
-            blacklistedAt: TIMESTAMP,
-            blockSource: "direct",
-          },
-        ],
-      };
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState(state) {
-      writes.push(state);
-      stored = state;
-    },
-    applyPersistedState(state) {
-      runtime = state;
-    },
+    deleteTag: createTargetedDelete({
+      readState: () => stored,
+      beforeDelete() {
+        stored = {
+          ...stored,
+          authors: [
+            ...stored.authors,
+            {
+              platformId: "zhihu",
+              userId: "concurrent",
+              memberHashId: null,
+              authorNameAtCapture: "Concurrent",
+              tagId: "remove",
+              blacklistedAt: TIMESTAMP,
+              blockSource: "direct",
+            },
+          ],
+        };
+      },
+      persistState(state) {
+        writes.push(state);
+        stored = state;
+      },
+      applyState(state) {
+        runtime = state;
+      },
+    }),
     reportFailure() {
       throw new Error("Unexpected deletion failure.");
     },
@@ -104,7 +145,10 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
   strictEqual(result.status, "persisted");
   strictEqual(writes.length, 1);
   deepStrictEqual(event.counts(), { prevented: 1, stopped: 1 });
-  deepStrictEqual(stored.tags.map((tag) => tag.tagId), ["default", "keep"]);
+  deepStrictEqual(
+    stored.tags.map((tag) => tag.tagId),
+    ["default", "keep"],
+  );
   deepStrictEqual(stored.authors, [
     { ...beforeMove, tagId: DEFAULT_TAG_ID },
     populatedState().authors[1],
@@ -127,18 +171,14 @@ test("TAG-016 write failure rolls back memory and keeps the drawer event isolate
   let reported: unknown;
   const event = interaction();
   const controller = createTagDeletionController({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState() {
-      throw new Error("write failed");
-    },
-    applyPersistedState(state) {
-      runtime = state;
-    },
+    deleteTag: createTargetedDelete({
+      readState: () => stored,
+      persistState() {},
+      applyState(state) {
+        runtime = state;
+      },
+      failWrite: true,
+    }),
     reportFailure(error) {
       reported = error;
     },
@@ -159,18 +199,15 @@ test("default is protected by controller logic without any storage write", async
   let applies = 0;
   const event = interaction();
   const controller = createTagDeletionController({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(state);
-    },
-    async writeState() {
-      writes += 1;
-    },
-    applyPersistedState() {
-      applies += 1;
-    },
+    deleteTag: createTargetedDelete({
+      readState: () => state,
+      persistState() {
+        writes += 1;
+      },
+      applyState() {
+        applies += 1;
+      },
+    }),
     reportFailure() {
       throw new Error("Unexpected deletion failure.");
     },
@@ -199,16 +236,13 @@ test("deleting from v1 atomically migrates schema v5, platform, source, hash, an
   };
   const event = interaction();
   const controller = createTagDeletionController({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState(state) {
-      stored = state;
-    },
-    applyPersistedState() {},
+    deleteTag: createTargetedDelete({
+      readState: () => stored,
+      persistState(state) {
+        stored = state;
+      },
+      applyState() {},
+    }),
     reportFailure() {
       throw new Error("Unexpected deletion failure.");
     },

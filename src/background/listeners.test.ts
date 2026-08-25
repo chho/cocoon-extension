@@ -3,17 +3,19 @@ import { test } from "node:test";
 
 import type { BadgeMessageResponse } from "../core/badge-message-contract.ts";
 import {
+  createBlacklistContentRequest,
+  createBlacklistContentResponse,
+} from "../core/blacklist-content-rpc-contract.ts";
+import {
   BLACKLIST_RPC_VERSION,
   createBlacklistRpcRequest,
   createBlacklistRpcResponse,
   parseBlacklistRpcResponse,
 } from "../core/blacklist-rpc-contract.ts";
-import type {
-  BadgeController,
-  BadgeMessageSender,
-} from "./badge-controller.ts";
+import type { BadgeController, BadgeMessageSender } from "./badge-controller.ts";
 import {
   createBadgeRuntimeMessageListener,
+  createBlacklistContentRuntimeMessageListener,
   createBlacklistRuntimeMessageListener,
   isAuthorizedUiSender,
 } from "./listeners.ts";
@@ -33,10 +35,7 @@ async function settle(): Promise<void> {
 }
 
 function controllerWithHandler(
-  handler: (
-    message: unknown,
-    sender: BadgeMessageSender,
-  ) => Promise<BadgeMessageResponse>,
+  handler: (message: unknown, sender: BadgeMessageSender) => Promise<BadgeMessageResponse>,
 ): Pick<BadgeController, "handleMessage"> {
   return { handleMessage: handler };
 }
@@ -55,10 +54,7 @@ test("BADGE-006 unknown and invalid messages remain unclaimed for future listene
     },
   );
 
-  for (const message of [
-    { type: "future.listener.message" },
-    { ...VALID_MESSAGE, extra: true },
-  ]) {
+  for (const message of [{ type: "future.listener.message" }, { ...VALID_MESSAGE, extra: true }]) {
     strictEqual(
       listener(message, MAIN_FRAME_SENDER, () => {
         responses += 1;
@@ -114,11 +110,17 @@ test("POPUP-009 authorizes only exact built-in UI page senders", () => {
     ["options/options.html", undefined],
     ["options/options.html", { id: 2 }],
   ] as const) {
-    strictEqual(isAuthorizedUiSender({
-      id: runtimeId,
-      url: `chrome-extension://${runtimeId}/${path}`,
-      ...(tab ? { tab } : {}),
-    }, runtimeId), true);
+    strictEqual(
+      isAuthorizedUiSender(
+        {
+          id: runtimeId,
+          url: `chrome-extension://${runtimeId}/${path}`,
+          ...(tab ? { tab } : {}),
+        },
+        runtimeId,
+      ),
+      true,
+    );
   }
   for (const sender of [
     {},
@@ -169,7 +171,10 @@ test("POPUP-009 malformed and unknown RPC messages remain unclaimed", async () =
       input: { author: { userId: "id" } },
     },
   ]) {
-    strictEqual(listener(message, sender, () => {}), false);
+    strictEqual(
+      listener(message, sender, () => {}),
+      false,
+    );
   }
   await settle();
   strictEqual(calls, 0);
@@ -185,15 +190,28 @@ test("BUG-013/AC-084 tabbed options RPC keeps the channel open and returns an ex
   });
   const responses: unknown[] = [];
   const listener = createBlacklistRuntimeMessageListener(
-    { async handle() { return response; } },
+    {
+      async handle() {
+        return response;
+      },
+    },
     runtimeId,
-    () => { throw new Error("unexpected failure"); },
+    () => {
+      throw new Error("unexpected failure");
+    },
   );
-  strictEqual(listener(createBlacklistRpcRequest("snapshot", {}), {
-    id: runtimeId,
-    url: `chrome-extension://${runtimeId}/options/options.html`,
-    tab: { id: 2 },
-  }, (value) => responses.push(value)), true);
+  strictEqual(
+    listener(
+      createBlacklistRpcRequest("snapshot", {}),
+      {
+        id: runtimeId,
+        url: `chrome-extension://${runtimeId}/options/options.html`,
+        tab: { id: 2 },
+      },
+      (value) => responses.push(value),
+    ),
+    true,
+  );
   await settle();
   strictEqual(parseBlacklistRpcResponse(responses[0], "snapshot"), response);
 });
@@ -225,19 +243,37 @@ test("MANAGE-004 every transfer RPC is claimed only for the exact options page",
       },
     },
     runtimeId,
-    () => { throw new Error("unexpected failure"); },
+    () => {
+      throw new Error("unexpected failure");
+    },
   );
 
   for (const request of requests) {
-    strictEqual(listener(request, {
-      id: runtimeId,
-      url: `chrome-extension://${runtimeId}/popup/popup.html`,
-    }, () => { throw new Error("Popup transfer request must remain unclaimed"); }), false);
-    strictEqual(listener(request, {
-      id: runtimeId,
-      url: `chrome-extension://${runtimeId}/options/options.html`,
-      tab: { id: 2 },
-    }, (value) => responses.push(value)), true);
+    strictEqual(
+      listener(
+        request,
+        {
+          id: runtimeId,
+          url: `chrome-extension://${runtimeId}/popup/popup.html`,
+        },
+        () => {
+          throw new Error("Popup transfer request must remain unclaimed");
+        },
+      ),
+      false,
+    );
+    strictEqual(
+      listener(
+        request,
+        {
+          id: runtimeId,
+          url: `chrome-extension://${runtimeId}/options/options.html`,
+          tab: { id: 2 },
+        },
+        (value) => responses.push(value),
+      ),
+      true,
+    );
   }
   await settle();
 
@@ -255,19 +291,106 @@ test("POPUP-009 handler failures return a valid fail-closed RPC response", async
   let failures = 0;
   const responses: unknown[] = [];
   const listener = createBlacklistRuntimeMessageListener(
-    { async handle() { throw new Error("unexpected"); } },
+    {
+      async handle() {
+        throw new Error("unexpected");
+      },
+    },
     runtimeId,
-    () => { failures += 1; },
+    () => {
+      failures += 1;
+    },
   );
-  strictEqual(listener(createBlacklistRpcRequest("snapshot", {}), {
-    id: runtimeId,
-    url: `chrome-extension://${runtimeId}/popup/popup.html`,
-  }, (value) => responses.push(value)), true);
+  strictEqual(
+    listener(
+      createBlacklistRpcRequest("snapshot", {}),
+      {
+        id: runtimeId,
+        url: `chrome-extension://${runtimeId}/popup/popup.html`,
+      },
+      (value) => responses.push(value),
+    ),
+    true,
+  );
   await settle();
   strictEqual(failures, 1);
   const parsed = parseBlacklistRpcResponse(responses[0], "snapshot");
   strictEqual(parsed?.ok, false);
   strictEqual(parsed?.error, "storage-unreadable");
+});
+
+test("AC-094 targeted content RPC accepts only the same-extension main frame", async () => {
+  const runtimeId = "abcdefghijklmnopabcdefghijklmnop";
+  const request = createBlacklistContentRequest("hydrate", {});
+  const expected = createBlacklistContentResponse("hydrate", true, {
+    state: { schemaVersion: 5, tags: [{ tagId: "default", name: "default" }], authors: [] },
+    revision: 0,
+  });
+  const responses: unknown[] = [];
+  let calls = 0;
+  const listener = createBlacklistContentRuntimeMessageListener(
+    {
+      async handle() {
+        calls += 1;
+        return expected.result;
+      },
+    },
+    runtimeId,
+    () => {},
+  );
+
+  strictEqual(
+    listener(
+      request,
+      { id: runtimeId, url: "https://www.zhihu.com/", tab: { id: 7 }, frameId: 0 },
+      (response) => responses.push(response),
+    ),
+    true,
+  );
+  for (const sender of [
+    { id: runtimeId, url: "https://www.zhihu.com/", tab: { id: 7 }, frameId: 1 },
+    { id: runtimeId, url: "https://www.zhihu.com/", frameId: 0 },
+    {
+      id: runtimeId,
+      url: `chrome-extension://${runtimeId}/options/options.html`,
+      tab: { id: 7 },
+      frameId: 0,
+    },
+    {
+      id: runtimeId,
+      url: "https://www.zhihu.com/?unexpected=1",
+      tab: { id: 7 },
+      frameId: 0,
+    },
+    { id: runtimeId, url: "https://example.com/", tab: { id: 7 }, frameId: 0 },
+    {
+      id: "other-extension",
+      url: "https://www.zhihu.com/",
+      tab: { id: 7 },
+      frameId: 0,
+    },
+  ]) {
+    strictEqual(
+      listener(request, sender, () => {}),
+      false,
+    );
+  }
+  strictEqual(
+    listener(
+      { ...request, extra: true },
+      {
+        id: runtimeId,
+        url: "https://www.zhihu.com/",
+        tab: { id: 7 },
+        frameId: 0,
+      },
+      () => {},
+    ),
+    false,
+  );
+  await settle();
+  strictEqual(calls, 1);
+  deepStrictEqual(responses, [expected]);
 });
 
 test("BADGE-006 stale results, controller errors, and closed channels fail safely once", async () => {
@@ -300,9 +423,7 @@ test("BADGE-006 stale results, controller errors, and closed channels fail safel
 
     strictEqual(failures, 1, scenario);
     if (scenario !== "closed-channel") {
-      deepStrictEqual(responses, [
-        scenario === "stale" ? { ok: false } : { ok: false },
-      ]);
+      deepStrictEqual(responses, [scenario === "stale" ? { ok: false } : { ok: false }]);
     }
   }
 });

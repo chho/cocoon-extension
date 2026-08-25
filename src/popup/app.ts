@@ -3,23 +3,23 @@ import type {
   BlacklistSnapshotDto,
   CurrentPageStatus,
 } from "../core/blacklist-rpc-contract.ts";
+import {
+  parseBlacklistRevisionChange,
+  type BlacklistChangeEventSource,
+} from "../core/blacklist-revision-contract.ts";
 import type { BlacklistRpcClient } from "../ui/background-rpc.ts";
 import { popupResults, summarizeBlacklist } from "../ui/blacklist-view-model.ts";
+import { createCommittedSnapshotController } from "../ui/committed-snapshot-controller.ts";
 import { createLatestRefreshController } from "../ui/latest-refresh-controller.ts";
+import { loadBlacklistSnapshot } from "../ui/blacklist-snapshot-loader.ts";
 import { createPopupUndoController } from "./undo-controller.ts";
 import { focusPopupSearch, renderPopupRecordList } from "./record-list-view.ts";
-
-interface ChangeEventSource {
-  addListener(
-    listener: (changes: Record<string, unknown>, areaName: string) => void,
-  ): void;
-}
 
 export interface PopupAppDependencies {
   readonly document: Document;
   readonly window: Window;
   readonly rpc: BlacklistRpcClient;
-  readonly storageChanges: ChangeEventSource;
+  readonly storageChanges: BlacklistChangeEventSource;
   readonly openOptionsPage: () => Promise<void>;
 }
 
@@ -35,6 +35,53 @@ function requiredElement<ElementType extends HTMLElement>(
   const element = document.querySelector<ElementType>(selector);
   if (!element) throw new Error(`Popup element is missing: ${selector}`);
   return element;
+}
+
+interface PopupInitialization {
+  readonly search: HTMLInputElement;
+  readonly rpc: BlacklistRpcClient;
+  readonly refresh: () => Promise<void>;
+  readonly setStatus: (status: CurrentPageStatus, count: number) => void;
+}
+
+function showPopupSaveError(element: HTMLElement, message = "更改未保存，请重试。"): void {
+  element.textContent = message;
+  element.hidden = false;
+}
+
+function canUndoRemoval(
+  snapshot: BlacklistSnapshotDto | null,
+  writesEnabled: boolean,
+  author: BlacklistAuthorDto,
+): boolean {
+  if (!writesEnabled || !snapshot) return false;
+  if (!snapshot.tags.some((tag) => tag.tagId === author.tagId)) return false;
+  const identifiers = new Set(
+    [author.userId, author.memberHashId].filter((value): value is string => value !== null),
+  );
+  return !snapshot.authors.some(
+    (candidate) =>
+      candidate.platformId === author.platformId &&
+      (identifiers.has(candidate.userId) ||
+        (candidate.memberHashId !== null && identifiers.has(candidate.memberHashId))),
+  );
+}
+
+async function initializePopup(options: PopupInitialization): Promise<void> {
+  focusPopupSearch(options.search);
+  const statusPromise = options.rpc.request("status");
+  const snapshotPromise = options.refresh();
+  try {
+    const response = await statusPromise;
+    if (response.ok && response.data.status && response.data.count !== null) {
+      options.setStatus(response.data.status, response.data.count);
+    } else {
+      options.setStatus("connection-error", 0);
+    }
+  } catch {
+    options.setStatus("connection-error", 0);
+  }
+  await snapshotPromise;
 }
 
 export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
@@ -83,20 +130,6 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     connectionError.hidden = status !== "connection-error";
   }
 
-  function isUndoEligible(author: BlacklistAuthorDto): boolean {
-    if (!writesEnabled || !snapshot) return false;
-    if (!snapshot.tags.some((tag) => tag.tagId === author.tagId)) return false;
-    const removedIdentifiers = new Set(
-      [author.userId, author.memberHashId].filter((value): value is string => value !== null),
-    );
-    return !snapshot.authors.some((candidate) =>
-      candidate.platformId === author.platformId &&
-      (removedIdentifiers.has(candidate.userId) ||
-        (candidate.memberHashId !== null &&
-          removedIdentifiers.has(candidate.memberHashId)))
-    );
-  }
-
   function renderSnapshot(): void {
     records.replaceChildren();
     if (!snapshot) return;
@@ -110,7 +143,9 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
       items: popupResults(snapshot, query),
       queryActive: Boolean(query.trim()),
       writesEnabled,
-      onRemove(author, button) { void removeAuthor(author, button); },
+      onRemove(author, button) {
+        void removeAuthor(author, button);
+      },
     });
   }
 
@@ -132,32 +167,28 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     tagTotal.textContent = "—";
   }
 
+  function applySuccessfulSnapshot(next: BlacklistSnapshotDto): void {
+    snapshot = next;
+    writesEnabled = true;
+    dataMessage.hidden = true;
+    const pendingUndo = undoController.current();
+    if (pendingUndo && !canUndoRemoval(snapshot, writesEnabled, pendingUndo)) clearUndo();
+    renderSnapshot();
+  }
+
+  const loadSnapshot = async () => loadBlacklistSnapshot(rpc);
+  const committedSnapshots = createCommittedSnapshotController(
+    applySuccessfulSnapshot,
+    loadSnapshot,
+  );
   const refreshController = createLatestRefreshController<BlacklistSnapshotDto>({
-    async load() {
-      const response = await rpc.request("snapshot");
-      if (!response.ok || !response.data.snapshot) {
-        throw new Error("snapshot unavailable");
-      }
-      return response.data.snapshot;
-    },
-    apply(next) {
-      snapshot = next;
-      writesEnabled = true;
-      dataMessage.hidden = true;
-      const pendingUndo = undoController.current();
-      if (pendingUndo && !isUndoEligible(pendingUndo)) clearUndo();
-      renderSnapshot();
-    },
+    load: loadSnapshot,
+    apply: committedSnapshots.applyRefresh,
     fail: showUnreadableStorage,
   });
 
-  function showSaveError(message = "更改未保存，请重试。"): void {
-    saveError.textContent = message;
-    saveError.hidden = false;
-  }
-
   async function rollbackFailure(storageUnreadable: boolean): Promise<void> {
-    showSaveError();
+    showPopupSaveError(saveError);
     if (storageUnreadable) {
       showUnreadableStorage();
       return;
@@ -172,19 +203,20 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     if (!writesEnabled) return;
     saveError.hidden = true;
     button.disabled = true;
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.removeOne({
         platformId: author.platformId,
         userId: author.userId,
       });
-      if (!response.ok || !response.data.removed) {
+      if (!response.ok || !response.data.removed || !response.data.snapshot) {
         await rollbackFailure(response.error === "storage-unreadable");
         return;
       }
       const removed = response.data.removed;
       clearUndo();
-      await refreshController.request();
-      if (!isUndoEligible(removed)) return;
+      marker(response.data.snapshot, refreshController.invalidate);
+      if (!canUndoRemoval(snapshot, writesEnabled, removed)) return;
       undoController.start(removed);
       if (undoController.current() === null) return;
       undoButton.disabled = false;
@@ -200,12 +232,13 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     if (!author || !writesEnabled) return;
     saveError.hidden = true;
     undoButton.disabled = true;
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.restoreOne(author);
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         await rollbackFailure(response.error === "storage-unreadable");
         const pendingUndo = undoController.current();
-        if (pendingUndo && isUndoEligible(pendingUndo)) {
+        if (pendingUndo && canUndoRemoval(snapshot, writesEnabled, pendingUndo)) {
           undoButton.disabled = false;
           undoStrip.hidden = false;
         } else {
@@ -215,12 +248,12 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
         return;
       }
       clearUndo();
-      await refreshController.request();
-      if (writesEnabled) focusPopupSearch(search);
+      marker(response.data.snapshot, refreshController.invalidate);
+      focusPopupSearch(search);
     } catch {
       await rollbackFailure(false);
       const pendingUndo = undoController.current();
-      if (pendingUndo && isUndoEligible(pendingUndo)) {
+      if (pendingUndo && canUndoRemoval(snapshot, writesEnabled, pendingUndo)) {
         undoButton.disabled = false;
         undoStrip.hidden = false;
       } else {
@@ -235,40 +268,36 @@ export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {
     try {
       await dependencies.openOptionsPage();
     } catch {
-      showSaveError("无法打开管理页，请重试。");
+      showPopupSaveError(saveError, "无法打开管理页，请重试。");
     }
-  }
-
-  async function initialize(): Promise<void> {
-    focusPopupSearch(search);
-    const statusPromise = rpc.request("status");
-    const snapshotPromise = refreshController.request();
-    try {
-      const response = await statusPromise;
-      if (response.ok && response.data.status && response.data.count !== null) {
-        setStatus(response.data.status, response.data.count);
-      } else {
-        setStatus("connection-error", 0);
-      }
-    } catch {
-      setStatus("connection-error", 0);
-    }
-    await snapshotPromise;
   }
 
   search.addEventListener("input", renderSnapshot);
-  undoButton.addEventListener("click", () => { void restoreRemovedAuthor(); });
-  manageButton.addEventListener("click", () => { void openManagementPage(); });
-  dependencies.storageChanges.addListener((changes, areaName) => {
-    if (areaName === "local" && "cocoonBlacklistState" in changes) {
-      void refreshController.request();
-    }
+  undoButton.addEventListener("click", () => {
+    void restoreRemovedAuthor();
   });
-  window.addEventListener("pagehide", () => { undoController.dispose(); });
+  manageButton.addEventListener("click", () => {
+    void openManagementPage();
+  });
+  dependencies.storageChanges.addListener((changes, areaName) => {
+    if (!parseBlacklistRevisionChange(changes, areaName)) return;
+    committedSnapshots.noteRevision();
+    void refreshController.request();
+  });
+  window.addEventListener("pagehide", () => {
+    undoController.dispose();
+  });
 
-  void initialize();
+  void initializePopup({
+    search,
+    rpc,
+    refresh: refreshController.request,
+    setStatus,
+  });
   return {
     refresh: () => refreshController.request(),
-    dispose() { undoController.dispose(); },
+    dispose() {
+      undoController.dispose();
+    },
   };
 }

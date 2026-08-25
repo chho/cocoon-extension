@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 
 import {
   createInitialState,
-  parseBlacklistState,
+  planMemberHashBackfill,
   type BlacklistState,
 } from "./blacklist-state.ts";
 import { createAuthorAliasPersistenceController } from "./author-alias-persistence-controller.ts";
@@ -13,7 +13,7 @@ import {
   createCommentFilterController,
   resolveCommentAuthorUserId,
 } from "./comment-filter-controller.ts";
-import { createMemberUserIdResolver } from "./resolve-member-user-id.ts";
+import { createMemberUserIdResolver, type MemberUserIdResolver } from "./resolve-member-user-id.ts";
 import { COMMENT_MUTATION_ATTRIBUTE_FILTER } from "../plugins/zhihu/runtime.ts";
 
 function fixture(): JSDOM {
@@ -65,9 +65,7 @@ test("COMMENT-001/004/AC-062/065 uses only own-root exact links and fails open w
   const reply = dom.window.document.querySelector<HTMLElement>("#reply-visible");
   const ambiguous = dom.window.document.querySelector<HTMLElement>("#ambiguous");
   const nameOnly = dom.window.document.querySelector<HTMLElement>("#name-only");
-  const outside = dom.window.document.querySelector<HTMLElement>(
-    "#outside-boundary",
-  );
+  const outside = dom.window.document.querySelector<HTMLElement>("#outside-boundary");
   if (!top || !reply || !ambiguous || !nameOnly || !outside) {
     throw new Error("Missing comment fixtures.");
   }
@@ -92,18 +90,13 @@ test("COMMENT-001/003/AC-062 filters direct and upvoter IDs with one CSS state o
   const top = dom.window.document.querySelector<HTMLElement>("#top-blocked");
   const reply = dom.window.document.querySelector<HTMLElement>("#reply-visible");
   const ambiguous = dom.window.document.querySelector<HTMLElement>("#ambiguous");
-  const outside = dom.window.document.querySelector<HTMLElement>(
-    "#outside-boundary",
-  );
+  const outside = dom.window.document.querySelector<HTMLElement>("#outside-boundary");
   if (!top || !reply || !ambiguous || !outside) {
     throw new Error("Missing fixtures.");
   }
   strictEqual(top.classList.contains(COMMENT_HIDDEN_CLASS), true);
   strictEqual(reply.classList.contains(COMMENT_HIDDEN_CLASS), true);
-  strictEqual(
-    top.className.split(/\s+/).filter((name) => name === COMMENT_HIDDEN_CLASS).length,
-    1,
-  );
+  strictEqual(top.className.split(/\s+/).filter((name) => name === COMMENT_HIDDEN_CLASS).length, 1);
   strictEqual(ambiguous.classList.contains(COMMENT_HIDDEN_CLASS), false);
   strictEqual(outside.classList.contains(COMMENT_HIDDEN_CLASS), false);
   strictEqual(top.querySelector("p")?.textContent, "top body");
@@ -120,9 +113,7 @@ test("COMMENT-002/AC-063 dynamically inserted comments and replies are RAF-batch
   controller.updateStableUserIds(new Set(["dynamic-author"]));
   frames.flush();
 
-  const container = dom.window.document.querySelector<HTMLElement>(
-    ".Comments-container",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>(".Comments-container");
   if (!container) throw new Error("Missing comments container.");
   const wrapper = dom.window.document.createElement("section");
   wrapper.innerHTML = `
@@ -138,15 +129,11 @@ test("COMMENT-002/AC-063 dynamically inserted comments and replies are RAF-batch
   frames.flush();
 
   strictEqual(
-    dom.window.document.querySelector("#dynamic-top")?.classList.contains(
-      COMMENT_HIDDEN_CLASS,
-    ),
+    dom.window.document.querySelector("#dynamic-top")?.classList.contains(COMMENT_HIDDEN_CLASS),
     true,
   );
   strictEqual(
-    dom.window.document.querySelector("#dynamic-reply")?.classList.contains(
-      COMMENT_HIDDEN_CLASS,
-    ),
+    dom.window.document.querySelector("#dynamic-reply")?.classList.contains(COMMENT_HIDDEN_CLASS),
     true,
   );
 });
@@ -158,9 +145,7 @@ test("COMMENT-002 pending processing forgets detached roots until their reinsert
   controller.updateStableUserIds(new Set(["blocked-top"]));
   frames.flush();
 
-  const container = dom.window.document.querySelector<HTMLElement>(
-    ".Comments-container",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>(".Comments-container");
   const top = dom.window.document.querySelector<HTMLElement>("#top-blocked");
   if (!container || !top) throw new Error("Missing comment fixture.");
   controller.scan(top);
@@ -197,8 +182,7 @@ test("BUG-003/AC-066 refresh discovers connected roots that were never encounter
   strictEqual(reply.classList.contains(COMMENT_HIDDEN_CLASS), false);
   frames.flushNext();
   strictEqual(
-    [top, reply].filter((root) => root.classList.contains(COMMENT_HIDDEN_CLASS))
-      .length,
+    [top, reply].filter((root) => root.classList.contains(COMMENT_HIDDEN_CLASS)).length,
     1,
   );
   frames.flush();
@@ -215,10 +199,7 @@ test("BUG-003/AC-066 a current encountered root hides as soon as the applied sta
 
   const top = dom.window.document.querySelector<HTMLElement>("#top-blocked");
   if (!top) throw new Error("Missing top comment.");
-  controller.refreshStableUserIds(
-    new Set(["blocked-top"]),
-    dom.window.document.body,
-  );
+  controller.refreshStableUserIds(new Set(["blocked-top"]), dom.window.document.body);
   strictEqual(top.classList.contains(COMMENT_HIDDEN_CLASS), false);
 
   frames.flush();
@@ -230,16 +211,11 @@ test("BUG-003/AC-067 retained comment DOM stays hidden across collapse and reope
   const dom = fixture();
   const frames = createFrames();
   const controller = createCommentFilterController({ schedule: frames.schedule });
-  const container = dom.window.document.querySelector<HTMLElement>(
-    ".Comments-container",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>(".Comments-container");
   const top = dom.window.document.querySelector<HTMLElement>("#top-blocked");
   if (!container || !top) throw new Error("Missing comment fixture.");
 
-  controller.refreshStableUserIds(
-    new Set(["blocked-top"]),
-    dom.window.document.body,
-  );
+  controller.refreshStableUserIds(new Set(["blocked-top"]), dom.window.document.body);
   frames.flush();
   container.hidden = true;
   container.hidden = false;
@@ -252,10 +228,7 @@ test("BUG-003/AC-067 replacement comment DOM is filtered by MutationObserver-sty
   const dom = fixture();
   const frames = createFrames();
   const controller = createCommentFilterController({ schedule: frames.schedule });
-  controller.refreshStableUserIds(
-    new Set(["blocked-top"]),
-    dom.window.document.body,
-  );
+  controller.refreshStableUserIds(new Set(["blocked-top"]), dom.window.document.body);
   frames.flush();
 
   const current = dom.window.document.querySelector<HTMLElement>("#top-blocked");
@@ -322,14 +295,12 @@ function semanticProfileLinks(userId: string): readonly ProfileLinkFixture[] {
 }
 
 function renderProfileLinks(links: readonly ProfileLinkFixture[]): string {
-  return links.map(({ userId, kind }, linkIndex) => {
-    const content = kind === "image"
-      ? "<img>"
-      : kind === "text"
-      ? `profile ${linkIndex}`
-      : "   ";
-    return `<a href="/people/${userId}">${content}</a>`;
-  }).join("");
+  return links
+    .map(({ userId, kind }, linkIndex) => {
+      const content = kind === "image" ? "<img>" : kind === "text" ? `profile ${linkIndex}` : "   ";
+      return `<a href="/people/${userId}">${content}</a>`;
+    })
+    .join("");
 }
 
 function commentEvidenceFixture({
@@ -347,10 +318,13 @@ function commentEvidenceFixture({
 
   return new JSDOM(`<!doctype html><body>
     <div class="${containerClass}">
-      ${Array.from({ length: rootCount }, (_, rootIndex) => `
+      ${Array.from(
+        { length: rootCount },
+        (_, rootIndex) => `
         <div data-id="comment-${rootIndex}" id="comment-${rootIndex}">
           ${ownProfileMarkup}
-        </div>`).join("")}
+        </div>`,
+      ).join("")}
     </div>
   </body>`);
 }
@@ -377,10 +351,7 @@ test("BUG-011 preserves the single unique stable-ID rule regardless of link shap
 test("BUG-011/AC-070 a single-link unblocked main author plus a duplicated blocked text mention stays visible without alias work", () => {
   const dom = commentEvidenceFixture({
     mainLinks: [profileLink("visible-main", "text")],
-    mentionLinks: [
-      profileLink("blocked-mention", "text"),
-      profileLink("blocked-mention", "text"),
-    ],
+    mentionLinks: [profileLink("blocked-mention", "text"), profileLink("blocked-mention", "text")],
   });
   const frames = createFrames();
   let aliasAttempts = 0;
@@ -405,10 +376,7 @@ test("BUG-011/AC-070 a single-link unblocked main author plus a duplicated block
 test("BUG-011/AC-070 a duplicated text-only hash mention never triggers an alias GET", () => {
   const dom = commentEvidenceFixture({
     mainLinks: [profileLink("visible-main", "text")],
-    mentionLinks: [
-      profileLink(MENTION_HASH, "text"),
-      profileLink(MENTION_HASH, "text"),
-    ],
+    mentionLinks: [profileLink(MENTION_HASH, "text"), profileLink(MENTION_HASH, "text")],
   });
   const frames = createFrames();
   const requestedAliases: string[] = [];
@@ -463,23 +431,12 @@ test("BUG-011/AC-070 the unique semantic main pair filters direct token and memb
     const root = dom.window.document.querySelector<HTMLElement>("div[data-id]");
     if (!root) throw new Error(`Missing ${scenario.name} fixture.`);
 
-    strictEqual(
-      resolveCommentAuthorUserId(root),
-      scenario.mainUserId,
-      scenario.name,
-    );
-    controller.updateStableUserIds(new Set([
-      scenario.mainUserId,
-      scenario.mentionUserId,
-    ]));
+    strictEqual(resolveCommentAuthorUserId(root), scenario.mainUserId, scenario.name);
+    controller.updateStableUserIds(new Set([scenario.mainUserId, scenario.mentionUserId]));
     controller.scan(dom.window.document.body);
     frames.flush();
 
-    strictEqual(
-      root.classList.contains(COMMENT_HIDDEN_CLASS),
-      true,
-      scenario.name,
-    );
+    strictEqual(root.classList.contains(COMMENT_HIDDEN_CLASS), true, scenario.name);
     strictEqual(aliasAttempts, 0, scenario.name);
   }
 });
@@ -536,16 +493,16 @@ test("BUG-011/COMMENT-004 nested comment roots own their semantic profile eviden
   strictEqual(resolveCommentAuthorUserId(nested), "nested-main");
 });
 
-function aliasCommentFixture(
-  count = 1,
-  containerClass = "Comments-container",
-): JSDOM {
+function aliasCommentFixture(count = 1, containerClass = "Comments-container"): JSDOM {
   return new JSDOM(`<!doctype html><body>
     <div class="${containerClass}">
-      ${Array.from({ length: count }, (_, index) => `
+      ${Array.from(
+        { length: count },
+        (_, index) => `
         <div data-id="hash-comment-${index}" id="hash-comment-${index}">
           <a href="/people/${MEMBER_HASH}">author</a>
-        </div>`).join("")}
+        </div>`,
+      ).join("")}
     </div>
   </body>`);
 }
@@ -553,24 +510,72 @@ function aliasCommentFixture(
 function blockedAliasState(memberHashId: string | null = null): BlacklistState {
   return {
     ...createInitialState(),
-    authors: [{
-      platformId: "zhihu",
-      userId: "canonical-token",
-      memberHashId,
-      authorNameAtCapture: "Stored name",
-      tagId: "default",
-      blacklistedAt: ALIAS_TIMESTAMP,
-      blockSource: "direct",
-    }],
+    authors: [
+      {
+        platformId: "zhihu",
+        userId: "canonical-token",
+        memberHashId,
+        authorNameAtCapture: "Stored name",
+        tagId: "default",
+        blacklistedAt: ALIAS_TIMESTAMP,
+        blockSource: "direct",
+      },
+    ],
   };
 }
 
 function stableIds(state: BlacklistState): ReadonlySet<string> {
-  return new Set(state.authors.flatMap((author) =>
-    author.memberHashId === null
-      ? [author.userId]
-      : [author.userId, author.memberHashId]
-  ));
+  return new Set(
+    state.authors.flatMap((author) =>
+      author.memberHashId === null ? [author.userId] : [author.userId, author.memberHashId],
+    ),
+  );
+}
+
+function createTargetedAliasController(options: {
+  readonly resolveMemberUserId: MemberUserIdResolver;
+  readonly readState: () => BlacklistState;
+  readonly persistState: (state: BlacklistState) => void;
+  readonly applyState: (state: BlacklistState) => void;
+  readonly failWrite?: boolean;
+}) {
+  let revision = 0;
+  return createAuthorAliasPersistenceController({
+    resolveMemberUserId: options.resolveMemberUserId,
+    async backfillMemberHash(identity, memberHashId) {
+      const before = options.readState();
+      const plan = planMemberHashBackfill(before, identity, memberHashId);
+      const base = {
+        baseRevision: revision,
+        revision,
+        authorCount: before.authors.length,
+        tagCount: before.tags.length,
+      };
+      if (plan.status === "invalid") {
+        return { status: "invalid" as const, author: null, ...base };
+      }
+      const author = plan.state.authors.find(
+        (candidate) =>
+          candidate.platformId === identity.platformId && candidate.userId === identity.userId,
+      );
+      if (!author) throw new Error("targeted alias result is missing its author");
+      if (plan.status === "already-present") {
+        return { status: "unchanged" as const, author, ...base };
+      }
+      if (options.failWrite) throw new Error("write failed");
+      options.persistState(plan.state);
+      options.applyState(plan.state);
+      revision += 1;
+      return {
+        status: "persisted" as const,
+        author,
+        baseRevision: base.baseRevision,
+        revision,
+        authorCount: plan.state.authors.length,
+        tagCount: plan.state.tags.length,
+      };
+    },
+  });
 }
 
 async function settleAliasWork(): Promise<void> {
@@ -641,19 +646,14 @@ test("BUG-012/AC-071 data-id maturation reaches alias backfill through the produ
     };
   });
   let controller: ReturnType<typeof createCommentFilterController>;
-  const aliasController = createAuthorAliasPersistenceController({
+  const aliasController = createTargetedAliasController({
     resolveMemberUserId,
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState(state) {
+    readState: () => stored,
+    persistState(state) {
       writes += 1;
       stored = state;
     },
-    applyPersistedState(state) {
+    applyState(state) {
       controller.updateStableUserIds(stableIds(state));
     },
   });
@@ -685,9 +685,7 @@ test("BUG-012/AC-071 data-id maturation reaches alias backfill through the produ
       }
     },
   );
-  const container = dom.window.document.querySelector<HTMLElement>(
-    "#progressive-comments",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>("#progressive-comments");
   if (!container) throw new Error("Missing progressive comments container.");
   const progressiveRoot = dom.window.document.createElement("div");
   progressiveRoot.id = "progressive-comment";
@@ -723,9 +721,7 @@ test("BUG-012/AC-071 data-id maturation reaches alias backfill through the produ
   frames.flush();
   await deliverMutationRecords(dom);
 
-  deepStrictEqual(requestedMemberPaths, [
-    `/api/v4/members/${MEMBER_HASH}`,
-  ]);
+  deepStrictEqual(requestedMemberPaths, [`/api/v4/members/${MEMBER_HASH}`]);
   strictEqual(writes, 1);
   strictEqual(stored.authors[0]?.memberHashId, MEMBER_HASH);
   strictEqual(progressiveRoot.classList.contains(COMMENT_HIDDEN_CLASS), true);
@@ -765,9 +761,7 @@ test("BUG-012/AC-071 the shared whitelist retains href identity rescans", async 
       }
     },
   );
-  const container = dom.window.document.querySelector<HTMLElement>(
-    "#href-comments",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>("#href-comments");
   if (!container) throw new Error("Missing href comments container.");
   const root = dom.window.document.createElement("div");
   root.dataset.id = "href-comment";
@@ -830,19 +824,14 @@ async function runSemanticMainAliasScenario(rootCount: number): Promise<{
     };
   });
   let controller: ReturnType<typeof createCommentFilterController>;
-  const aliasController = createAuthorAliasPersistenceController({
+  const aliasController = createTargetedAliasController({
     resolveMemberUserId,
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState(state) {
+    readState: () => stored,
+    persistState(state) {
       writes += 1;
       stored = state;
     },
-    applyPersistedState(state) {
+    applyState(state) {
       controller.updateStableUserIds(stableIds(state));
     },
   });
@@ -867,18 +856,14 @@ async function runSemanticMainAliasScenario(rootCount: number): Promise<{
     requestedMemberPaths,
     writes,
     stored,
-    roots: Array.from(
-      dom.window.document.querySelectorAll<HTMLElement>("div[data-id]"),
-    ),
+    roots: Array.from(dom.window.document.querySelectorAll<HTMLElement>("div[data-id]")),
   };
 }
 
 test("BUG-011/AC-070 an approved main hash pair aliases and hides while text-only mention hashes never GET", async () => {
   const result = await runSemanticMainAliasScenario(1);
 
-  deepStrictEqual(result.requestedMemberPaths, [
-    `/api/v4/members/${MEMBER_HASH}`,
-  ]);
+  deepStrictEqual(result.requestedMemberPaths, [`/api/v4/members/${MEMBER_HASH}`]);
   strictEqual(result.writes, 1);
   strictEqual(result.stored.authors[0]?.memberHashId, MEMBER_HASH);
   strictEqual(result.roots[0]?.classList.contains(COMMENT_HIDDEN_CLASS), true);
@@ -887,9 +872,7 @@ test("BUG-011/AC-070 an approved main hash pair aliases and hides while text-onl
 test("BUG-011/AC-070 repeated roots share one approved main alias request and storage write", async () => {
   const result = await runSemanticMainAliasScenario(2);
 
-  deepStrictEqual(result.requestedMemberPaths, [
-    `/api/v4/members/${MEMBER_HASH}`,
-  ]);
+  deepStrictEqual(result.requestedMemberPaths, [`/api/v4/members/${MEMBER_HASH}`]);
   strictEqual(result.writes, 1);
   strictEqual(result.stored.authors[0]?.memberHashId, MEMBER_HASH);
   strictEqual(result.roots.length, 2);
@@ -944,19 +927,14 @@ test("BUG-008/010 modal comment roots share one member GET and one atomic alias 
     };
   });
   let controller: ReturnType<typeof createCommentFilterController>;
-  const aliasController = createAuthorAliasPersistenceController({
+  const aliasController = createTargetedAliasController({
     resolveMemberUserId,
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState(state) {
+    readState: () => stored,
+    persistState(state) {
       writes += 1;
       stored = state;
     },
-    applyPersistedState(state) {
+    applyState(state) {
       controller.updateStableUserIds(stableIds(state));
     },
   });
@@ -989,8 +967,17 @@ test("BUG-008/010 modal alias failures keep comments visible", async () => {
   const scenarios = [
     { name: "API null", resolved: null, initial: blockedAliasState() },
     { name: "unknown token", resolved: "unknown-token", initial: blockedAliasState() },
-    { name: "existing hash conflict", resolved: "canonical-token", initial: blockedAliasState(OTHER_HASH) },
-    { name: "storage failure", resolved: "canonical-token", initial: blockedAliasState(), failWrite: true },
+    {
+      name: "existing hash conflict",
+      resolved: "canonical-token",
+      initial: blockedAliasState(OTHER_HASH),
+    },
+    {
+      name: "storage failure",
+      resolved: "canonical-token",
+      initial: blockedAliasState(),
+      failWrite: true,
+    },
   ] as const;
 
   for (const scenario of scenarios) {
@@ -999,26 +986,19 @@ test("BUG-008/010 modal alias failures keep comments visible", async () => {
     let stored: BlacklistState = scenario.initial;
     let applies = 0;
     let controller: ReturnType<typeof createCommentFilterController>;
-    const aliasController = createAuthorAliasPersistenceController({
+    const aliasController = createTargetedAliasController({
       async resolveMemberUserId() {
         return scenario.resolved;
       },
-      async withExclusiveLock(operation) {
-        return operation();
-      },
-      async readState() {
-        return parseBlacklistState(stored);
-      },
-      async writeState(state) {
-        if ("failWrite" in scenario && scenario.failWrite) {
-          throw new Error("write failed");
-        }
+      readState: () => stored,
+      persistState(state) {
         stored = state;
       },
-      applyPersistedState(state) {
+      applyState(state) {
         applies += 1;
         controller.updateStableUserIds(stableIds(state));
       },
+      failWrite: "failWrite" in scenario && scenario.failWrite,
     });
     const completions: Promise<unknown>[] = [];
     controller = createCommentFilterController({
@@ -1136,9 +1116,7 @@ test("BADGE-002/003 comments and replies count once per connected DOM root", () 
   frames.flush();
   strictEqual(count, 2);
 
-  const container = dom.window.document.querySelector<HTMLElement>(
-    ".Comments-container",
-  );
+  const container = dom.window.document.querySelector<HTMLElement>(".Comments-container");
   if (!container) throw new Error("Missing badge comments container.");
   const newSameAuthorRoot = dom.window.document.createElement("div");
   newSameAuthorRoot.dataset.id = "new-same-author-root";
@@ -1159,12 +1137,8 @@ test("BADGE-002/003 preexisting hidden and detached comment roots do not count",
       count += 1;
     },
   });
-  const preexisting = dom.window.document.querySelector<HTMLElement>(
-    "#top-blocked",
-  );
-  const detached = dom.window.document.querySelector<HTMLElement>(
-    "#reply-visible",
-  );
+  const preexisting = dom.window.document.querySelector<HTMLElement>("#top-blocked");
+  const detached = dom.window.document.querySelector<HTMLElement>("#reply-visible");
   if (!preexisting || !detached) throw new Error("Missing badge fixtures.");
   preexisting.classList.add(COMMENT_HIDDEN_CLASS);
 

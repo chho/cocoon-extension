@@ -1,10 +1,13 @@
 import { createBadgeController } from "./badge-controller.ts";
 import {
   createBadgeRuntimeMessageListener,
+  createBlacklistContentRuntimeMessageListener,
   createBlacklistRuntimeMessageListener,
 } from "./listeners.ts";
+import { createBlacklistContentController } from "./blacklist-content-controller.ts";
 import { createBlacklistLockCoordinator } from "./blacklist-lock-coordinator.ts";
 import { createBlacklistManagementController } from "./blacklist-management-controller.ts";
+import { createBlacklistRepository } from "./blacklist-repository.ts";
 import { createStatusController } from "./status-controller.ts";
 
 function reportBadgeFailure(): void {
@@ -22,41 +25,24 @@ const blacklistLocalStorage = {
   async set(items: Record<string, unknown>) {
     await chrome.storage.local.set(items);
   },
+  async remove(key: string) {
+    await chrome.storage.local.remove(key);
+  },
 };
 
-const blacklistLockCoordinator = createBlacklistLockCoordinator(
-  {
-    async request(name, options, callback) {
-      return navigator.locks.request(name, options, async () => callback());
-    },
-  },
-  blacklistLocalStorage,
-  chrome.runtime.id,
-  reportBlacklistFailure,
-);
-
-chrome.runtime.onConnect.addListener((port) => {
-  blacklistLockCoordinator.attachContentLease({
-    name: port.name,
-    sender: port.sender,
-    onDisconnect: {
-      addListener(listener) {
-        port.onDisconnect.addListener(listener);
-      },
-    },
-    onMessage: {
-      addListener(listener) {
-        port.onMessage.addListener(listener);
-      },
-    },
-    postMessage(message) {
-      port.postMessage(message);
-    },
-    disconnect() {
-      port.disconnect();
-    },
-  });
+const blacklistRepository = createBlacklistRepository({
+  indexedDB,
+  storage: blacklistLocalStorage,
 });
+const blacklistLockCoordinator = createBlacklistLockCoordinator({
+  async request(name, options, callback) {
+    return navigator.locks.request(name, options, async () => callback());
+  },
+});
+const blacklistContentController = createBlacklistContentController(
+  blacklistRepository,
+  blacklistLockCoordinator,
+);
 
 const badgeController = createBadgeController({
   storage: {
@@ -101,13 +87,20 @@ const statusController = createStatusController(
 );
 
 const blacklistManagementController = createBlacklistManagementController(
-  blacklistLocalStorage,
+  blacklistRepository,
   blacklistLockCoordinator,
   statusController,
 );
 
 chrome.runtime.onMessage.addListener(
   createBadgeRuntimeMessageListener(badgeController, reportBadgeFailure),
+);
+chrome.runtime.onMessage.addListener(
+  createBlacklistContentRuntimeMessageListener(
+    blacklistContentController,
+    chrome.runtime.id,
+    reportBlacklistFailure,
+  ),
 );
 chrome.runtime.onMessage.addListener(
   createBlacklistRuntimeMessageListener(

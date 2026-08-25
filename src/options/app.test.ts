@@ -12,18 +12,14 @@ import {
   type BlacklistRpcResponse,
   type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
-import {
-  createBlacklistRpcClient,
-  type BlacklistRpcClient,
-} from "../ui/background-rpc.ts";
+import { createBlacklistRpcClient, type BlacklistRpcClient } from "../ui/background-rpc.ts";
 import {
   bootstrapOptions as bootstrapProductionOptions,
   type OptionsAppDependencies,
 } from "./app.ts";
 
-type OptionsTestDependencies =
-  & Omit<OptionsAppDependencies, "readFileText" | "downloadJson">
-  & Partial<Pick<OptionsAppDependencies, "readFileText" | "downloadJson">>;
+type OptionsTestDependencies = Omit<OptionsAppDependencies, "readFileText" | "downloadJson"> &
+  Partial<Pick<OptionsAppDependencies, "readFileText" | "downloadJson">>;
 
 function bootstrapOptions(
   dependencies: OptionsTestDependencies,
@@ -38,15 +34,17 @@ function bootstrapOptions(
 }
 
 const SNAPSHOT: BlacklistSnapshotDto = {
-  authors: [{
-    platformId: "zhihu",
-    userId: "author-one",
-    memberHashId: null,
-    authorName: "Author One",
-    tagId: "tag-one",
-    blacklistedAt: "2026-08-21T10:00:00.000Z",
-    source: "direct",
-  }],
+  authors: [
+    {
+      platformId: "zhihu",
+      userId: "author-one",
+      memberHashId: null,
+      authorName: "Author One",
+      tagId: "tag-one",
+      blacklistedAt: "2026-08-21T10:00:00.000Z",
+      source: "direct",
+    },
+  ],
   tags: [
     { tagId: "default", name: "default", isDefault: true },
     { tagId: "tag-one", name: "Persisted", isDefault: false },
@@ -85,7 +83,8 @@ const TRANSFER: BlacklistTransferEnvelope = {
 };
 
 function fixture(): JSDOM {
-  const dom = new JSDOM(`<!doctype html><body>
+  const dom = new JSDOM(
+    `<!doctype html><body>
     <span id="author-total"></span><span id="tag-total"></span>
     <p id="page-message"></p><p id="write-error" tabindex="-1" hidden></p>
     <section id="transfer-panel">
@@ -108,22 +107,25 @@ function fixture(): JSDOM {
     <dialog id="replace-dialog"><p id="replace-dialog-description"></p>
       <button id="replace-cancel"></button><button id="replace-confirm"></button>
     </dialog>
-  </body>`, {
-    pretendToBeVisual: true,
-    url: "chrome-extension://runtime/options/options.html",
-  });
+  </body>`,
+    {
+      pretendToBeVisual: true,
+      url: "chrome-extension://runtime/options/options.html",
+    },
+  );
   for (const dialog of dom.window.document.querySelectorAll<HTMLDialogElement>("dialog")) {
-    dialog.showModal = () => { dialog.open = true; };
-    dialog.close = () => { dialog.open = false; };
+    dialog.showModal = () => {
+      dialog.open = true;
+    };
+    dialog.close = () => {
+      dialog.open = false;
+    };
   }
   return dom;
 }
 
 test("MANAGE-005/AC-092 keeps transfer tools as the final main section", async () => {
-  const source = await readFile(
-    new URL("../../options/options.html", import.meta.url),
-    "utf8",
-  );
+  const source = await readFile(new URL("../../options/options.html", import.meta.url), "utf8");
   const document = new JSDOM(source).window.document;
   const main = document.querySelector("main");
   const tags = document.querySelector(".tags-panel");
@@ -151,15 +153,14 @@ async function settle(): Promise<void> {
 
 function deferredResponse() {
   let resolve: ((value: BlacklistRpcResponse) => void) | undefined;
-  const promise = new Promise<BlacklistRpcResponse>((done) => { resolve = done; });
+  const promise = new Promise<BlacklistRpcResponse>((done) => {
+    resolve = done;
+  });
   return { promise, resolve: (value: BlacklistRpcResponse) => resolve?.(value) };
 }
 
 class RpcQueue implements BlacklistRpcClient {
-  readonly responses = new Map<
-    BlacklistRpcOperation,
-    Array<Promise<BlacklistRpcResponse>>
-  >();
+  readonly responses = new Map<BlacklistRpcOperation, Array<Promise<BlacklistRpcResponse>>>();
   readonly requestCounts = new Map<BlacklistRpcOperation, number>();
   readonly requests: Array<{
     readonly operation: BlacklistRpcOperation;
@@ -206,7 +207,10 @@ test("BUG-014/AC-085 options accepts nullable member aliases through the strict 
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
@@ -221,14 +225,20 @@ test("MANAGE production bootstrap rolls failed rename back and enters read-only 
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("rename-tag", createBlacklistRpcResponse("rename-tag", false, { snapshot: SNAPSHOT }, "invalid-tag"));
+  rpc.push(
+    "rename-tag",
+    createBlacklistRpcResponse("rename-tag", false, { snapshot: SNAPSHOT }, "invalid-tag"),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   rpc.push("remove-one", createBlacklistRpcResponse("remove-one", false, {}, "storage-unreadable"));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
@@ -240,31 +250,43 @@ test("MANAGE production bootstrap rolls failed rename back and enters read-only 
   if (!editable) throw new Error("editable tag missing");
   editable.value = "Rejected";
   editable.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  editable.closest("form")?.dispatchEvent(new dom.window.Event("submit", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  editable.closest("form")?.dispatchEvent(
+    new dom.window.Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   await settle();
 
   const rerenderedName = dom.window.document.querySelector("#tag-list .tag-display-name");
   strictEqual(rerenderedName?.textContent, "Persisted");
   strictEqual(dom.window.document.querySelectorAll("#tag-list .tag-row").length, 1);
-  strictEqual(dom.window.document.querySelector("#tag-list")?.textContent?.includes("default"), false);
+  strictEqual(
+    dom.window.document.querySelector("#tag-list")?.textContent?.includes("default"),
+    false,
+  );
   strictEqual(
     (dom.window.document.activeElement as HTMLElement).getAttribute("aria-label"),
     "重命名标签 Persisted",
   );
-  strictEqual(dom.window.document.querySelector("#write-error")?.textContent,
-    "标签名称无效或已存在。");
+  strictEqual(
+    dom.window.document.querySelector("#write-error")?.textContent,
+    "标签名称无效或已存在。",
+  );
   strictEqual((dom.window.document.querySelector("#write-error") as HTMLElement).hidden, false);
 
   dom.window.document.querySelector<HTMLButtonElement>("#author-list button")?.click();
   await settle();
-  strictEqual(dom.window.document.querySelector("#page-message")?.textContent,
-    "本地数据无法读取，Cocoon 未进行修改。");
+  strictEqual(
+    dom.window.document.querySelector("#page-message")?.textContent,
+    "本地数据无法读取，Cocoon 未进行修改。",
+  );
   strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 0);
   strictEqual(dom.window.document.querySelectorAll("#tag-list button").length, 0);
-  strictEqual((dom.window.document.querySelector("#remove-selected") as HTMLButtonElement).disabled, true);
+  strictEqual(
+    (dom.window.document.querySelector("#remove-selected") as HTMLButtonElement).disabled,
+    true,
+  );
   strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "—");
   strictEqual(rpc.requestCounts.get("rename-tag"), 1);
   strictEqual(rpc.requestCounts.get("remove-one"), 1);
@@ -274,18 +296,19 @@ test("MANAGE-003/AC-087 failed delete rolls back and restores the equivalent act
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("delete-tag", createBlacklistRpcResponse(
+  rpc.push(
     "delete-tag",
-    false,
-    { snapshot: SNAPSHOT },
-    "save-failed",
-  ));
+    createBlacklistRpcResponse("delete-tag", false, { snapshot: SNAPSHOT }, "save-failed"),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
@@ -308,17 +331,15 @@ test("MANAGE-003/AC-087 unreadable tag mutation focuses the visible error fallba
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("delete-tag", createBlacklistRpcResponse(
-    "delete-tag",
-    false,
-    {},
-    "storage-unreadable",
-  ));
+  rpc.push("delete-tag", createBlacklistRpcResponse("delete-tag", false, {}, "storage-unreadable"));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
   const unreadableDelete = dom.window.document.querySelector<HTMLButtonElement>(
@@ -331,7 +352,7 @@ test("MANAGE-003/AC-087 unreadable tag mutation focuses the visible error fallba
   strictEqual(dom.window.document.activeElement?.id, "write-error");
 });
 
-test("MANAGE-003/AC-087 successful rename with unreadable refresh focuses the section fallback", async () => {
+test("AC-095 committed rename snapshot remains visible without a post-read", async () => {
   const dom = fixture();
   const rpc = new RpcQueue();
   const renamed: BlacklistSnapshotDto = {
@@ -340,31 +361,82 @@ test("MANAGE-003/AC-087 successful rename with unreadable refresh focuses the se
   };
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   rpc.push("rename-tag", createBlacklistRpcResponse("rename-tag", true, { snapshot: renamed }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='重命名标签 Persisted']",
-  )?.click();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
   const input = dom.window.document.querySelector<HTMLInputElement>("#tag-list input");
   if (!input) throw new Error("rename input missing");
   input.value = "Updated";
   input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  input.closest("form")?.dispatchEvent(new dom.window.Event("submit", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  input.closest("form")?.dispatchEvent(
+    new dom.window.Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   await settle();
-  strictEqual(dom.window.document.querySelectorAll(".tag-row").length, 0);
-  strictEqual(dom.window.document.activeElement?.id, "tags-heading");
+  strictEqual(dom.window.document.querySelectorAll(".tag-row").length, 1);
+  strictEqual(dom.window.document.querySelector(".tag-display-name")?.textContent, "Updated");
+  strictEqual((dom.window.document.querySelector("#write-error") as HTMLElement).hidden, true);
 });
 
-test("MANAGE-003/AC-087 successful delete with unreadable refresh focuses the section fallback", async () => {
+test("AC-095 newer revision refresh wins over an older pending rename response", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  const pendingRename = deferredResponse();
+  const updated: BlacklistSnapshotDto = {
+    ...SNAPSHOT,
+    tags: [SNAPSHOT.tags[0]!, { ...SNAPSHOT.tags[1]!, name: "Updated" }],
+  };
+  const later: BlacklistSnapshotDto = {
+    ...SNAPSHOT,
+    tags: [SNAPSHOT.tags[0]!, { ...SNAPSHOT.tags[1]!, name: "Later" }],
+  };
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("rename-tag", pendingRename.promise);
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
+  });
+  await settle();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
+  const input = dom.window.document.querySelector<HTMLInputElement>("#tag-list input");
+  if (!input) throw new Error("rename input missing");
+  input.value = "Updated";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  input
+    .closest("form")
+    ?.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: later }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: later }));
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 2 } } }, "local");
+  await settle();
+  pendingRename.resolve(createBlacklistRpcResponse("rename-tag", true, { snapshot: updated }));
+  await settle();
+
+  strictEqual(dom.window.document.querySelector(".tag-display-name")?.textContent, "Later");
+});
+
+test("AC-095 committed delete snapshot remains visible without a post-read", async () => {
   const dom = fixture();
   const rpc = new RpcQueue();
   const defaultOnly: BlacklistSnapshotDto = {
@@ -373,12 +445,14 @@ test("MANAGE-003/AC-087 successful delete with unreadable refresh focuses the se
   };
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   rpc.push("delete-tag", createBlacklistRpcResponse("delete-tag", true, { snapshot: defaultOnly }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
   const successfulUnreadableDelete = dom.window.document.querySelector<HTMLButtonElement>(
@@ -388,7 +462,8 @@ test("MANAGE-003/AC-087 successful delete with unreadable refresh focuses the se
   successfulUnreadableDelete?.click();
   await settle();
   strictEqual(dom.window.document.querySelectorAll(".tag-row").length, 0);
-  strictEqual(dom.window.document.activeElement?.id, "tags-heading");
+  strictEqual(dom.window.document.querySelector(".tag-empty")?.textContent?.includes("暂无"), true);
+  strictEqual((dom.window.document.querySelector("#write-error") as HTMLElement).hidden, true);
 });
 
 test("MANAGE-003/AC-087 successful rename and delete restore useful focus", async () => {
@@ -414,28 +489,33 @@ test("MANAGE-003/AC-087 successful rename and delete restore useful focus", asyn
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='重命名标签 Persisted']",
-  )?.click();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
   const input = dom.window.document.querySelector<HTMLInputElement>("#tag-list input");
   if (!input) throw new Error("rename input missing");
   input.value = "Updated";
   input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  input.closest("form")?.dispatchEvent(new dom.window.Event("submit", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  input.closest("form")?.dispatchEvent(
+    new dom.window.Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   await settle();
   strictEqual(dom.window.document.querySelector(".tag-display-name")?.textContent, "Updated");
   strictEqual(
     (dom.window.document.activeElement as HTMLElement).getAttribute("aria-label"),
     "重命名标签 Updated",
   );
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(
     (dom.window.document.activeElement as HTMLElement).getAttribute("aria-label"),
@@ -449,9 +529,12 @@ test("MANAGE-003/AC-087 successful rename and delete restore useful focus", asyn
   successfulDelete?.click();
   await settle();
   strictEqual(dom.window.document.querySelectorAll(".tag-row").length, 0);
-  strictEqual(dom.window.document.querySelector(".tag-empty")?.textContent?.includes("暂无自定义标签"), true);
+  strictEqual(
+    dom.window.document.querySelector(".tag-empty")?.textContent?.includes("暂无自定义标签"),
+    true,
+  );
   strictEqual(dom.window.document.activeElement?.id, "tags-heading");
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(dom.window.document.activeElement?.id, "tags-heading");
 });
@@ -472,35 +555,38 @@ test("MANAGE-003/AC-087 every storage rerender preserves tag focus or uses the h
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='删除标签 Persisted']",
-  )?.focus();
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='删除标签 Persisted']")
+    ?.focus();
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(
     (dom.window.document.activeElement as HTMLElement).getAttribute("aria-label"),
     "删除标签 Persisted",
   );
 
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='重命名标签 Persisted']",
-  )?.click();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
   strictEqual(dom.window.document.activeElement?.tagName, "INPUT");
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(
     (dom.window.document.activeElement as HTMLElement).getAttribute("aria-label"),
     "重命名标签 Persisted",
   );
 
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='删除标签 Persisted']",
-  )?.focus();
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='删除标签 Persisted']")
+    ?.focus();
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(dom.window.document.activeElement?.id, "tags-heading");
 });
@@ -522,26 +608,31 @@ test("MANAGE-003/AC-087 pending rename survives storage refresh without duplicat
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='重命名标签 Persisted']",
-  )?.click();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
   const input = dom.window.document.querySelector<HTMLInputElement>("#tag-list input");
   const save = dom.window.document.querySelector<HTMLButtonElement>("#tag-list .tag-save");
   if (!input || !save) throw new Error("rename controls missing");
   input.value = "Updated";
   input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   save.focus();
-  input.closest("form")?.dispatchEvent(new dom.window.Event("submit", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  input.closest("form")?.dispatchEvent(
+    new dom.window.Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   strictEqual(dom.window.document.activeElement, save);
   strictEqual(save.getAttribute("aria-disabled"), "true");
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   const pendingAction = dom.window.document.querySelector<HTMLButtonElement>(
     "button[aria-label='重命名标签 Persisted']",
@@ -551,9 +642,11 @@ test("MANAGE-003/AC-087 pending rename survives storage refresh without duplicat
   pendingAction?.click();
   strictEqual(rpc.requestCounts.get("rename-tag"), 1);
 
-  pendingRename.resolve(createBlacklistRpcResponse("rename-tag", true, {
-    snapshot: renamed,
-  }));
+  pendingRename.resolve(
+    createBlacklistRpcResponse("rename-tag", true, {
+      snapshot: renamed,
+    }),
+  );
   await settle();
   const completedAction = dom.window.document.querySelector<HTMLButtonElement>(
     "button[aria-label='重命名标签 Updated']",
@@ -576,7 +669,10 @@ test("MANAGE-003/AC-087 pending delete survives storage refresh without duplicat
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
   const remove = dom.window.document.querySelector<HTMLButtonElement>(
@@ -587,7 +683,7 @@ test("MANAGE-003/AC-087 pending delete survives storage refresh without duplicat
   strictEqual(dom.window.document.activeElement, remove);
   strictEqual(remove?.getAttribute("aria-disabled"), "true");
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   const pendingAction = dom.window.document.querySelector<HTMLButtonElement>(
     "button[aria-label='删除标签 Persisted']",
@@ -597,9 +693,16 @@ test("MANAGE-003/AC-087 pending delete survives storage refresh without duplicat
   pendingAction?.click();
   strictEqual(rpc.requestCounts.get("delete-tag"), 1);
 
-  pendingDelete.resolve(createBlacklistRpcResponse("delete-tag", false, {
-    snapshot: SNAPSHOT,
-  }, "save-failed"));
+  pendingDelete.resolve(
+    createBlacklistRpcResponse(
+      "delete-tag",
+      false,
+      {
+        snapshot: SNAPSHOT,
+      },
+      "save-failed",
+    ),
+  );
   await settle();
   const completedAction = dom.window.document.querySelector<HTMLButtonElement>(
     "button[aria-label='删除标签 Persisted']",
@@ -614,18 +717,11 @@ test("MANAGE-003/AC-087 stale rename completion never steals newer tag focus", a
   const rpc = new RpcQueue();
   const initial: BlacklistSnapshotDto = {
     ...SNAPSHOT,
-    tags: [
-      ...SNAPSHOT.tags,
-      { tagId: "tag-two", name: "Second", isDefault: false },
-    ],
+    tags: [...SNAPSHOT.tags, { tagId: "tag-two", name: "Second", isDefault: false }],
   };
   const renamed: BlacklistSnapshotDto = {
     ...initial,
-    tags: [
-      initial.tags[0]!,
-      { ...initial.tags[1]!, name: "Updated" },
-      initial.tags[2]!,
-    ],
+    tags: [initial.tags[0]!, { ...initial.tags[1]!, name: "Updated" }, initial.tags[2]!],
   };
   const pendingRename = deferredResponse();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: initial }));
@@ -635,30 +731,37 @@ test("MANAGE-003/AC-087 stale rename completion never steals newer tag focus", a
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
-  dom.window.document.querySelector<HTMLButtonElement>(
-    "button[aria-label='重命名标签 Persisted']",
-  )?.click();
+  dom.window.document
+    .querySelector<HTMLButtonElement>("button[aria-label='重命名标签 Persisted']")
+    ?.click();
   const input = dom.window.document.querySelector<HTMLInputElement>("#tag-list input");
   const save = dom.window.document.querySelector<HTMLButtonElement>("#tag-list .tag-save");
   if (!input || !save) throw new Error("rename controls missing");
   input.value = "Updated";
   input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   save.focus();
-  input.closest("form")?.dispatchEvent(new dom.window.Event("submit", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  input.closest("form")?.dispatchEvent(
+    new dom.window.Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
   const newerFocus = dom.window.document.querySelector<HTMLButtonElement>(
     "button[aria-label='删除标签 Second']",
   );
   newerFocus?.focus();
-  pendingRename.resolve(createBlacklistRpcResponse("rename-tag", true, {
-    snapshot: renamed,
-  }));
+  pendingRename.resolve(
+    createBlacklistRpcResponse("rename-tag", true, {
+      snapshot: renamed,
+    }),
+  );
   await settle();
   strictEqual(dom.window.document.activeElement?.getAttribute("aria-label"), "删除标签 Second");
 });
@@ -668,10 +771,7 @@ test("MANAGE-003/AC-087 stale delete failure never steals newer tag focus", asyn
   const rpc = new RpcQueue();
   const initial: BlacklistSnapshotDto = {
     ...SNAPSHOT,
-    tags: [
-      ...SNAPSHOT.tags,
-      { tagId: "tag-two", name: "Second", isDefault: false },
-    ],
+    tags: [...SNAPSHOT.tags, { tagId: "tag-two", name: "Second", isDefault: false }],
   };
   const pendingDelete = deferredResponse();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: initial }));
@@ -681,7 +781,10 @@ test("MANAGE-003/AC-087 stale delete failure never steals newer tag focus", asyn
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
@@ -694,27 +797,30 @@ test("MANAGE-003/AC-087 stale delete failure never steals newer tag focus", asyn
     "button[aria-label='重命名标签 Second']",
   );
   newerFocus?.focus();
-  pendingDelete.resolve(createBlacklistRpcResponse("delete-tag", false, {
-    snapshot: initial,
-  }, "save-failed"));
-  await settle();
-  strictEqual(
-    dom.window.document.activeElement?.getAttribute("aria-label"),
-    "重命名标签 Second",
+  pendingDelete.resolve(
+    createBlacklistRpcResponse(
+      "delete-tag",
+      false,
+      {
+        snapshot: initial,
+      },
+      "save-failed",
+    ),
   );
+  await settle();
+  strictEqual(dom.window.document.activeElement?.getAttribute("aria-label"), "重命名标签 Second");
 });
 
-test("PROFILE-001/AC-086 management links profiles and preserves tag filtering across refreshes", async () => {
+function profileFilterSnapshots() {
   const internalUserId = "private-user-token-91";
-  const internalMemberHash = "abcdef0123456789abcdef0123456789";
   const internalTagId = "private-tag-token-73";
   const otherTagId = "private-tag-token-84";
-  const privateSnapshot: BlacklistSnapshotDto = {
+  const initial: BlacklistSnapshotDto = {
     authors: [
       {
         platformId: "zhihu",
         userId: internalUserId,
-        memberHashId: internalMemberHash,
+        memberHashId: "abcdef0123456789abcdef0123456789",
         authorName: "Filtered Author",
         tagId: internalTagId,
         blacklistedAt: "2026-08-21T10:00:00.000Z",
@@ -736,54 +842,81 @@ test("PROFILE-001/AC-086 management links profiles and preserves tag filtering a
       { tagId: otherTagId, name: "Muted", isDefault: false },
     ],
   };
-  const refreshedSnapshot: BlacklistSnapshotDto = {
-    ...privateSnapshot,
-    tags: [privateSnapshot.tags[2]!, privateSnapshot.tags[0]!, privateSnapshot.tags[1]!],
+  return {
+    internalUserId,
+    initial,
+    refreshed: { ...initial, tags: [initial.tags[2]!, initial.tags[0]!, initial.tags[1]!] },
+    removedTag: {
+      authors: [{ ...initial.authors[0]!, tagId: "default" }, initial.authors[1]!],
+      tags: [initial.tags[0]!, initial.tags[2]!],
+    } satisfies BlacklistSnapshotDto,
   };
-  const removedTagSnapshot: BlacklistSnapshotDto = {
-    authors: [
-      { ...privateSnapshot.authors[0]!, tagId: "default" },
-      privateSnapshot.authors[1]!,
-    ],
-    tags: [privateSnapshot.tags[0]!, privateSnapshot.tags[2]!],
-  };
+}
+
+function assertManagementProfileLinks(
+  document: Document,
+  expectedUserIds: readonly string[],
+): void {
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("a.author-name"));
+  strictEqual(links.length, expectedUserIds.length);
+  strictEqual(
+    links
+      .map((link) => link.href)
+      .sort()
+      .join("|"),
+    expectedUserIds
+      .map((userId) => `https://www.zhihu.com/people/${userId}`)
+      .sort()
+      .join("|"),
+  );
+  for (const link of links) {
+    strictEqual(link.target, "_blank");
+    strictEqual(link.rel, "noopener");
+  }
+}
+
+test("PROFILE-001/AC-086 management links profiles and preserves tag filtering across refreshes", async () => {
+  const {
+    internalUserId,
+    initial: privateSnapshot,
+    refreshed: refreshedSnapshot,
+    removedTag: removedTagSnapshot,
+  } = profileFilterSnapshots();
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: privateSnapshot }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: refreshedSnapshot }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: removedTagSnapshot }));
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, { snapshot: refreshedSnapshot }),
+  );
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, { snapshot: removedTagSnapshot }),
+  );
   const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
-  const assertProfileLinks = (expectedUserIds: readonly string[]): void => {
-    const links = Array.from(
-      dom.window.document.querySelectorAll<HTMLAnchorElement>("a.author-name"),
-    );
-    strictEqual(links.length, expectedUserIds.length);
-    strictEqual(
-      links.map((link) => link.href).sort().join("|"),
-      expectedUserIds.map((userId) =>
-        `https://www.zhihu.com/people/${userId}`
-      ).sort().join("|"),
-    );
-    for (const link of links) {
-      strictEqual(link.target, "_blank");
-      strictEqual(link.rel, "noopener");
-    }
-  };
-  assertProfileLinks([internalUserId, "private-user-token-92"]);
+  assertManagementProfileLinks(dom.window.document, [internalUserId, "private-user-token-92"]);
   strictEqual(dom.window.document.querySelector("#tag-summary")?.textContent, "2 个自定义标签");
   strictEqual(dom.window.document.querySelectorAll("#tag-list .tag-row").length, 2);
-  strictEqual(dom.window.document.querySelector("#tag-list")?.textContent?.includes("default"), false);
+  strictEqual(
+    dom.window.document.querySelector("#tag-list")?.textContent?.includes("default"),
+    false,
+  );
 
   const filter = dom.window.document.querySelector<HTMLSelectElement>("#tag-filter");
-  const readingOption = [...(filter?.options ?? [])].find((option) => option.textContent === "Reading");
+  const readingOption = [...(filter?.options ?? [])].find(
+    (option) => option.textContent === "Reading",
+  );
   if (!filter || !readingOption) throw new Error("tag filter option missing");
   strictEqual(
     [...filter.options].some((option) => option.textContent === "default"),
@@ -792,26 +925,35 @@ test("PROFILE-001/AC-086 management links profiles and preserves tag filtering a
   filter.value = readingOption.value;
   filter.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   strictEqual(dom.window.document.querySelectorAll("#author-list .author-row").length, 1);
-  strictEqual(dom.window.document.querySelector("#author-list")?.textContent?.includes("Filtered Author"), true);
-  strictEqual(dom.window.document.querySelector("#author-list")?.textContent?.includes("Other Author"), false);
+  strictEqual(
+    dom.window.document.querySelector("#author-list")?.textContent?.includes("Filtered Author"),
+    true,
+  );
+  strictEqual(
+    dom.window.document.querySelector("#author-list")?.textContent?.includes("Other Author"),
+    false,
+  );
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(dom.window.document.querySelectorAll("#author-list .author-row").length, 1);
-  strictEqual(dom.window.document.querySelector("#author-list")?.textContent?.includes("Filtered Author"), true);
+  strictEqual(
+    dom.window.document.querySelector("#author-list")?.textContent?.includes("Filtered Author"),
+    true,
+  );
   strictEqual(filter.selectedOptions[0]?.textContent, "Reading");
-  assertProfileLinks([internalUserId]);
+  assertManagementProfileLinks(dom.window.document, [internalUserId]);
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(filter.value, "");
   strictEqual(filter.selectedOptions[0]?.textContent, "全部标签");
   strictEqual(dom.window.document.querySelectorAll("#author-list .author-row").length, 2);
-  assertProfileLinks([internalUserId, "private-user-token-92"]);
+  assertManagementProfileLinks(dom.window.document, [internalUserId, "private-user-token-92"]);
 });
 
-test("PLATFORM-001/AC-090 management renders an independent platform column/filter through composed storage refreshes", async () => {
-  const multiPlatform: BlacklistSnapshotDto = {
+function platformFilterSnapshots() {
+  const initial: BlacklistSnapshotDto = {
     tags: SNAPSHOT.tags,
     authors: [
       {
@@ -849,73 +991,95 @@ test("PLATFORM-001/AC-090 management renders an independent platform column/filt
       },
     ],
   };
-  const refreshed: BlacklistSnapshotDto = {
-    tags: multiPlatform.tags.map((tag) => ({ ...tag })),
-    authors: [
-      ...multiPlatform.authors.map((author) => ({ ...author })),
-      {
-        ...multiPlatform.authors[1]!,
-        userId: "third-user",
-        authorName: "Video Middle",
-        blacklistedAt: "2026-08-21T09:00:00.000Z",
-      },
-    ],
+  return {
+    initial,
+    refreshed: {
+      tags: initial.tags.map((tag) => ({ ...tag })),
+      authors: [
+        ...initial.authors.map((author) => ({ ...author })),
+        {
+          ...initial.authors[1]!,
+          userId: "third-user",
+          authorName: "Video Middle",
+          blacklistedAt: "2026-08-21T09:00:00.000Z",
+        },
+      ],
+    } satisfies BlacklistSnapshotDto,
   };
+}
+
+function requiredPlatformControls(document: Document) {
+  const platformFilter = document.querySelector<HTMLSelectElement>("#platform-filter");
+  const tagFilter = document.querySelector<HTMLSelectElement>("#tag-filter");
+  const search = document.querySelector<HTMLInputElement>("#author-search");
+  const sort = document.querySelector<HTMLSelectElement>("#time-sort");
+  if (!platformFilter || !tagFilter || !search || !sort) {
+    throw new Error("filter controls missing");
+  }
+  return { platformFilter, tagFilter, search, sort };
+}
+
+function assertPlatformRows(document: Document): void {
+  const rows = Array.from(document.querySelectorAll<HTMLElement>("#author-list .author-row"));
+  const futureRow = rows.find((row) => row.textContent?.includes("Future Author"));
+  if (!futureRow) throw new Error("future platform row missing");
+  strictEqual(futureRow.querySelector(".platform-name")?.textContent, "future-site");
+  strictEqual(futureRow.querySelector(".source-name")?.textContent, "手动屏蔽");
+  strictEqual(futureRow.querySelector("a.author-name"), null);
+  const plainFuture = futureRow.querySelector<HTMLElement>("span.author-name");
+  if (!plainFuture) throw new Error("plain future author missing");
+  strictEqual(plainFuture.tabIndex, -1);
+  strictEqual(plainFuture.hasAttribute("href"), false);
+  const zhihuRow = rows.find((row) => row.textContent?.includes("Video Zhihu"));
+  const zhihu = zhihuRow?.querySelector<HTMLAnchorElement>("a.author-name");
+  if (!zhihu) throw new Error("Zhihu author link missing");
+  strictEqual(zhihu.href, "https://www.zhihu.com/people/zhihu%2Fencoded%20user");
+  strictEqual(zhihu.target, "_blank");
+  strictEqual(zhihu.rel, "noopener");
+}
+
+test("PLATFORM-001/AC-090 management renders an independent platform column/filter through composed storage refreshes", async () => {
+  const { initial: multiPlatform, refreshed } = platformFilterSnapshots();
   const dom = fixture();
   const rpc = new RpcQueue();
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-    snapshot: multiPlatform,
-  }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-    snapshot: refreshed,
-  }));
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, {
+      snapshot: multiPlatform,
+    }),
+  );
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, {
+      snapshot: refreshed,
+    }),
+  );
   const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
-  const platformFilter = dom.window.document.querySelector<HTMLSelectElement>(
-    "#platform-filter",
+  const { platformFilter, tagFilter, search, sort } = requiredPlatformControls(dom.window.document);
+  const labels = ["future-site", "YouTube", "知乎"].sort((left, right) =>
+    left.localeCompare(right, "zh-CN"),
   );
-  const tagFilter = dom.window.document.querySelector<HTMLSelectElement>("#tag-filter");
-  const search = dom.window.document.querySelector<HTMLInputElement>("#author-search");
-  const sort = dom.window.document.querySelector<HTMLSelectElement>("#time-sort");
-  if (!platformFilter || !tagFilter || !search || !sort) {
-    throw new Error("filter controls missing");
-  }
-  const expectedPlatformLabels = ["future-site", "YouTube", "知乎"]
-    .sort((left, right) => left.localeCompare(right, "zh-CN"));
   deepStrictEqual(
     [...platformFilter.options].map((option) => option.textContent),
-    ["全部站点", ...expectedPlatformLabels],
+    ["全部站点", ...labels],
   );
-  const rows = Array.from(
-    dom.window.document.querySelectorAll<HTMLElement>("#author-list .author-row"),
-  );
-  const futureRow = rows.find((row) => row.textContent?.includes("Future Author"));
-  strictEqual(futureRow?.querySelector(".platform-name")?.textContent, "future-site");
-  strictEqual(futureRow?.querySelector(".source-name")?.textContent, "手动屏蔽");
-  strictEqual(futureRow?.querySelector("a.author-name"), null);
-  const plainFuture = futureRow?.querySelector<HTMLElement>("span.author-name");
-  strictEqual(plainFuture?.tabIndex, -1);
-  strictEqual(plainFuture?.hasAttribute("href"), false);
-  const zhihu = rows.find((row) => row.textContent?.includes("Video Zhihu"))
-    ?.querySelector<HTMLAnchorElement>("a.author-name");
-  strictEqual(
-    zhihu?.href,
-    "https://www.zhihu.com/people/zhihu%2Fencoded%20user",
-  );
-  strictEqual(zhihu?.target, "_blank");
-  strictEqual(zhihu?.rel, "noopener");
+  assertPlatformRows(dom.window.document);
 
-  const youtubeOption = [...platformFilter.options]
-    .find((option) => option.textContent === "YouTube");
-  const readingOption = [...tagFilter.options]
-    .find((option) => option.textContent === "Persisted");
+  const youtubeOption = [...platformFilter.options].find(
+    (option) => option.textContent === "YouTube",
+  );
+  const readingOption = [...tagFilter.options].find((option) => option.textContent === "Persisted");
   if (!youtubeOption || !readingOption) throw new Error("filter option missing");
   platformFilter.value = youtubeOption.value;
   platformFilter.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -927,24 +1091,27 @@ test("PLATFORM-001/AC-090 management renders an independent platform column/filt
   sort.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
 
   deepStrictEqual(
-    Array.from(dom.window.document.querySelectorAll("#author-list .author-name"))
-      .map((name) => name.textContent),
+    Array.from(dom.window.document.querySelectorAll("#author-list .author-name")).map(
+      (name) => name.textContent,
+    ),
     ["Video Older", "Video Newer"],
   );
   deepStrictEqual(
-    Array.from(dom.window.document.querySelectorAll("#author-list .source-name"))
-      .map((source) => source.textContent),
+    Array.from(dom.window.document.querySelectorAll("#author-list .source-name")).map(
+      (source) => source.textContent,
+    ),
     ["来自点赞者", "手动屏蔽"],
   );
   strictEqual(dom.window.document.querySelectorAll("#author-list a.author-name").length, 0);
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(platformFilter.selectedOptions[0]?.textContent, "YouTube");
   strictEqual(tagFilter.selectedOptions[0]?.textContent, "Persisted");
   deepStrictEqual(
-    Array.from(dom.window.document.querySelectorAll("#author-list .author-name"))
-      .map((name) => name.textContent),
+    Array.from(dom.window.document.querySelectorAll("#author-list .author-name")).map(
+      (name) => name.textContent,
+    ),
     ["Video Older", "Video Middle", "Video Newer"],
   );
   for (const name of dom.window.document.querySelectorAll<HTMLElement>(
@@ -992,7 +1159,10 @@ test("PLATFORM-001/PROFILE-002/AC-090/AC-091 composed filters keep incremental l
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
@@ -1005,14 +1175,10 @@ test("PLATFORM-001/PROFILE-002/AC-090/AC-091 composed filters keep incremental l
   strictEqual(list.querySelectorAll(".author-row").length, 100);
   strictEqual(dom.window.document.activeElement?.tagName, "A");
   strictEqual(dom.window.document.activeElement === originalFocus, false);
-  strictEqual(
-    (dom.window.document.activeElement as HTMLAnchorElement).href,
-    originalFocus?.href,
-  );
+  strictEqual((dom.window.document.activeElement as HTMLAnchorElement).href, originalFocus?.href);
 
   const platform = dom.window.document.querySelector<HTMLSelectElement>("#platform-filter");
-  const youtube = [...(platform?.options ?? [])]
-    .find((option) => option.textContent === "YouTube");
+  const youtube = [...(platform?.options ?? [])].find((option) => option.textContent === "YouTube");
   if (!platform || !youtube) throw new Error("YouTube filter missing");
   platform.value = youtube.value;
   platform.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -1063,13 +1229,17 @@ test("PLATFORM-001/PROFILE-002/AC-090/AC-091 platform filtering and storage refr
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
 
   const platform = dom.window.document.querySelector<HTMLSelectElement>("#platform-filter");
-  const zhihuOption = [...(platform?.options ?? [])]
-    .find((option) => option.textContent === "知乎");
+  const zhihuOption = [...(platform?.options ?? [])].find(
+    (option) => option.textContent === "知乎",
+  );
   if (!platform || !zhihuOption) throw new Error("Zhihu filter missing");
   platform.value = zhihuOption.value;
   platform.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -1080,7 +1250,7 @@ test("PLATFORM-001/PROFILE-002/AC-090/AC-091 platform filtering and storage refr
   const focused = list.querySelectorAll<HTMLAnchorElement>("a.author-name").item(3);
   focused.focus();
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(platform.selectedOptions[0]?.textContent, "知乎");
   strictEqual(list.classList.contains("virtual-list"), true);
@@ -1096,13 +1266,16 @@ test("MANAGE-004/AC-089 reads a local valid file, defaults to merge, reports exa
   const pendingImport = deferredResponse();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   rpc.push("import-merge", pendingImport.promise);
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
   let readFile: File | null = null;
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
     async readFileText(file) {
       readFile = file;
       return JSON.stringify(TRANSFER);
@@ -1117,12 +1290,13 @@ test("MANAGE-004/AC-089 reads a local valid file, defaults to merge, reports exa
   selectImportFile(dom, file);
   await settle();
   strictEqual(readFile, file);
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已校验 2 位作者和 2 个标签。");
   strictEqual(
-    dom.window.document.querySelector<HTMLInputElement>(
-      "input[name='import-mode'][value='merge']",
-    )?.checked,
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已校验 2 位作者和 2 个标签。",
+  );
+  strictEqual(
+    dom.window.document.querySelector<HTMLInputElement>("input[name='import-mode'][value='merge']")
+      ?.checked,
     true,
   );
   const importButton = dom.window.document.querySelector<HTMLButtonElement>("#import-data");
@@ -1131,23 +1305,29 @@ test("MANAGE-004/AC-089 reads a local valid file, defaults to merge, reports exa
   importButton.click();
   importButton.click();
   strictEqual(rpc.requestCounts.get("import-merge"), 1);
-  strictEqual(dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
-    "true");
-  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled,
-    true);
-  strictEqual(dom.window.document.querySelector<HTMLFieldSetElement>("#import-mode")?.disabled,
-    true);
-  deepStrictEqual(
-    rpc.requests.find(({ operation }) => operation === "import-merge")?.input,
-    { transfer: TRANSFER },
+  strictEqual(
+    dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
+    "true",
   );
+  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled, true);
+  strictEqual(
+    dom.window.document.querySelector<HTMLFieldSetElement>("#import-mode")?.disabled,
+    true,
+  );
+  deepStrictEqual(rpc.requests.find(({ operation }) => operation === "import-merge")?.input, {
+    transfer: TRANSFER,
+  });
 
-  pendingImport.resolve(createBlacklistRpcResponse("import-merge", true, {
-    snapshot: SNAPSHOT,
-  }));
+  pendingImport.resolve(
+    createBlacklistRpcResponse("import-merge", true, {
+      snapshot: SNAPSHOT,
+    }),
+  );
   await settle();
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "合并完成；文件包含 2 位作者和 2 个标签。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "合并完成；文件包含 2 位作者和 2 个标签。",
+  );
   strictEqual(dom.window.document.activeElement?.id, "transfer-status");
   strictEqual(importButton.disabled, true);
   strictEqual(rpc.requestCounts.get("import-merge"), 1);
@@ -1157,16 +1337,24 @@ test("MANAGE-004/AC-089 replace inspects exact counts, cancels safely, confirms 
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("import-replace", createBlacklistRpcResponse("import-replace", true, {
-    snapshot: SNAPSHOT,
-  }));
+  rpc.push(
+    "import-replace",
+    createBlacklistRpcResponse("import-replace", true, {
+      snapshot: SNAPSHOT,
+    }),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
-    async readFileText() { return JSON.stringify(TRANSFER); },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
+    async readFileText() {
+      return JSON.stringify(TRANSFER);
+    },
     downloadJson() {},
   });
   await settle();
@@ -1194,8 +1382,10 @@ test("MANAGE-004/AC-089 replace inspects exact counts, cancels safely, confirms 
   importButton.focus();
   importButton.click();
   strictEqual(dialog.open, true);
-  strictEqual(dom.window.document.querySelector("#replace-dialog-description")?.textContent,
-    "将用文件中的 2 位作者和 2 个标签替换当前列表。现有设置会保留。");
+  strictEqual(
+    dom.window.document.querySelector("#replace-dialog-description")?.textContent,
+    "将用文件中的 2 位作者和 2 个标签替换当前列表。现有设置会保留。",
+  );
   strictEqual(dom.window.document.activeElement, cancel);
   strictEqual(rpc.requestCounts.get("import-replace") ?? 0, 0);
 
@@ -1209,8 +1399,10 @@ test("MANAGE-004/AC-089 replace inspects exact counts, cancels safely, confirms 
   confirm.click();
   await settle();
   strictEqual(rpc.requestCounts.get("import-replace"), 1);
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已替换为 2 位作者和 2 个标签。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已替换为 2 位作者和 2 个标签。",
+  );
   strictEqual(dom.window.document.activeElement?.id, "transfer-status");
 });
 
@@ -1218,22 +1410,26 @@ test("MANAGE-004/AC-089 accepts the 8 MiB boundary and rejects oversized/read fa
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("import-merge", createBlacklistRpcResponse("import-merge", true, {
-    snapshot: SNAPSHOT,
-  }));
+  rpc.push(
+    "import-merge",
+    createBlacklistRpcResponse("import-merge", true, {
+      snapshot: SNAPSHOT,
+    }),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   let reads = 0;
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
     async readFileText(file) {
       reads += 1;
       if (file.name === "unreadable.json") throw new Error("read failed");
-      return file.name === "boundary.json"
-        ? JSON.stringify(TRANSFER)
-        : "{\"product\":\"unknown\"}";
+      return file.name === "boundary.json" ? JSON.stringify(TRANSFER) : '{"product":"unknown"}';
     },
     downloadJson() {},
   });
@@ -1247,8 +1443,10 @@ test("MANAGE-004/AC-089 accepts the 8 MiB boundary and rejects oversized/read fa
   selectImportFile(dom, boundary);
   await settle();
   strictEqual(reads, 1);
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已校验 2 位作者和 2 个标签。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已校验 2 位作者和 2 个标签。",
+  );
   dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.click();
   await settle();
   strictEqual(rpc.requestCounts.get("import-merge"), 1);
@@ -1262,31 +1460,32 @@ test("MANAGE-004/AC-089 accepts the 8 MiB boundary and rejects oversized/read fa
   await settle();
   strictEqual(reads, 1);
   strictEqual(rpc.requestCounts.get("import-merge"), 1);
-  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-    "导入文件超过 8 MiB 限制。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-error")?.textContent,
+    "导入文件超过 8 MiB 限制。",
+  );
   strictEqual(dom.window.document.activeElement?.id, "transfer-error");
 
-  selectImportFile(
-    dom,
-    new dom.window.File(["{}"], "invalid.json") as unknown as File,
-  );
+  selectImportFile(dom, new dom.window.File(["{}"], "invalid.json") as unknown as File);
   await settle();
   strictEqual(reads, 2);
-  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-    "导入文件无效或格式不受支持。");
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "未选择可导入的数据。");
-
-  selectImportFile(
-    dom,
-    new dom.window.File(["{}"], "unreadable.json") as unknown as File,
+  strictEqual(
+    dom.window.document.querySelector("#transfer-error")?.textContent,
+    "导入文件无效或格式不受支持。",
   );
+  strictEqual(
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "未选择可导入的数据。",
+  );
+
+  selectImportFile(dom, new dom.window.File(["{}"], "unreadable.json") as unknown as File);
   await settle();
   strictEqual(reads, 3);
-  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-    "无法读取导入文件，请重新选择。");
-  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.disabled,
-    true);
+  strictEqual(
+    dom.window.document.querySelector("#transfer-error")?.textContent,
+    "无法读取导入文件，请重新选择。",
+  );
+  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.disabled, true);
   strictEqual(rpc.requestCounts.get("import-merge"), 1);
   strictEqual(rpc.requestCounts.get("import-replace") ?? 0, 0);
 });
@@ -1317,23 +1516,29 @@ for (const failureCase of [
     const dom = fixture();
     const rpc = new RpcQueue();
     rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-    rpc.push("import-merge", createBlacklistRpcResponse(
+    rpc.push(
       "import-merge",
-      false,
-      {},
-      failureCase.error,
-    ));
+      createBlacklistRpcResponse("import-merge", false, {}, failureCase.error),
+    );
     if (failureCase.error !== "storage-unreadable") {
-      rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-        snapshot: SNAPSHOT,
-      }));
+      rpc.push(
+        "snapshot",
+        createBlacklistRpcResponse("snapshot", true, {
+          snapshot: SNAPSHOT,
+        }),
+      );
     }
     bootstrapOptions({
       document: dom.window.document,
       rpc,
       storageChanges: { addListener() {} },
-      requestFrame(callback) { callback(); return 1; },
-      async readFileText() { return JSON.stringify(TRANSFER); },
+      requestFrame(callback) {
+        callback();
+        return 1;
+      },
+      async readFileText() {
+        return JSON.stringify(TRANSFER);
+      },
       downloadJson() {},
     });
     await settle();
@@ -1346,19 +1551,24 @@ for (const failureCase of [
     await settle();
 
     strictEqual(rpc.requestCounts.get("import-merge"), 1);
-    strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-      failureCase.message);
-    strictEqual((dom.window.document.querySelector("#transfer-error") as HTMLElement).hidden,
-      false);
+    strictEqual(
+      dom.window.document.querySelector("#transfer-error")?.textContent,
+      failureCase.message,
+    );
+    strictEqual(
+      (dom.window.document.querySelector("#transfer-error") as HTMLElement).hidden,
+      false,
+    );
     strictEqual(dom.window.document.activeElement?.id, "transfer-error");
-    strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-      "未导入数据。");
+    strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent, "未导入数据。");
     strictEqual(
       dom.window.document.querySelector("#transfer-status")?.textContent?.startsWith("已"),
       false,
     );
-    strictEqual(dom.window.document.querySelector("#author-total")?.textContent,
-      failureCase.error === "storage-unreadable" ? "—" : "1");
+    strictEqual(
+      dom.window.document.querySelector("#author-total")?.textContent,
+      failureCase.error === "storage-unreadable" ? "—" : "1",
+    );
   });
 }
 
@@ -1368,19 +1578,19 @@ test("MANAGE-004/AC-089 export uses exact JSON/filename, guards pending actions,
   const pendingExport = deferredResponse();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
   rpc.push("export-json", pendingExport.promise);
-  rpc.push("export-json", createBlacklistRpcResponse(
-    "export-json",
-    false,
-    {},
-    "save-failed",
-  ));
+  rpc.push("export-json", createBlacklistRpcResponse("export-json", false, {}, "save-failed"));
   const downloads: Array<{ json: string; filename: string }> = [];
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
-    downloadJson(json, filename) { downloads.push({ json, filename }); },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
+    downloadJson(json, filename) {
+      downloads.push({ json, filename });
+    },
   });
   await settle();
 
@@ -1390,33 +1600,37 @@ test("MANAGE-004/AC-089 export uses exact JSON/filename, guards pending actions,
   exportButton.click();
   strictEqual(rpc.requestCounts.get("export-json"), 1);
   strictEqual(exportButton.disabled, true);
-  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled,
-    true);
-  strictEqual(dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
-    "true");
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "正在准备导出…");
+  strictEqual(dom.window.document.querySelector<HTMLInputElement>("#import-file")?.disabled, true);
+  strictEqual(
+    dom.window.document.querySelector("#transfer-panel")?.getAttribute("aria-busy"),
+    "true",
+  );
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent, "正在准备导出…");
 
-  pendingExport.resolve(createBlacklistRpcResponse("export-json", true, {
-    transfer: TRANSFER,
-  }));
+  pendingExport.resolve(
+    createBlacklistRpcResponse("export-json", true, {
+      transfer: TRANSFER,
+    }),
+  );
   await settle();
   strictEqual(downloads.length, 1);
   deepStrictEqual(JSON.parse(downloads[0]!.json), TRANSFER);
   strictEqual(downloads[0]!.filename, "cocoon-blacklist-2026-08-22.json");
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已导出 2 位作者和 2 个标签。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-status")?.textContent,
+    "已导出 2 位作者和 2 个标签。",
+  );
   strictEqual(dom.window.document.activeElement?.id, "transfer-status");
 
   exportButton.click();
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "正在准备导出…");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent, "正在准备导出…");
   await settle();
   strictEqual(downloads.length, 1);
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "未导出数据。");
-  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-    "无法导出本地数据，请重试。");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent, "未导出数据。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-error")?.textContent,
+    "无法导出本地数据，请重试。",
+  );
   strictEqual(dom.window.document.activeElement?.id, "transfer-error");
 });
 
@@ -1424,29 +1638,30 @@ test("MANAGE-004/AC-089 export storage failure enters read-only with an explicit
   const dom = fixture();
   const rpc = new RpcQueue();
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: SNAPSHOT }));
-  rpc.push("export-json", createBlacklistRpcResponse(
+  rpc.push(
     "export-json",
-    false,
-    {},
-    "storage-unreadable",
-  ));
+    createBlacklistRpcResponse("export-json", false, {}, "storage-unreadable"),
+  );
   bootstrapOptions({
     document: dom.window.document,
     rpc,
     storageChanges: { addListener() {} },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
   dom.window.document.querySelector<HTMLButtonElement>("#export-data")?.click();
   await settle();
 
-  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent,
-    "未导出数据。");
-  strictEqual(dom.window.document.querySelector("#transfer-error")?.textContent,
-    "本地数据无法读取，Cocoon 未进行修改。");
+  strictEqual(dom.window.document.querySelector("#transfer-status")?.textContent, "未导出数据。");
+  strictEqual(
+    dom.window.document.querySelector("#transfer-error")?.textContent,
+    "本地数据无法读取，Cocoon 未进行修改。",
+  );
   strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "—");
-  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#export-data")?.disabled,
-    true);
+  strictEqual(dom.window.document.querySelector<HTMLButtonElement>("#export-data")?.disabled, true);
 });
 
 test("MANAGE production storage listener performs a later validated refresh before re-enabling writes", async () => {
@@ -1459,12 +1674,18 @@ test("MANAGE production storage listener performs a later validated refresh befo
     document: dom.window.document,
     rpc,
     storageChanges: { addListener: (listener) => listeners.push(listener) },
-    requestFrame(callback) { callback(); return 1; },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
   });
   await settle();
   strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 0);
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
   strictEqual(dom.window.document.querySelectorAll("#author-list button").length, 1);
-  strictEqual((dom.window.document.querySelector("#author-list button") as HTMLButtonElement).disabled, false);
+  strictEqual(
+    (dom.window.document.querySelector("#author-list button") as HTMLButtonElement).disabled,
+    false,
+  );
 });

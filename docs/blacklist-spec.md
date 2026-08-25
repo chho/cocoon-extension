@@ -5,8 +5,8 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | `ACTIVE` |
-| 规格版本 | `0.68.0` |
-| 最后更新 | `2026-08-22` |
+| 规格版本 | `0.72.0` |
+| 最后更新 | `2026-08-25` |
 | 当前交付阶段 | `DELIVERED` |
 | 适用页面 | `https://www.zhihu.com/` |
 | 事实来源 | 本文档、当前源码、测试和本地知乎快照 |
@@ -46,7 +46,7 @@
 
 选中“拉黑该内容的点赞者”后，Cocoon 只把获取到的有效点赞者加入本地 storage 黑名单，用于插件内过滤；不得为这些点赞者调用知乎账号级拉黑接口。单作者远程拉黑选项的既有行为不变。
 
-当前实现使用 `chrome.storage.local` 保存黑名单和标签。是否增加其他数据处理能力只按用户后续明确提出的功能需求决定，不再预设产品隐私或数据最小化限制。
+当前目标由 `STORAGE-001`～`STORAGE-005` 改为使用扩展后台持有的 IndexedDB 保存黑名单和标签；`chrome.storage.local` 只继续保存远程偏好、非权威 revision 通知及一次性旧数据迁移来源。是否增加其他数据处理能力只按用户后续明确提出的功能需求决定，不再预设产品隐私或数据最小化限制。
 
 当用户在知乎首页卡片底部点击“多少条评论”并展开该卡片的评论界面时，同一份 Cocoon 本地屏蔽列表也用于过滤评论：评论作者的稳定用户 ID 已存在于屏蔽列表时，该作者的评论和回复不再显示。
 
@@ -84,11 +84,31 @@ Cocoon 在 Chrome 扩展 Action 图标的 Badge 中显示当前标签页本次�
 | `BL-003` | `DELIVERED` | 页面刷新、浏览器重启后，黑名单仍然有效。 |
 | `BL-004` | `DELIVERED` | 无限滚动或 DOM 动态更新后新增的黑名单作者卡片必须自动隐藏。 |
 | `BL-005` | `DELIVERED` | 隐藏卡片时给卡片添加 `cocoon-` 前缀的状态类，并使用 `display: none !important`；不得直接从知乎维护的 DOM 树删除卡片。 |
-| `BL-006` | `DELIVERED` | 使用 `chrome.storage.local` 持久化黑名单，并只申请实现该功能所需的 `storage` 权限。 |
+| `BL-006` | `SUPERSEDED` | 旧行为使用 `chrome.storage.local` 持久化完整黑名单；持久化介质现由 `STORAGE-001`～`STORAGE-005` 的后台 IndexedDB 方案取代，`storage` 权限仍因偏好、Badge/session、revision 通知和旧数据迁移而保留。 |
 | `BL-007` | `DELIVERED` | 黑名单必须按稳定作者标识匹配，禁止仅按可能重名或变化的作者显示名称匹配。 |
 | `BL-008` | `DELIVERED` | 黑名单去重；同一作者被重复处理不得产生重复记录、重复按钮或重复副作用。 |
 | `BL-009` | `SUPERSEDED` | 黑名单数据只保存在用户本机，不添加遥测、远程同步或项目服务器传输；该产品隐私限制已由 `PRIVACY-001` 统一取代，当前实现仍使用本地 storage，但不再把本机限定作为未来功能的默认约束。 |
 | `BL-010` | `SUPERSEDED` | 按钮文案直接表达“屏蔽作者”；由于点击后先打开标签抽屉，该文案要求由 `TAG-008` 取代。 |
+
+### IndexedDB 第一阶段存储迁移
+
+| ID | 状态 | 需求 |
+| --- | --- | --- |
+| `STORAGE-001` | `DELIVERED` | 黑名单作者、稳定标识 alias、标签和持久化元数据迁移为扩展后台 Service Worker 独占访问的 IndexedDB 权威数据。作者与全部平台内标识使用规范化独立 store 和唯一索引，标签使用独立 store；不得把完整 `BlacklistState` JSON 作为一个 IndexedDB value 保存，也不得让 content、Popup 或 options 直接访问数据库。逻辑作者字段、schema v5、平台隔离和导入导出 envelope 保持兼容。 |
+| `STORAGE-002` | `DELIVERED` | 首次访问时自动迁移既有 `cocoonBlacklistState` v1～v5：完整读取并严格校验后，在一个 IndexedDB transaction 内写入全部规范化记录及完成标记，transaction 完成后才删除旧 key。迁移前失败或 transaction abort 时旧数据保持不变；IDB 已提交但旧 key 清理失败时，以完成标记证明 IDB 权威并在后续重试清理，不得重复导入或形成双权威。损坏、未知未来版本或不可读旧数据必须 fail closed。 |
+| `STORAGE-003` | `DELIVERED` | 直接作者提交、member hash 补写、点赞者本地入库和远程作者预检必须使用后台目标化 IndexedDB transaction，只读取或写入相关作者、标识、标签和 metadata，不得为单条操作读取、验证、传输或重写完整作者集合。标签删除只遍历引用目标标签的索引记录；管理页 snapshot、导入、导出和替换在本阶段可继续使用完整状态，但最终写入必须是单个原子 IndexedDB transaction。 |
+| `STORAGE-004` | `DELIVERED` | 每次成功权威 mutation 增加 IDB revision，并在 `chrome.storage.local` 写入不含黑名单数据的严格版本化 revision 通知。通知不是权威数据，只触发各 context 重新读取 IDB；本 context 的目标化 mutation 优先应用后台返回的完整单记录或标签 delta，避免重复全量刷新。通知写入失败不得把已经提交的 IDB transaction 报告为回滚成功或回滚失败；后续访问必须能够重新发布当前 revision。 |
+| `STORAGE-005` | `DELIVERED` | 存储迁移必须保持现有卡片/评论过滤、抽屉、标签、alias、点赞者仅本地入库、单作者知乎远程操作、Popup、Badge、撤销、管理、导入导出、严格 RPC、错误回滚和平台隔离行为。Manifest 不新增 `unlimitedStorage` 或其他权限；`storage` 继续只用于现有偏好、Badge/session、revision 通知和旧数据迁移。成功迁移后不得再向 `cocoonBlacklistState` 写入完整黑名单。 |
+
+### 已记录但不属于 IndexedDB 第一阶段的规模顾虑
+
+| ID | 状态 | 内容 |
+| --- | --- | --- |
+| `SCALE-001` | `DEFERRED` | 第一阶段不承诺十万或百万条时的 content 首次全量 hydration、跨 context revision 后全量重载、Popup/options 完整 snapshot、任意子串搜索、排序、管理页分页或大型流式导入导出性能。现有 20,000 作者、2,000 标签和 8 MiB transfer 限制保持不变；后续只有在独立需求确认后才引入可见 DOM 身份批量查询、有限缓存/Bloom Filter、数据库游标分页、搜索索引及流式 transfer。 |
+| `SCALE-002` | `DEFERRED` | IndexedDB 可显著降低单条 mutation 的全量序列化成本，但浏览器实际配额、索引额外占用、冷启动、百万级内存和磁盘使用仍需合成数据 benchmark 与用户浏览器测量。不得仅因改用 IndexedDB 宣称已支持百万条，也不得未经证据申请 `unlimitedStorage`。 |
+| `LIFECYCLE-001` | `DEFERRED` | 页面生命周期结束继续阻止尚未派发的点赞者任务和后续调度；但目标化 mutation 一旦已经派发并进入权威 IndexedDB transaction，就必须原子完成而不假装回滚。若未来要求取消仍在 background 队列中但尚未开始的 transaction，需要另行设计可中止 port/operation token 协议，不得以轮询、虚假失败或删除已提交记录补偿。 |
+
+`STORAGE-001`～`STORAGE-005` 只改变持久化权威、事务边界和同步方式，不改变用户可见功能。外部 JSON 继续使用 schema v5 和 format v1；IndexedDB 使用独立物理版本。旧 `BL-006`、`COMMENT-003`、`ERR-001` 等历史条目中的 `chrome.storage.local` 字样保留当时交付记录，其当前持久化介质含义由本节取代，原有失败安全和跨页面更新行为继续有效。
 
 ### 卡片评论过滤
 
@@ -149,7 +169,7 @@ Cocoon 在 Chrome 扩展 Action 图标的 Badge 中显示当前标签页本次�
 | `POPUP-009` | `DELIVERED` | 方案只处理扩展已有的本地黑名单、标签和当前页临时 Badge 状态，不得读取、持久化或展示标签页 URL、标题、浏览历史、Cookie、请求头或内容正文，不得新增第三方请求、遥测、服务端、`tabs`、`scripting`、host permissions 或页面范围。加载时显示“正在读取本地数据…”；storage 无效且无法安全加载时显示“本地数据无法读取，Cocoon 未进行修改。”；页面连接失败显示“Cocoon 无法连接当前页面。”。失败状态不得提供会覆盖损坏数据的写操作。 |
 | `POPUP-010` | `DELIVERED` | Popup 顶部页面状态前的小圆点使用语义颜色：“运行中”为绿色，“此页面不受支持”为中性灰色，“页面连接异常”为橙红色；初始“正在检查…”保持中性。颜色不得成为区分状态的唯一方式，现有状态文字和准确无障碍名称必须保留；色值应适配现有中性视觉语言并具有足够对比度，不加入高饱和大色块、渐变、阴影或动画。 |
 
-`MANAGE-004`、`PLATFORM-001` 与 `PROFILE-002` 共同把原 schema v4 原子升级到当前 schema v5，继续使用同一个 `cocoonBlacklistState`，不得建立第二份黑名单。Popup 与管理页关闭时不影响内容脚本继续过滤；成功变更 `chrome.storage.local` 后，现有 storage listener 负责让已连接页面按最新状态重新过滤。
+`MANAGE-004`、`PLATFORM-001` 与 `PROFILE-002` 共同把原 schema v4 原子升级到当前 schema v5；`STORAGE-001`～`STORAGE-005` 进一步把该逻辑状态迁移为唯一的后台 IndexedDB 权威，不得建立第二份黑名单。Popup 与管理页关闭时不影响内容脚本继续过滤；成功 IndexedDB mutation 增加 revision，并由不含黑名单数据的 storage revision 通知让已连接页面重新读取权威状态。
 
 ### 标签抽屉与确认流程
 
@@ -253,7 +273,7 @@ Cocoon 在 Chrome 扩展 Action 图标的 Badge 中显示当前标签页本次�
 `VOTER-014` 的验收条件（不是独立需求）：
 
 - 点赞者请求只有列表 GET，不向点赞者发送 `/actions/block`、`/block` 或其他拉黑 POST。
-- 成功解析且尚未存在的点赞者写入 `chrome.storage.local`，记录使用稳定 ID、当前标签和 `blockSource: "upvoter"`。
+- 成功解析且尚未存在的点赞者通过 background 目标化 IndexedDB transaction 写入，记录使用稳定 ID、当前标签和 `blockSource: "upvoter"`。
 - 已存在、缺少稳定 ID或属于当前登录用户的条目继续跳过；同一用户不会因分页、排序或并发重复写入。
 - 新增本地记录立即参与当前及后续卡片、评论过滤；单条失败不把未持久化用户视为已屏蔽。
 
@@ -304,7 +324,7 @@ Cocoon 在 Chrome 扩展 Action 图标的 Badge 中显示当前标签页本次�
 - 旧 storage 升级后历史 `cardImage` 被删除，其他有效字段保持不变；重复加载迁移结果保持幂等。
 - 源码、依赖和构建产物中不再包含只为截图存在的实现，Manifest 权限不扩大。
 
-这里的“Browser Storage”在当前规格中指扩展侧本地持久化存储，默认仍为 `chrome.storage.local`，不指知乎页面所属 origin 的 `localStorage`、`sessionStorage` 或 IndexedDB。移除历史图像后仍不得由 Developer 自行更换存储介质或扩大 Chrome 权限。
+这里的“Browser Storage”指扩展自身 origin 的本地持久化存储。`STORAGE-001`～`STORAGE-005` 已由用户明确授权将黑名单权威迁移到后台 IndexedDB；不得使用知乎页面 origin 的 `localStorage`、`sessionStorage` 或 IndexedDB，也不得借迁移扩大 Chrome 权限。
 
 v0.6.0 的相关需求当时已完成开发、自动化检查及 Reviewer `PASS` 并标为 `DELIVERED`；其中截图行为现已被 `CAP-007` 取代。以下内容保留历史交付边界，当前状态以各需求行和 v0.30.0 范围为准。
 
@@ -531,7 +551,7 @@ Reviewer 三轮独立审查先后发现并推动修复 watch 模式新增插件�
 
 ### 3. 持久化
 
-黑名单存储在 `chrome.storage.local`。Manifest 只新增：
+黑名单权威存储在扩展后台独占的 IndexedDB；`chrome.storage.local` 只保留偏好、非权威 revision 通知和一次性旧数据迁移来源。Manifest 继续只需要：
 
 ```json
 "permissions": ["storage"]
@@ -555,7 +575,7 @@ Reviewer 三轮独立审查先后发现并推动修复 watch 模式新增插件�
 
 首次初始化标签存储时创建一个显示名称为 `default` 的内置标签。该标签与用户新增标签采用相同的数据结构和单选行为，不自动选中，也不会仅因打开抽屉而触发拉黑。`default` 不可删除；本轮不提供标签重命名。
 
-用户新增标签可以删除。删除标签与迁移作者引用必须形成一次原子状态更新：先将所有引用待删除 `tagId` 的作者改为引用 `default`，再从标签集合删除该标签，最后一次性写入 `chrome.storage.local`。写入成功后才更新内存和 UI；失败时不留下部分迁移。
+用户新增标签可以删除。删除标签与迁移作者引用必须形成一次原子 IndexedDB transaction：先将所有引用待删除 `tagId` 的作者改为引用 `default`，再删除该标签并更新 metadata revision。transaction 完成后才更新内存和 UI；失败时不留下部分迁移。
 
 每个平台内每名作者只保留一条记录；不同平台允许相同 `userId`。v1～v4 迁移删除旧记录中的 `cardImage`、补充 `memberHashId: null` 和 `platformId: "zhihu"` 并写回 storage，同时保留其他有效作者字段、标签和设置；迁移必须幂等。已验证的知乎 hash alias 只能原子补写到同平台对应 `userId` 记录，且不得与同平台其他作者记录冲突。外部存储和导入文件继续经过运行时严格校验，异常数据不得导致内容脚本停止工作。
 
@@ -613,6 +633,7 @@ Cocoon 不再具有截图产品需求。实现 `CAP-007` 时删除 DOM 转 Canva
 | `BUG-012` | `DELIVERED` | 用户真实观察到内联 `.Comments-container` 中某位已存在于 Cocoon storage 的主评论作者仍然显示。经授权 CDP 脱敏检查确认：当前页面只加载一个且与 `dist/assets/content.js` 完全一致的内容脚本，storage schema v4 有效且存在目标 `blockSource: "direct"` 记录；评论根结构无歧义并解析为 member hash，本地记录只有对应 url token、`memberHashId: null`，同源成员 GET 能证明两者属于同一账号，但扩展在检查前未启动该 hash 的 alias 请求、未补写记录，也未添加 `cocoon-comment-blacklisted`。源码复核进一步确认 storage 初始化前后两种 RAF 顺序都会重新处理已发现根，初始化 pending 并非可复现根因；当前确定性漏扫路径是知乎先插入尚无 `data-id` 的评论节点、随后只通过 `data-id` 属性将其完善为评论根，而运行时 Observer 只监听 `href`，正式成形后没有新的 child-list/href 变化时该根永远不会入队。修复必须让评论根 `data-id` 的新增或变化触发既有扫描，并保证初始化前已存在、初始化后动态插入及渐进式属性成形的已连接评论根都使用最新稳定 ID 集合过滤；未直接命中的有效 member hash 主作者必须启动既有有界、去重、失败安全的 alias 证明，成功原子补写后立即重滤并隐藏。不得通过名称匹配、轮询、全量成员预取、监听所有页面属性、额外权限或正文 mention 请求补偿；必须保留 `BUG-008`、`BUG-010`、`BUG-011` 的边界与失败安全行为。 |
 | `BUG-013` | `DELIVERED` | 用户真实观察到 Action Badge 已显示拦截计数，但 Popup 的作者数和标签数仍为占位空值，“管理全部”页面也显示空白。经用户授权的现有 Chrome CDP 只读检查确认：扩展 `chrome.storage.local` 中存在有效 schema v4 状态，包含非空作者集合和 3 个标签；options 页面直接读取同一 storage 能取得真实数量，但严格 snapshot RPC 返回 `undefined`，页面因此显示“本地数据无法读取，Cocoon 未进行修改。”且列表为空。源码定位为后台 `isAuthorizedUiSender()` 错误拒绝任何带 `sender.tab` 的发送方，而以独立标签页打开的 `options/options.html` 合法消息会携带 `sender.tab`。修复必须以同扩展 ID 和精确内置 extension URL 作为 UI 授权边界，允许 Popup/options 无论是否携带标签页元数据均调用严格 RPC；仍须拒绝内容脚本、其他扩展、其他扩展页面、查询参数/hash 和非法消息，不得读取或使用发送标签页 URL/标题。 |
 | `BUG-014` | `DELIVERED` | 用户卸载重装后再次真实观察到 Popup 与“管理全部”不可用，而首页屏蔽与 storage 写入已经恢复。经授权 CDP 对当前新安装实例检查确认：本地 schema v4 storage 有 3 位作者、2 个标签，options DOM 仍停留在作者/标签 `—`、只读错误和 0 行；当前加载的 Popup/options/background bundle 与本地 `dist/` 哈希完全一致，从同一个 options 页面发送严格 snapshot RPC 会取得结构完整的 `ok: true` 响应并准确包含 3 位作者、2 个标签。进一步用生产 `createBlacklistRpcClient` 解析当前同类响应复现失败，定位 `parseSnapshot()` 的标识去重循环错误地把合法 `memberHashId: null` 当作无效值并返回 `null`；因此任何尚未完成 member hash alias 补写的合法作者都会导致整个 snapshot 被严格客户端拒绝，Popup/options 共同进入只读空白。修复必须接受 schema v4 与 DTO 契约明确允许的 null alias，同时继续拒绝重复的非 null `userId`/`memberHashId`、非法 hash、缺失标签及其他畸形响应；不得放宽顶层/字段精确校验、增加重试、绕过后台直接读 storage 或改变写操作。 |
+| `BUG-015` | `DELIVERED` | 用户在打开知乎首页后观察到内容脚本记录 `[Cocoon] 无法初始化或迁移本地黑名单。 TypeError: this.enqueue is not a function`，导致 IndexedDB 黑名单 hydration 未能完成。内容端 background client 暴露初始化操作时必须保留 sync controller 的方法接收者，正常调用 `client.initialize()` 应恰好执行一次权威 hydration 并应用状态；不得以吞掉异常、回退空状态、重复初始化或绕过后台 IndexedDB 修复。 |
 
 `BUG-001`～`BUG-006` 均保留历史交付与用户反馈记录；其中 `BUG-002` 已被 `CAP-007` 取代，`BUG-004`～`BUG-006` 的复杂身份生命周期方案现由用户明确通过 `BUG-007` 取代。
 
@@ -730,6 +751,17 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 | `AC-010` | 检查 DOM | 卡片仍在 DOM 中，仅带 Cocoon 隐藏类和 `display: none`；没有调用删除节点 | 源码审查 + 浏览器 DOM 验证 |
 | `AC-011` | 检查 Manifest | 仅新增确有需要的 `storage` 权限，无其他权限扩大 | Reviewer 检查 |
 | `AC-012` | 键盘和辅助技术操作 `×` | 按钮可聚焦、可键盘触发，名称准确表达“选择标签并屏蔽作者” | 源码审查 + 浏览器验证 |
+
+### IndexedDB 第一阶段验收项
+
+| ID | 状态 | 验收场景 | 预期结果 | 证据要求 |
+| --- | --- | --- | --- | --- |
+| `AC-093` | `DELIVERED` | 分别以缺失、有效 v1～v5、损坏、未知未来版本和重复启动的旧 `cocoonBlacklistState` 初始化扩展，并模拟 IDB transaction、旧 key 清理及 revision 通知失败 | 有效数据一次无损迁移并保持 schema v5 字段、顺序、标签、平台和 alias；IDB 提交前失败不删除旧数据，提交后清理失败不重复导入；损坏或未来版本不建立空权威状态；revision 失败不撤销已提交数据 | fake IndexedDB 集成测试 + 严格迁移/失败测试 + 用户浏览器迁移验收 |
+| `AC-094` | `DELIVERED` | 在包含大量既有作者的数据库中执行直接新增、重复提交、alias 补写、点赞者新增和远程作者预检 | 每项只点查相关作者/标识/标签并使用一个 transaction；不调用作者全量读取或完整状态替换；同平台跨字段冲突、跨平台同 ID、重复和失败语义保持不变 | repository 操作范围测试 + controller 回归测试 + 性能日志前后对比 |
+| `AC-095` | `DELIVERED` | 在多个知乎标签页、Popup 和 options 间新增、解除、恢复、批量解除、标签重命名/删除、导入合并/替换 | IDB revision 单调增加；有效 revision 通知触发权威重读，单条 self mutation 使用 delta 立即过滤且不重复全量应用；通知损坏、丢失、乱序或写入失败不把非权威值当成数据，也不覆盖较新状态 | revision contract/sync race 测试 + RPC/管理事务回归 + 用户跨页面验收 |
+| `AC-096` | `DELIVERED` | 检查 Popup、管理页、JSON transfer、Badge、知乎直接作者与点赞者操作以及 Manifest | 现有功能、严格 RPC v2、transfer format v1/schema v5、20,000/2,000/8 MiB 限制和远程安全边界不变；权限仍只有 `storage`，完整黑名单不再写入 Chrome Storage | 完整自动化回归 + Manifest/构建/源码审查 + 用户浏览器验收 |
+| `AC-097` | `DELIVERED` | 使用超过现有 transfer 上限或百万级合成数据评估声明与实现 | 第一阶段不得声称这些规模已受支持；相关启动、搜索、分页、流式导入导出、配额与内存问题保持 `SCALE-001`、`SCALE-002` 的明确延期状态 | 规格/README/完成报告审查 |
+| `AC-098` | `DELIVERED` | 通过生产 `createBackgroundBlacklistClient` 调用初始化，并使用有效后台 hydration 响应 | 初始化不抛出 receiver 相关 `TypeError`，恰好 hydrate 一次并把权威状态应用到知乎运行时；失败路径仍由既有安全回退处理 | 公开 client 回归测试 + 完整自动化回归 + 用户浏览器复验 |
 
 ### 卡片评论过滤验收项
 
@@ -958,3 +990,7 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 | `0.66.0` | `2026-08-22` | 调整低频数据区位置 | 用户要求把不常使用的管理页“导入与导出”移动到最下面。新增 `MANAGE-005` 与 `AC-092` 并标为 `READY_FOR_DEV`，只调整主内容区顺序和底部分隔层级，不改变已交付的数据格式、事务、错误处理、权限或交互语义。 |
 | `0.67.0` | `2026-08-22` | 完成数据区位置调整并进入审查 | Developer 已将完整“导入与导出”section 移至作者屏蔽列表和标签维护之后，改用克制上边界与高频区域分隔，并新增生产 HTML 顺序回归测试；既有 transfer DOM、逻辑、对话框、权限和事务代码未改变。`417` 项测试、类型检查、构建和 `git diff --check` 通过，`MANAGE-005` 与 `AC-092` 标为 `IN_REVIEW`，用户浏览器视觉验收待进行。 |
 | `0.68.0` | `2026-08-22` | 完成数据区位置审查与交付 | Reviewer 独立确认生产源码和构建后的管理页主内容顺序均为“作者屏蔽列表 → 标签维护 → 导入与导出”，底部数据区使用中性 `1px` 上边界且没有固定/悬浮或抢眼装饰；既有 transfer ID、标签、fieldset、状态/错误区域、对话框、焦点和事务行为保持不变。独立执行 `417` 项测试、类型检查、构建、`git diff --check` 及 Manifest/资源检查全部通过，对 `MANAGE-005` 与 `AC-092` 给出 `PASS` 并标为 `DELIVERED`；用户浏览器视觉验收待进行。 |
+| `0.69.0` | `2026-08-25` | IndexedDB 第一阶段进入开发 | 用户确认将黑名单权威数据迁移到后台 IndexedDB，并要求保持全部现有功能；新增 `STORAGE-001`～`STORAGE-005` 与 `AC-093`～`AC-097` 为 `READY_FOR_DEV`，`BL-006` 标为 `SUPERSEDED`。本阶段要求规范化 store、旧 v1～v5 原子迁移、单条目标化事务和非权威 revision/delta 同步；明确记录百万级首次 hydration、管理查询、流式 transfer、配额和内存仍由 `SCALE-001`、`SCALE-002` 延期，不申请 `unlimitedStorage`，不宣称已支持百万条。 |
+| `0.70.0` | `2026-08-25` | IndexedDB 第一阶段完成开发并进入审查 | Developer 完成后台规范化 authors/identifiers/tags/metadata store、v1～v5 失败安全迁移、目标化作者/alias/点赞者/远程预检/标签 transaction、revision 与 self delta 同步，以及 Popup/options revision 刷新；外部 RPC v2、transfer format v1/schema v5、权限和 UI 保持兼容。新增 fake IndexedDB、严格 content RPC、迁移/事务/同步/失败回归，完整 `466` 项测试、格式、lint、类型检查、构建和 diff 检查通过，版本同步升级为 `0.3.0`；`STORAGE-001`～`STORAGE-005` 与 `AC-093`～`AC-097` 标为 `IN_REVIEW`，`SCALE-001`、`SCALE-002` 与已派发 transaction 的 `LIFECYCLE-001` 顾虑保持延期，用户浏览器迁移与性能验收待进行。 |
+| `0.71.0` | `2026-08-25` | 完成 IndexedDB 第一阶段审查与交付 | Reviewer 独立审查并推动修复 private content RPC sender/字段边界、严格旧 schema 校验、提交后真实成功语义、remove exact response 预检、Popup/options revision 竞态和重复初始化 transaction；最终确认后台规范化权威、单条目标化 transaction、迁移崩溃边界、revision/delta/reconciliation、RPC/transfer 兼容、MV3 安全、版本与文档均满足 `STORAGE-001`～`STORAGE-005` 和 `AC-093`～`AC-097`。Reviewer 独立执行完整检查，`466` 项测试、格式、lint、类型检查、构建、diff、Manifest/资源和 content/background 自包含检查全部通过并给出 `PASS`；对应需求标为 `DELIVERED`，用户真实浏览器迁移、跨页面同步和性能验收待进行。 |
+| `0.72.0` | `2026-08-25` | 完成初始化方法接收者回归修复 | 用户真实观察到知乎首页初始化抛出 `this.enqueue is not a function`。Developer 先通过生产 client 公开调用路径稳定复现，再将直接暴露的实例方法改为保留 sync controller 接收者的包装调用；回归测试由红转绿，完整 `467` 项测试、格式、lint、类型检查、构建和 diff 检查通过。Reviewer 独立复核公开 client、sync controller、调用路径、测试、MV3 权限和版本一致性后对 `BUG-015` 与 `AC-098` 给出 `PASS`；扩展 patch 版本同步升级为 `0.3.1`，对应状态标为 `DELIVERED`，用户重新加载扩展后的浏览器复验待进行。 |

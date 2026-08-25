@@ -2,11 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
-import {
-  createInitialState,
-  parseBlacklistState,
-  type BlacklistState,
-} from "./blacklist-state.ts";
+import { createInitialState, planAuthorCommit, type BlacklistState } from "./blacklist-state.ts";
 import {
   COMMENT_HIDDEN_CLASS,
   createCommentFilterController,
@@ -29,6 +25,14 @@ function createFrames() {
   };
 }
 
+function createScheduledCommentFilter() {
+  const frames = createFrames();
+  return {
+    frames,
+    commentFilter: createCommentFilterController({ schedule: frames.schedule }),
+  };
+}
+
 test("BUG-003/AC-066 hover commit applies state through a full connected-comment refresh", async () => {
   const dom = new JSDOM(`<!doctype html><body>
     <div class="Comments-container">
@@ -39,17 +43,10 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
     <div id="hover-card"></div>
     <button id="hover-button" type="button">屏蔽</button>
   </body>`);
-  const frames = createFrames();
-  const commentFilter = createCommentFilterController({
-    schedule: frames.schedule,
-  });
-  const comment = dom.window.document.querySelector<HTMLElement>(
-    "#existing-comment",
-  );
+  const { frames, commentFilter } = createScheduledCommentFilter();
+  const comment = dom.window.document.querySelector<HTMLElement>("#existing-comment");
   const hoverCard = dom.window.document.querySelector<HTMLElement>("#hover-card");
-  const hoverButton = dom.window.document.querySelector<HTMLButtonElement>(
-    "#hover-button",
-  );
+  const hoverButton = dom.window.document.querySelector<HTMLButtonElement>("#hover-button");
   if (!comment || !hoverCard || !hoverButton) {
     throw new Error("Missing runtime application fixture.");
   }
@@ -59,9 +56,6 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
   let renderCount = 0;
   const cardFilterUpdates: ReadonlySet<string>[] = [];
   const commitController = createCommitController<HTMLElement, HTMLButtonElement>({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
     async resolveAuthorIdentity(target) {
       return {
         platformId: "zhihu",
@@ -70,19 +64,19 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
       };
     },
     now: () => new Date("2026-08-14T12:00:00.000Z"),
-    async readState() {
-      return parseBlacklistState(storedState);
-    },
-    async writeState(state) {
-      storedState = state;
-    },
-    applyPersistedState(state) {
-      applyBlacklistRuntimeState(state, dom.window.document.body, {
+    async commitAuthor(input) {
+      const previous = storedState;
+      const plan = planAuthorCommit(previous, input);
+      if (plan.status !== "ready") {
+        throw new Error("Expected a new author plan.");
+      }
+      storedState = plan.state;
+      applyBlacklistRuntimeState(plan.state, dom.window.document.body, {
         setCurrentState(nextState) {
           runtimeState = nextState;
         },
         renderTagChoices() {
-          strictEqual(runtimeState, state);
+          strictEqual(runtimeState, plan.state);
           renderCount += 1;
         },
         cardFilter: {
@@ -92,9 +86,17 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
         },
         commentFilter,
       });
+      return {
+        status: "persisted",
+        author: plan.state.authors.at(-1)!,
+        tag: null,
+        baseRevision: 0,
+        revision: 1,
+        authorCount: plan.state.authors.length,
+        tagCount: plan.state.tags.length,
+      };
     },
     requestFailureFocus() {},
-    reportMalformedStorage() {},
     reportFailure(error) {
       throw error;
     },
@@ -125,7 +127,7 @@ test("BUG-003/AC-066 hover commit applies state through a full connected-comment
   strictEqual(result.status, "persisted");
   strictEqual(renderCount, 1);
   strictEqual(runtimeState.authors[0]?.userId, "comment-author");
-  deepStrictEqual([...cardFilterUpdates[0] ?? []], ["comment-author"]);
+  deepStrictEqual([...(cardFilterUpdates[0] ?? [])], ["comment-author"]);
   strictEqual(comment.classList.contains(COMMENT_HIDDEN_CLASS), false);
 
   frames.flush();
@@ -187,8 +189,8 @@ test("PLATFORM-001 applies only Zhihu stable IDs and aliases to both card and co
     },
   });
 
-  deepStrictEqual([...cardSets[0] ?? []], ["shared", hash]);
-  deepStrictEqual([...commentSets[0] ?? []], ["shared", hash]);
+  deepStrictEqual([...(cardSets[0] ?? [])], ["shared", hash]);
+  deepStrictEqual([...(commentSets[0] ?? [])], ["shared", hash]);
 });
 
 test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshes current, retained, and replacement comments without side effects", async () => {
@@ -201,10 +203,7 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
     <div id="hover-card"></div>
     <button id="hover-button" type="button">屏蔽</button>
   </body>`);
-  const frames = createFrames();
-  const commentFilter = createCommentFilterController({
-    schedule: frames.schedule,
-  });
+  const { frames, commentFilter } = createScheduledCommentFilter();
   const initialState = createInitialState();
   const storedState: BlacklistState = {
     ...initialState,
@@ -221,25 +220,18 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
     ],
   };
   const persistedSnapshot = structuredClone(storedState);
-  const currentComment = dom.window.document.querySelector<HTMLElement>(
-    "#current-comment",
-  );
+  const currentComment = dom.window.document.querySelector<HTMLElement>("#current-comment");
   const comments = dom.window.document.querySelector<HTMLElement>("#comments");
   const hoverCard = dom.window.document.querySelector<HTMLElement>("#hover-card");
-  const hoverButton = dom.window.document.querySelector<HTMLButtonElement>(
-    "#hover-button",
-  );
+  const hoverButton = dom.window.document.querySelector<HTMLButtonElement>("#hover-button");
   if (!currentComment || !comments || !hoverCard || !hoverButton) {
     throw new Error("Missing duplicate runtime fixture.");
   }
 
-  let writes = 0;
+  const writes = 0;
   let clockCalls = 0;
   let appliedStates = 0;
   const commitController = createCommitController<HTMLElement, HTMLButtonElement>({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
     async resolveAuthorIdentity(target) {
       return {
         platformId: "zhihu",
@@ -251,15 +243,13 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
       clockCalls += 1;
       return new Date("2026-08-14T12:00:00.000Z");
     },
-    async readState() {
-      return parseBlacklistState(storedState);
-    },
-    async writeState() {
-      writes += 1;
-    },
-    applyPersistedState(state) {
+    async commitAuthor(input) {
+      const plan = planAuthorCommit(storedState, input);
+      if (plan.status !== "duplicate") {
+        throw new Error("Expected a duplicate author plan.");
+      }
       appliedStates += 1;
-      applyBlacklistRuntimeState(state, dom.window.document.body, {
+      applyBlacklistRuntimeState(plan.state, dom.window.document.body, {
         setCurrentState() {},
         renderTagChoices() {},
         cardFilter: {
@@ -267,9 +257,17 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
         },
         commentFilter,
       });
+      return {
+        status: "duplicate",
+        author: storedState.authors[0]!,
+        tag: null,
+        baseRevision: 1,
+        revision: 1,
+        authorCount: storedState.authors.length,
+        tagCount: storedState.tags.length,
+      };
     },
     requestFailureFocus() {},
-    reportMalformedStorage() {},
     reportFailure(error) {
       throw error;
     },
@@ -299,7 +297,7 @@ test("BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshe
 
   strictEqual(result.status, "duplicate");
   strictEqual(writes, 0);
-  strictEqual(clockCalls, 0);
+  strictEqual(clockCalls, 1);
   strictEqual(appliedStates, 1);
   deepStrictEqual(storedState, persistedSnapshot);
   strictEqual(currentComment.classList.contains(COMMENT_HIDDEN_CLASS), false);

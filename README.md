@@ -111,15 +111,16 @@ After changing the Manifest or a content script, rebuild the project, reload the
 
 ## Data & privacy
 
-Cocoon currently stores the following data in `chrome.storage.local`:
+Cocoon stores blacklist authors and tags in extension-owned IndexedDB. Each record may include:
 
 - platform identifier;
 - stable author identifier and an optional verified site-specific alias;
 - author display name captured at the time of blocking;
 - tag association;
 - block source;
-- first-blocked timestamp;
-- preferences for site-specific actions implemented by the active plugin.
+- first-blocked timestamp.
+
+Site-specific preferences, a payload-free blacklist revision notification, and temporary per-tab badge state remain in Chrome extension storage. Existing schema v1–v5 blacklist data is automatically and fail-safely migrated from `chrome.storage.local` on first access.
 
 Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to origins declared by bundled site plugins and are made only for implemented identity resolution, content-related lookup, or explicitly enabled account-level actions. The current build makes such requests only to the supported page's existing origin.
 
@@ -133,7 +134,7 @@ Cocoon requests one Chrome extension permission:
 
 | Permission | Why it is needed |
 | --- | --- |
-| `storage` | Saves the local blacklist, tags, preferences, migrations, and temporary per-tab badge state. |
+| `storage` | Saves site preferences, the temporary per-tab badge state, a payload-free blacklist revision notification, and supports one-time migration of legacy blacklist data into IndexedDB. |
 
 Content script scope is generated from bundled site plugin descriptors. The current build is limited to the exact page listed under [Supported sites](#supported-sites). Cocoon does not request `<all_urls>`, `tabs`, `scripting`, `downloads`, or `unlimitedStorage`.
 
@@ -153,7 +154,7 @@ The implementation uses TypeScript, Vite, native DOM APIs, and Chrome Manifest V
 ```text
 popup/                      Popup HTML entry
 options/                    Management-page HTML entry
-src/background/             Service worker and serialized storage operations
+src/background/             Service worker, IndexedDB repository, and serialized transactions
 src/content/                Shared filtering and blacklist logic
 src/core/plugin/            Strict plugin contracts, discovery, and registry
 src/plugins/<id>/           Site descriptors, runtime wiring, and styles

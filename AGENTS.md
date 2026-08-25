@@ -8,7 +8,7 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 - Action Badge 统计当前标签页本次页面生命周期内被隐藏的卡片与评论数量；Popup 显示页面状态、准确拦截数、本地作者/标签摘要、搜索、单个解除、8 秒撤销和管理页入口。
 - 进入知乎首页 `https://www.zhihu.com/` 后，为内容信息流卡片添加极简 `×`，并在受支持的知乎作者悬浮窗口中添加屏蔽入口。
-- 点击入口只打开本地标签抽屉；选择或创建标签后，才把 schema v5 作者记录写入 `chrome.storage.local`，并隐藏当前及后续出现的同作者卡片、评论和回复；不采集或保存卡片图像。
+- 点击入口只打开本地标签抽屉；选择或创建标签后，才通过 background 将 schema v5 作者记录写入扩展自有 IndexedDB，并隐藏当前及后续出现的同作者卡片、评论和回复；不采集或保存卡片图像。
 - 标签抽屉可按用户可见且已记忆的选项，对直接选择的单个作者执行知乎账号级拉黑，或读取当前内容的点赞者并仅将其加入 Cocoon 本地黑名单；点赞者不得进入远程拉黑 POST。
 - 独立管理页提供完整作者列表、搜索、标签/平台筛选、排序、单个/批量解除、标签维护，以及严格校验且原子执行的 JSON 导入与导出。
 - 本地身份按 `(platformId, userId)` 隔离；当前只有知乎运行时插件，展示或导入其他平台分类不表示支持对应网站过滤。
@@ -217,7 +217,7 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 不允许 floating Promise。每个 Promise 必须被 `await`、明确 `return`，或在确实 fire-and-forget 时用 `void` 启动并在内部收敛错误；Node test runner 接管的 `test(...)` 注册调用是工具配置中的明确安全例外。
 - 所有 storage read-modify-write、导入/迁移、alias 补写和会产生重复副作用的网络/DOM 操作必须在既有锁或等价单飞机制内完成；锁内重读权威状态，保证重试、重复消息和并发 listener 不会重复写入、POST 或注入。
 - 网络、消息、长任务和可等待 UI 必须定义合理的 timeout 或取消边界。成功、超时、取消、抛错和 worker/port 中断都必须收敛到可再次操作的稳定状态，并在 `finally` 中释放锁、listener、timer、observer 和临时 DOM。
-- Service Worker 随时可能终止；跨事件权威状态写入 `chrome.storage.local` / `chrome.storage.session`。模块内缓存只能是可丢弃优化，事件处理必须能够从持久状态重建且保持幂等。
+- Service Worker 随时可能终止；黑名单权威状态写入扩展自有 IndexedDB，偏好与其他持久 Chrome 状态写入 `chrome.storage.local`，会话状态写入 `chrome.storage.session`。模块内缓存只能是可丢弃优化，事件处理必须能够从持久状态重建且保持幂等。
 
 ### 外部数据、DOM 与可访问性
 
@@ -244,11 +244,11 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 当前功能只需要 `storage` 权限；不要无理由添加 `tabs`、`scripting`、`downloads`、`unlimitedStorage` 或 `<all_urls>`。
 - Manifest 中引用的脚本、CSS 和图片必须真实存在于构建产物中。
 - 内容脚本运行在 isolated world，但共享页面 DOM；Console 日志仍可在页面开发者工具中查看。
-- Service Worker 会被随时终止；持久或会话权威状态必须存入 `chrome.storage.local` / `chrome.storage.session`，不得只依赖后台模块全局变量。异步消息 listener 必须同步声明保持响应通道，并确保最多响应一次。
+- Service Worker 会被随时终止；黑名单持久权威状态必须存入 IndexedDB，偏好等其他持久状态存入 `chrome.storage.local`，会话权威状态存入 `chrome.storage.session`，不得只依赖后台模块全局变量。异步消息 listener 必须同步声明保持响应通道，并确保最多响应一次。
 
 ## Schema v5 与平台身份边界
 
-- `cocoonBlacklistState` 是唯一黑名单，当前 `schemaVersion` 为 `5`；不得建立平行 storage key 绕过迁移、校验或锁。
+- background 独占访问的 IndexedDB 是唯一黑名单权威，逻辑 `schemaVersion` 仍为 `5`；旧 `cocoonBlacklistState` 只允许作为一次性 v1～v5 迁移来源，成功迁移后删除。`cocoonBlacklistRevision` 只是不含黑名单数据的非权威通知，不得用于重建状态或形成平行权威。
 - 作者记录必须包含合法 `platformId`，身份、去重、恢复、批量解除和 alias 冲突都按 `(platformId, identifier)` 隔离；跨平台相同 `userId` 可以共存。
 - 所有 v1～v4 有效历史记录迁移为 `platformId: "zhihu"`；迁移必须幂等、无图且保留标签、名称、来源和首次屏蔽时间。
 - `memberHashId` 是知乎专用 alias，非知乎记录必须为 `null`；非知乎稳定 ID 不执行知乎 hash 规范化。
@@ -257,7 +257,7 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 ## Background RPC、管理事务与导入导出
 
-- Popup/options 的黑名单读写必须通过严格版本化 RPC 和 background storage 锁；未知、额外字段、错误 operation、未授权 sender 或超限消息必须 fail closed。
+- Popup/options 的黑名单读写必须通过严格版本化 RPC 和 background IndexedDB 事务边界；未知、额外字段、错误 operation、未授权 sender 或超限消息必须 fail closed。
 - 普通管理 RPC 只接受精确内置 Popup/options 页面；JSON transfer operation 只能接受精确 `options/options.html` sender。
 - 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors 和 tags，不得包含设置、Badge/session 状态或其他 storage 数据。
 - 导入合并与替换必须先完成固定键、版本、字段、长度、数量、标签引用、平台身份和 alias 冲突校验，再在锁内重读并最多执行一次原子写入；解析、冲突、锁或写入失败时不得留下部分状态或虚假成功。

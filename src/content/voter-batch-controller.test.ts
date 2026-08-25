@@ -1,21 +1,14 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  createInitialState,
-  parseBlacklistState,
-  type BlacklistState,
-} from "./blacklist-state.ts";
+import { createInitialState, type BlacklistState } from "./blacklist-state.ts";
 import type {
   CoordinatedBlockResult,
   RemoteBlockCoordinator,
   UserBlockRequest,
 } from "./remote-block-coordinator.ts";
 import type { VoterFetchResult } from "./zhihu-remote-api.ts";
-import {
-  createVoterBatchController,
-  type VoterBatchProgress,
-} from "./voter-batch-controller.ts";
+import { createVoterBatchController, type VoterBatchProgress } from "./voter-batch-controller.ts";
 
 function voters(
   ids: readonly string[],
@@ -33,50 +26,59 @@ function voters(
   };
 }
 
-function createHarness(options: {
-  readonly voterResult?: VoterFetchResult;
-  readonly currentUserResult?:
-    | { readonly status: "success"; readonly userId: string }
-    | { readonly status: "failed"; readonly reason: "invalid-response" };
-  readonly localBlocked?: readonly string[];
-  readonly localAuthors?: BlacklistState["authors"];
-  readonly block?: (
-    request: UserBlockRequest,
-    isStopped: () => boolean,
-  ) => Promise<CoordinatedBlockResult>;
-} = {}) {
+function createHarness(
+  options: {
+    readonly voterResult?: VoterFetchResult;
+    readonly currentUserResult?:
+      | { readonly status: "success"; readonly userId: string }
+      | { readonly status: "failed"; readonly reason: "invalid-response" };
+    readonly localBlocked?: readonly string[];
+    readonly localAuthors?: BlacklistState["authors"];
+    readonly block?: (
+      request: UserBlockRequest,
+      isStopped: () => boolean,
+    ) => Promise<CoordinatedBlockResult>;
+  } = {},
+) {
   const progress: VoterBatchProgress[] = [];
   const requests: UserBlockRequest[] = [];
   let currentUserFetches = 0;
   let voterFetches = 0;
   const localState = {
     ...createInitialState(),
-    authors: options.localAuthors ?? (options.localBlocked ?? []).map((userId) => ({
-      platformId: "zhihu",
-      userId,
-      memberHashId: null,
-      authorNameAtCapture: `Existing ${userId}`,
-      tagId: "default",
-      blacklistedAt: "2026-08-13T12:34:56.789Z",
-      blockSource: "direct" as const,
-    })),
+    authors:
+      options.localAuthors ??
+      (options.localBlocked ?? []).map((userId) => ({
+        platformId: "zhihu",
+        userId,
+        memberHashId: null,
+        authorNameAtCapture: `Existing ${userId}`,
+        tagId: "default",
+        blacklistedAt: "2026-08-13T12:34:56.789Z",
+        blockSource: "direct" as const,
+      })),
   };
   const coordinator: RemoteBlockCoordinator = {
     async block(request, isStopped = () => false) {
       requests.push(request);
-      return options.block?.(request, isStopped) ?? {
-        status: "success",
-        persistedUpvoter: true,
-      };
+      if (options.block) return options.block(request, isStopped);
+      const alreadyBlocked = localState.authors.some(
+        (author) => author.platformId === "zhihu" && author.userId === request.userId,
+      );
+      return alreadyBlocked
+        ? { status: "skipped", reason: "existing" }
+        : { status: "success", persistedUpvoter: true };
     },
   };
   const controller = createVoterBatchController({
     async fetchCurrentUser() {
       currentUserFetches += 1;
-      return options.currentUserResult ?? {
-        status: "success",
-        userId: "current-user",
-      };
+      return (
+        options.currentUserResult ?? {
+          status: "success",
+          userId: "current-user",
+        }
+      );
     },
     async fetchVoters(_source, _isStopped, onProgress) {
       voterFetches += 1;
@@ -88,11 +90,7 @@ function createHarness(options: {
       });
       return result;
     },
-    async readState() {
-      return parseBlacklistState(localState);
-    },
     coordinator,
-    reportMalformedStorage() {},
     reportProgress(value) {
       progress.push(value);
     },
@@ -145,10 +143,11 @@ test("VOTER-014 runs without CSRF authorization or a Zhihu blocked-user relation
 
 test("VOTER-014 skips current user, direct author, and local records while persisting eligible users", async () => {
   const harness = createHarness({
-    voterResult: voters(
-      ["current-user", "direct-author", "local", "eligible"],
-      { fetched: 6, invalid: 1, duplicates: 1 },
-    ),
+    voterResult: voters(["current-user", "direct-author", "local", "eligible"], {
+      fetched: 6,
+      invalid: 1,
+      duplicates: 1,
+    }),
     localBlocked: ["local"],
   });
 
@@ -156,7 +155,7 @@ test("VOTER-014 skips current user, direct author, and local records while persi
 
   deepStrictEqual(
     harness.requests.map((request) => request.userId),
-    ["eligible"],
+    ["local", "eligible"],
   );
   deepStrictEqual(result, {
     phase: "complete",
@@ -196,7 +195,10 @@ test("PLATFORM-001 non-Zhihu records do not enter Zhihu voter dedupe sets", asyn
 
   const result = await runBatch(harness);
 
-  deepStrictEqual(harness.requests.map(({ userId }) => userId), ["shared"]);
+  deepStrictEqual(
+    harness.requests.map(({ userId }) => userId),
+    ["shared", "zhihu-blocked"],
+  );
   strictEqual(result.success, 1);
   strictEqual(result.skipped, 1);
 });

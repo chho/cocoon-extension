@@ -32,10 +32,7 @@ const HASH_B = "b".repeat(32);
 const MIXED_HASH = "aBcDeF0123456789".repeat(2);
 const CANONICAL_MIXED_HASH = MIXED_HASH.toLowerCase();
 
-function commitInput(
-  state: BlacklistState,
-  overrides: Partial<CommitInput> = {},
-): CommitInput {
+function commitInput(state: BlacklistState, overrides: Partial<CommitInput> = {}): CommitInput {
   return {
     platformId: "zhihu",
     userId: "stable-user",
@@ -48,10 +45,7 @@ function commitInput(
   };
 }
 
-function author(
-  userId: string,
-  memberHashId: string | null = null,
-) {
+function author(userId: string, memberHashId: string | null = null) {
   return {
     platformId: "zhihu",
     userId,
@@ -102,10 +96,13 @@ test("normalizes tag labels and validates timestamps and member hashes", () => {
 
 test("creates one timestamp from the injected clock", () => {
   let calls = 0;
-  strictEqual(createBlacklistTimestamp(() => {
-    calls += 1;
-    return new Date(TIMESTAMP);
-  }), TIMESTAMP);
+  strictEqual(
+    createBlacklistTimestamp(() => {
+      calls += 1;
+      return new Date(TIMESTAMP);
+    }),
+    TIMESTAMP,
+  );
   strictEqual(calls, 1);
   throws(() => createBlacklistTimestamp(() => new Date(Number.NaN)), /Invalid time value/);
 });
@@ -153,6 +150,35 @@ test("PLATFORM-001 migrates v1/v2/v3/v4 to v5 with a Zhihu platform and is idemp
   }
 });
 
+test("STORAGE-002 legacy schemas reject extra and oversized fields before migration", () => {
+  for (const schemaVersion of [1, 2, 3] as const) {
+    const legacyAuthor: Record<string, unknown> = {
+      userId: "legacy-user",
+      authorNameAtCapture: "Legacy",
+      tagId: DEFAULT_TAG_ID,
+      cardImage: { obsolete: true },
+    };
+    if (schemaVersion >= 2) legacyAuthor.blacklistedAt = TIMESTAMP;
+    if (schemaVersion >= 3) legacyAuthor.blockSource = "direct";
+    const tag = { tagId: DEFAULT_TAG_ID, name: "default" };
+    const legacy = { schemaVersion, tags: [tag], authors: [legacyAuthor] };
+    strictEqual(parseBlacklistState(legacy).status, "migrated");
+    for (const value of [
+      { ...legacy, extra: true },
+      { ...legacy, tags: [{ ...tag, extra: true }] },
+      { ...legacy, authors: [{ ...legacyAuthor, extra: true }] },
+      { ...legacy, authors: [{ ...legacyAuthor, userId: "u".repeat(513) }] },
+      {
+        ...legacy,
+        authors: [{ ...legacyAuthor, authorNameAtCapture: "A".repeat(501) }],
+      },
+      { ...legacy, tags: [{ tagId: "t".repeat(513), name: "default" }] },
+    ]) {
+      strictEqual(parseBlacklistState(value).status, "malformed");
+    }
+  }
+});
+
 test("v5 requires exact author fields and valid platform/source/timestamp/hash values", () => {
   const valid = { ...createInitialState(), authors: [author("valid", HASH_A)] };
   strictEqual(parseBlacklistState(valid).status, "valid");
@@ -192,24 +218,33 @@ test("PLATFORM-001 permits cross-platform equal IDs, preserves non-Zhihu hash-sh
     ],
   });
   strictEqual(crossPlatform.status, "valid");
-  deepStrictEqual(crossPlatform.state.authors.map(({ platformId, userId }) => ({
-    platformId,
-    userId,
-  })), [
-    { platformId: "zhihu", userId: "same-id" },
-    { platformId: "youtube", userId: "same-id" },
-    { platformId: "youtube", userId: uppercaseHash },
-  ]);
+  deepStrictEqual(
+    crossPlatform.state.authors.map(({ platformId, userId }) => ({
+      platformId,
+      userId,
+    })),
+    [
+      { platformId: "zhihu", userId: "same-id" },
+      { platformId: "youtube", userId: "same-id" },
+      { platformId: "youtube", userId: uppercaseHash },
+    ],
+  );
 
-  strictEqual(parseBlacklistState({
-    ...createInitialState(),
-    authors: [{ ...author("youtube-user", HASH_A), platformId: "youtube" }],
-  }).status, "malformed");
-  strictEqual(planMemberHashBackfill(
-    crossPlatform.state,
-    { platformId: "youtube", userId: "same-id" },
-    HASH_A,
-  ).status, "invalid");
+  strictEqual(
+    parseBlacklistState({
+      ...createInitialState(),
+      authors: [{ ...author("youtube-user", HASH_A), platformId: "youtube" }],
+    }).status,
+    "malformed",
+  );
+  strictEqual(
+    planMemberHashBackfill(
+      crossPlatform.state,
+      { platformId: "youtube", userId: "same-id" },
+      HASH_A,
+    ).status,
+    "invalid",
+  );
 });
 
 test("PLATFORM-001 commit and upvoter duplicate checks are scoped to one platform", () => {
@@ -217,19 +252,25 @@ test("PLATFORM-001 commit and upvoter duplicate checks are scoped to one platfor
     ...createInitialState(),
     authors: [{ ...author("same-id"), platformId: "youtube" }],
   };
-  const direct = planAuthorCommit(youtubeState, commitInput(youtubeState, {
-    platformId: "zhihu",
-    userId: "same-id",
-  }));
+  const direct = planAuthorCommit(
+    youtubeState,
+    commitInput(youtubeState, {
+      platformId: "zhihu",
+      userId: "same-id",
+    }),
+  );
   strictEqual(direct.status, "ready");
   if (direct.status !== "ready") return;
-  deepStrictEqual(direct.state.authors.map(({ platformId, userId }) => ({
-    platformId,
-    userId,
-  })), [
-    { platformId: "youtube", userId: "same-id" },
-    { platformId: "zhihu", userId: "same-id" },
-  ]);
+  deepStrictEqual(
+    direct.state.authors.map(({ platformId, userId }) => ({
+      platformId,
+      userId,
+    })),
+    [
+      { platformId: "youtube", userId: "same-id" },
+      { platformId: "zhihu", userId: "same-id" },
+    ],
+  );
 
   const upvoter = planUpvoterCommit(youtubeState, {
     platformId: "zhihu",
@@ -268,12 +309,15 @@ test("BUG-008 v5 normalizes mixed-case Zhihu hashes while preserving ordinary to
 
 test("plans new direct records with hash-or-null and never merges by display name", () => {
   const initial = createInitialState();
-  const first = planAuthorCommit(initial, commitInput(initial, {
-    platformId: "zhihu",
-    userId: "stable-a",
-    memberHashId: MIXED_HASH,
-    authorNameAtCapture: "Same",
-  }));
+  const first = planAuthorCommit(
+    initial,
+    commitInput(initial, {
+      platformId: "zhihu",
+      userId: "stable-a",
+      memberHashId: MIXED_HASH,
+      authorNameAtCapture: "Same",
+    }),
+  );
   strictEqual(first.status, "ready");
   if (first.status !== "ready") return;
   deepStrictEqual(first.state.authors[0], {
@@ -281,12 +325,15 @@ test("plans new direct records with hash-or-null and never merges by display nam
     authorNameAtCapture: "Same",
   });
 
-  const second = planAuthorCommit(first.state, commitInput(first.state, {
-    platformId: "zhihu",
-    userId: "stable-b",
-    memberHashId: null,
-    authorNameAtCapture: "Same",
-  }));
+  const second = planAuthorCommit(
+    first.state,
+    commitInput(first.state, {
+      platformId: "zhihu",
+      userId: "stable-b",
+      memberHashId: null,
+      authorNameAtCapture: "Same",
+    }),
+  );
   strictEqual(second.status, "ready");
   if (second.status !== "ready") return;
   strictEqual(second.state.authors.length, 2);
@@ -297,11 +344,14 @@ test("exact duplicate atomically backfills a nonconflicting hash and preserves e
     ...createInitialState(),
     authors: [{ ...author("stable-user"), authorNameAtCapture: "First" }],
   };
-  const plan = planAuthorCommit(state, commitInput(state, {
-    memberHashId: HASH_A,
-    authorNameAtCapture: "Changed",
-    blacklistedAt: "2027-01-01T00:00:00.000Z",
-  }));
+  const plan = planAuthorCommit(
+    state,
+    commitInput(state, {
+      memberHashId: HASH_A,
+      authorNameAtCapture: "Changed",
+      blacklistedAt: "2027-01-01T00:00:00.000Z",
+    }),
+  );
   strictEqual(plan.status, "backfill");
   if (plan.status !== "backfill") return;
   deepStrictEqual(plan.state.authors[0], {
@@ -316,9 +366,8 @@ test("duplicate alias conflicts fail safely without changing state", () => {
     authors: [author("stable-user"), author("other-user", HASH_A)],
   };
   for (const memberHashId of [HASH_A, HASH_B]) {
-    const source = memberHashId === HASH_B
-      ? { ...state, authors: [author("stable-user", HASH_A)] }
-      : state;
+    const source =
+      memberHashId === HASH_B ? { ...state, authors: [author("stable-user", HASH_A)] } : state;
     const plan = planAuthorCommit(source, commitInput(source, { memberHashId }));
     strictEqual(plan.status, "invalid");
     strictEqual(plan.state, source);
@@ -330,21 +379,15 @@ test("focused member hash backfill requires exact token ownership and stores a c
     ...createInitialState(),
     authors: [author("token"), author("other", HASH_B)],
   };
-  strictEqual(planMemberHashBackfill(
-    state,
-    { platformId: "zhihu", userId: "missing" },
-    HASH_A,
-  ).status, "invalid");
-  strictEqual(planMemberHashBackfill(
-    state,
-    { platformId: "zhihu", userId: "token" },
-    HASH_B,
-  ).status, "invalid");
-  const ready = planMemberHashBackfill(
-    state,
-    { platformId: "zhihu", userId: "token" },
-    MIXED_HASH,
+  strictEqual(
+    planMemberHashBackfill(state, { platformId: "zhihu", userId: "missing" }, HASH_A).status,
+    "invalid",
   );
+  strictEqual(
+    planMemberHashBackfill(state, { platformId: "zhihu", userId: "token" }, HASH_B).status,
+    "invalid",
+  );
+  const ready = planMemberHashBackfill(state, { platformId: "zhihu", userId: "token" }, MIXED_HASH);
   strictEqual(ready.status, "ready");
   if (ready.status !== "ready") return;
   deepStrictEqual(ready.state.authors[0], {
@@ -355,10 +398,13 @@ test("focused member hash backfill requires exact token ownership and stores a c
 
 test("adds a valid new tag and author in one plan", () => {
   const initial = createInitialState();
-  const plan = planAuthorCommit(initial, commitInput(initial, {
-    tag: { tagId: "tag-local", name: "Reading" },
-    isNewTag: true,
-  }));
+  const plan = planAuthorCommit(
+    initial,
+    commitInput(initial, {
+      tag: { tagId: "tag-local", name: "Reading" },
+      isNewTag: true,
+    }),
+  );
   strictEqual(plan.status, "ready");
   if (plan.status !== "ready") return;
   strictEqual(plan.state.tags.length, 2);
@@ -432,10 +478,13 @@ test("POPUP-005 removal returns and preserves the exact original record", () => 
   deepStrictEqual(plan.removed, original);
   deepStrictEqual(plan.state.authors, [state.authors[1]]);
   deepStrictEqual(plan.state.tags, state.tags);
-  strictEqual(planAuthorRemoval(state, {
-    platformId: "zhihu",
-    userId: HASH_A,
-  }).status, "missing");
+  strictEqual(
+    planAuthorRemoval(state, {
+      platformId: "zhihu",
+      userId: HASH_A,
+    }).status,
+    "missing",
+  );
 });
 
 test("POPUP-005 exact restoration rejects author and tag conflicts without overwriting", () => {
@@ -459,10 +508,7 @@ test("POPUP-005 exact restoration rejects author and tag conflicts without overw
     strictEqual(conflict.status, "conflict");
     strictEqual(conflict.state, conflicting);
   }
-  const missingTag = planAuthorRestoration(
-    { ...state, tags: createInitialState().tags },
-    original,
-  );
+  const missingTag = planAuthorRestoration({ ...state, tags: createInitialState().tags }, original);
   strictEqual(missingTag.status, "missing-tag");
   strictEqual(missingTag.state.authors[0], state.authors[0]);
   strictEqual(

@@ -9,6 +9,10 @@ import {
   type BlacklistTagDto,
   type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
+import {
+  parseBlacklistRevisionChange,
+  type BlacklistChangeEventSource,
+} from "../core/blacklist-revision-contract.ts";
 import type { BlacklistRpcClient } from "../ui/background-rpc.ts";
 import {
   MANAGEMENT_BATCH_SIZE,
@@ -21,22 +25,23 @@ import {
   type AuthorListItem,
   type TimeSortDirection,
 } from "../ui/blacklist-view-model.ts";
+import { createCommittedSnapshotController } from "../ui/committed-snapshot-controller.ts";
 import { createLatestRefreshController } from "../ui/latest-refresh-controller.ts";
+import { loadBlacklistSnapshot } from "../ui/blacklist-snapshot-loader.ts";
 import { createAuthorProfileUrl } from "../ui/zhihu-profile-url.ts";
 import { renderAuthorListRows, resetAuthorListViewport } from "./author-list-view.ts";
 import { createConfirmationDialogController } from "./dialog-controller.ts";
 import { renderTagMaintenanceView } from "./tag-maintenance-view.ts";
-
-interface ChangeEventSource {
-  addListener(
-    listener: (changes: Record<string, unknown>, areaName: string) => void,
-  ): void;
-}
+import {
+  clearTransferError,
+  showTransferError,
+  transferFailureMessage,
+} from "./transfer-feedback.ts";
 
 export interface OptionsAppDependencies {
   readonly document: Document;
   readonly rpc: BlacklistRpcClient;
-  readonly storageChanges: ChangeEventSource;
+  readonly storageChanges: BlacklistChangeEventSource;
   readonly requestFrame: (callback: () => void) => number;
   readonly readFileText: (file: File) => Promise<string>;
   readonly downloadJson: (json: string, filename: string) => void;
@@ -117,10 +122,6 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
   const platformIdByFilterToken = new Map<string, string>();
   const pendingTagIds = new Set<string>();
 
-  function identityKey(identity: BlacklistAuthorIdentityDto): string {
-    return JSON.stringify([identity.platformId, identity.userId]);
-  }
-
   function writesAvailable(): boolean {
     return writesEnabled && !transferPending;
   }
@@ -144,11 +145,14 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     writeError.hidden = false;
   }
 
-  function clearWriteError(): void { writeError.hidden = true; }
+  function clearWriteError(): void {
+    writeError.hidden = true;
+  }
 
   function reflectTagPendingState(tagId: string, pending: boolean): void {
-    const row = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row"))
-      .find((candidate) => candidate.dataset.tagId === tagId);
+    const row = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row")).find(
+      (candidate) => candidate.dataset.tagId === tagId,
+    );
     if (!row) return;
     row.classList.toggle("tag-pending", pending);
     if (pending) row.setAttribute("aria-busy", "true");
@@ -183,7 +187,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       platformId: author.platformId,
       userId: author.userId,
     };
-    const key = identityKey(identity);
+    const key = JSON.stringify([identity.platformId, identity.userId]);
     selection.type = "checkbox";
     selection.checked = selectedIdentities.has(key);
     selection.setAttribute("aria-label", `选择 ${author.authorName || "未知作者"}`);
@@ -194,9 +198,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       updateBatchAction();
     });
     const profileUrl = createAuthorProfileUrl(author.platformId, author.userId);
-    const name = profileUrl
-      ? document.createElement("a")
-      : document.createElement("span");
+    const name = profileUrl ? document.createElement("a") : document.createElement("span");
     name.className = "author-name";
     name.textContent = author.authorName || "未知作者";
     if (name instanceof document.defaultView!.HTMLAnchorElement) {
@@ -222,7 +224,9 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     remove.textContent = "解除屏蔽";
     remove.setAttribute("aria-label", `解除屏蔽 ${author.authorName || "未知作者"}`);
     remove.disabled = !writesEnabled;
-    remove.addEventListener("click", () => { void removeOne(author, remove); });
+    remove.addEventListener("click", () => {
+      void removeOne(author, remove);
+    });
     row.append(selection, name, tagName, platform, source, time, remove);
     return row;
   }
@@ -251,9 +255,10 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       createRow: createAuthorRow,
       focusFallback: viewport,
     });
-    listSummary.textContent = rendered.loadedCount < filteredItems.length
-      ? `已载入 ${rendered.loadedCount} / ${filteredItems.length} 位作者`
-      : `共 ${filteredItems.length} 位作者`;
+    listSummary.textContent =
+      rendered.loadedCount < filteredItems.length
+        ? `已载入 ${rendered.loadedCount} / ${filteredItems.length} 位作者`
+        : `共 ${filteredItems.length} 位作者`;
   }
 
   function scheduleAuthorRender(): void {
@@ -298,11 +303,11 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     allPlatforms.textContent = "全部站点";
     platformFilter.replaceChildren(allPlatforms);
     if (!snapshot) return;
-    const platformIds = [...new Set(snapshot.authors.map((author) => author.platformId))]
-      .sort((left, right) =>
+    const platformIds = [...new Set(snapshot.authors.map((author) => author.platformId))].sort(
+      (left, right) =>
         formatPlatformId(left).localeCompare(formatPlatformId(right), "zh-CN") ||
-        left.localeCompare(right)
-      );
+        left.localeCompare(right),
+    );
     if (!platformIds.includes(selectedPlatformId ?? "")) {
       selectedPlatformId = null;
     }
@@ -337,18 +342,14 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     if (!descriptor) return;
     const buttons = Array.from(tagList.querySelectorAll<HTMLButtonElement>("button"));
     const exact = descriptor.ariaLabel
-      ? buttons.find((button) =>
-        button.getAttribute("aria-label") === descriptor.ariaLabel
-      )
+      ? buttons.find((button) => button.getAttribute("aria-label") === descriptor.ariaLabel)
       : undefined;
     const rows = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row"));
     const sameTag = rows.find((row) => row.dataset.tagId === descriptor.tagId);
-    const fallbackRow = sameTag ?? rows[
-      Math.min(descriptor.rowIndex, Math.max(0, rows.length - 1))
-    ];
-    const roleSelector = descriptor.role === "delete"
-      ? ".tag-delete"
-      : "button[aria-label^='重命名标签 ']";
+    const fallbackRow =
+      sameTag ?? rows[Math.min(descriptor.rowIndex, Math.max(0, rows.length - 1))];
+    const roleSelector =
+      descriptor.role === "delete" ? ".tag-delete" : "button[aria-label^='重命名标签 ']";
     const equivalent = fallbackRow?.querySelector<HTMLButtonElement>(roleSelector);
     (exact ?? equivalent ?? (writeError.hidden ? tagsHeading : writeError)).focus();
   }
@@ -368,8 +369,12 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       authors: snapshot.authors,
       writesEnabled,
       pendingTagIds,
-      onRename(tag, name, button) { void renameTag(tag, name, button); },
-      onDelete(tag, button) { void deleteTag(tag, button); },
+      onRename(tag, name, button) {
+        void renameTag(tag, name, button);
+      },
+      onDelete(tag, button) {
+        void deleteTag(tag, button);
+      },
     });
     restoreTagFocus(focus);
   }
@@ -406,13 +411,14 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     updateTransferControls();
   }
 
+  const loadSnapshot = async () => loadBlacklistSnapshot(rpc);
+  const committedSnapshots = createCommittedSnapshotController(
+    applySuccessfulSnapshot,
+    loadSnapshot,
+  );
   const refreshController = createLatestRefreshController<BlacklistSnapshotDto>({
-    async load() {
-      const response = await rpc.request("snapshot");
-      if (!response.ok || !response.data.snapshot) throw new Error("snapshot unavailable");
-      return response.data.snapshot;
-    },
-    apply: applySuccessfulSnapshot,
+    load: loadSnapshot,
+    apply: committedSnapshots.applyRefresh,
     fail: showUnreadableStorage,
   });
 
@@ -428,41 +434,14 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     await refreshController.request();
   }
 
-  function clearTransferError(): void {
-    transferError.hidden = true;
-    transferError.textContent = "";
-  }
-
-  function showTransferError(message: string): void {
-    transferError.textContent = message;
-    transferError.hidden = false;
-    transferError.focus();
-  }
-
   function setTransferPending(pending: boolean): void {
     transferPending = pending;
     updateTransferControls();
   }
 
-  function transferFailureMessage(error: string | null): string {
-    if (error === "transfer-conflict") {
-      return "导入内容与本地标签或稳定标识冲突，未进行更改。";
-    }
-    if (error === "transfer-too-large") {
-      return "导入数据超过 8 MiB 限制，未进行更改。";
-    }
-    if (error === "invalid-transfer") {
-      return "导入文件无效或格式不受支持，未进行更改。";
-    }
-    if (error === "storage-unreadable") {
-      return "本地数据无法读取，Cocoon 未进行修改。";
-    }
-    return "导入未保存，请重试。";
-  }
-
   async function exportTransfer(): Promise<void> {
     if (!writesAvailable()) return;
-    clearTransferError();
+    clearTransferError(transferError);
     transferStatus.textContent = "正在准备导出…";
     setTransferPending(true);
     try {
@@ -474,11 +453,12 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
           showUnreadableStorage();
         }
         showTransferError(
+          transferError,
           response.error === "storage-unreadable"
             ? "本地数据无法读取，Cocoon 未进行修改。"
             : response.error === "transfer-too-large"
-            ? "导出数据超过 8 MiB 限制。"
-            : "无法导出本地数据，请重试。",
+              ? "导出数据超过 8 MiB 限制。"
+              : "无法导出本地数据，请重试。",
         );
         return;
       }
@@ -486,7 +466,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       const filename = createBlacklistTransferFilename(exported.exportedAt);
       if (!json || !filename) {
         transferStatus.textContent = "未导出数据。";
-        showTransferError("无法导出本地数据，请重试。");
+        showTransferError(transferError, "无法导出本地数据，请重试。");
         return;
       }
       dependencies.downloadJson(json, filename);
@@ -494,53 +474,47 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       transferStatus.focus();
     } catch {
       transferStatus.textContent = "未导出数据。";
-      showTransferError("无法导出本地数据，请重试。");
+      showTransferError(transferError, "无法导出本地数据，请重试。");
     } finally {
       setTransferPending(false);
     }
   }
 
-  async function importTransfer(
-    operation: "import-merge" | "import-replace",
-  ): Promise<void> {
+  async function importTransfer(operation: "import-merge" | "import-replace"): Promise<void> {
     const selectedTransfer = transfer;
     if (!writesAvailable() || !selectedTransfer) return;
-    clearTransferError();
+    clearTransferError(transferError);
     clearWriteError();
-    transferStatus.textContent = operation === "import-merge"
-      ? "正在合并导入…"
-      : "正在替换本地记录…";
+    transferStatus.textContent =
+      operation === "import-merge" ? "正在合并导入…" : "正在替换本地记录…";
     setTransferPending(true);
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.request(operation, {
         transfer: selectedTransfer,
       });
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         transferStatus.textContent = "未导入数据。";
         if (response.error === "storage-unreadable") {
           showUnreadableStorage();
         } else {
           await refreshController.request();
         }
-        showTransferError(transferFailureMessage(response.error));
+        showTransferError(transferError, transferFailureMessage(response.error));
         return;
       }
-      await refreshController.request();
-      if (!writesEnabled) {
-        transferStatus.textContent = "无法确认导入后的本地数据。";
-        showTransferError("导入完成后无法重新读取本地数据。");
-        return;
-      }
+      marker(response.data.snapshot, refreshController.invalidate);
       transfer = null;
       importFile.value = "";
-      transferStatus.textContent = operation === "import-merge"
-        ? `合并完成；文件包含 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`
-        : `已替换为 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`;
+      transferStatus.textContent =
+        operation === "import-merge"
+          ? `合并完成；文件包含 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`
+          : `已替换为 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`;
       transferStatus.focus();
     } catch {
       transferStatus.textContent = "未导入数据。";
       await refreshController.request();
-      showTransferError("导入未保存，请重试。");
+      showTransferError(transferError, "导入未保存，请重试。");
     } finally {
       setTransferPending(false);
     }
@@ -550,7 +524,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     const sequence = ++fileReadSequence;
     const file = importFile.files?.[0] ?? null;
     transfer = null;
-    clearTransferError();
+    clearTransferError(transferError);
     if (!file) {
       transferStatus.textContent = "请选择 Cocoon 导出的 JSON 文件。";
       updateTransferControls();
@@ -558,7 +532,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     }
     if (file.size > MAX_BLACKLIST_TRANSFER_BYTES) {
       transferStatus.textContent = "未选择可导入的数据。";
-      showTransferError("导入文件超过 8 MiB 限制。");
+      showTransferError(transferError, "导入文件超过 8 MiB 限制。");
       updateTransferControls();
       return;
     }
@@ -572,6 +546,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       if (parsed.status !== "valid") {
         transferStatus.textContent = "未选择可导入的数据。";
         showTransferError(
+          transferError,
           parsed.status === "too-large"
             ? "导入文件超过 8 MiB 限制。"
             : "导入文件无效或格式不受支持。",
@@ -583,7 +558,7 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     } catch {
       if (sequence !== fileReadSequence) return;
       transferStatus.textContent = "未选择可导入的数据。";
-      showTransferError("无法读取导入文件，请重新选择。");
+      showTransferError(transferError, "无法读取导入文件，请重新选择。");
     } finally {
       if (sequence === fileReadSequence) {
         setTransferPending(false);
@@ -616,36 +591,36 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     if (!writesEnabled) return;
     clearWriteError();
     button.disabled = true;
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.removeOne({
         platformId: author.platformId,
         userId: author.userId,
       });
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         await finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      await refreshController.request();
-      if (writesEnabled) authorSearch.focus();
+      marker(response.data.snapshot, refreshController.invalidate);
+      authorSearch.focus();
     } catch {
       await finishMutationFailure(false);
     }
   }
 
-  async function removeMany(
-    identities: readonly BlacklistAuthorIdentityDto[],
-  ): Promise<void> {
+  async function removeMany(identities: readonly BlacklistAuthorIdentityDto[]): Promise<void> {
     if (!writesEnabled) return;
     clearWriteError();
     removeSelected.disabled = true;
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.request("remove-many", { identities });
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         await finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      await refreshController.request();
-      if (writesEnabled) removeSelected.focus();
+      marker(response.data.snapshot, refreshController.invalidate);
+      removeSelected.focus();
     } catch {
       await finishMutationFailure(false);
     }
@@ -658,16 +633,17 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
   ): Promise<void> {
     if (!writesEnabled || !beginTagMutation(tag.tagId)) return;
     clearWriteError();
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.request("rename-tag", { tagId: tag.tagId, name });
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         await finishMutationFailure(
           response.error === "storage-unreadable",
           response.error === "invalid-tag" ? "标签名称无效或已存在。" : undefined,
         );
         return;
       }
-      await refreshController.request();
+      marker(response.data.snapshot, refreshController.invalidate);
     } catch {
       await finishMutationFailure(false);
     } finally {
@@ -678,13 +654,14 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
   async function deleteTag(tag: BlacklistTagDto, _button: HTMLButtonElement): Promise<void> {
     if (!writesEnabled || !beginTagMutation(tag.tagId)) return;
     clearWriteError();
+    const marker = committedSnapshots.beginMutation();
     try {
       const response = await rpc.request("delete-tag", { tagId: tag.tagId });
-      if (!response.ok) {
+      if (!response.ok || !response.data.snapshot) {
         await finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      await refreshController.request();
+      marker(response.data.snapshot, refreshController.invalidate);
     } catch {
       await finishMutationFailure(false);
     } finally {
@@ -715,13 +692,17 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
       void removeMany(identities);
     });
   });
-  exportData.addEventListener("click", () => { void exportTransfer(); });
-  importFile.addEventListener("change", () => { void readSelectedTransferFile(); });
+  exportData.addEventListener("click", () => {
+    void exportTransfer();
+  });
+  importFile.addEventListener("change", () => {
+    void readSelectedTransferFile();
+  });
   importData.addEventListener("click", requestImport);
   dependencies.storageChanges.addListener((changes, areaName) => {
-    if (areaName === "local" && "cocoonBlacklistState" in changes) {
-      void refreshController.request();
-    }
+    if (!parseBlacklistRevisionChange(changes, areaName)) return;
+    committedSnapshots.noteRevision();
+    void refreshController.request();
   });
 
   void refreshController.request();

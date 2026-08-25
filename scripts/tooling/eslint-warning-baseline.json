@@ -186,90 +186,10 @@
       "count": 1
     },
     {
-      "path": "src/background/blacklist-lock-coordinator.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseLeaseRequest' has a complexity of 14. Maximum allowed is 10.",
-      "sourceLine": "function parseLeaseRequest(value: unknown): LeaseRequest | null {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-lock-coordinator.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createBlacklistLockCoordinator' has too many lines (120). Maximum allowed is 50.",
-      "sourceLine": "export function createBlacklistLockCoordinator(",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-lock-coordinator.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Method 'attachContentLease' has too many lines (103). Maximum allowed is 50.",
-      "sourceLine": "attachContentLease(port) {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 13. Maximum allowed is 10.",
-      "sourceLine": "return await lock.runExclusive(async () => {",
-      "count": 1
-    },
-    {
       "path": "src/background/blacklist-management-controller.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async arrow function has too many lines (120). Maximum allowed is 50.",
-      "sourceLine": "return await lock.runExclusive(async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (56). Maximum allowed is 50.",
-      "sourceLine": "return await lock.runExclusive(async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (61). Maximum allowed is 50.",
-      "sourceLine": "return await lock.runExclusive(async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'exportResponse' has too many lines (72). Maximum allowed is 50.",
-      "sourceLine": "async function exportResponse(): Promise<BlacklistRpcResponse> {",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'importResponse' has too many lines (83). Maximum allowed is 50.",
-      "sourceLine": "async function importResponse(",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'mutate' has too many lines (143). Maximum allowed is 50.",
-      "sourceLine": "async function mutate(",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createBlacklistManagementController' has too many lines (383). Maximum allowed is 50.",
+      "message": "Function 'createBlacklistManagementController' has too many lines (156). Maximum allowed is 50.",
       "sourceLine": "export function createBlacklistManagementController(",
       "count": 1
     },
@@ -294,7 +214,7 @@
       "ruleId": "complexity",
       "messageId": "complex",
       "message": "Function 'authorizedUiPath' has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "function authorizedUiPath(",
+      "sourceLine": "function authorizedUiPath(sender: UiMessageSender, runtimeId: string): string | null {",
       "count": 1
     },
     {
@@ -357,7 +277,7 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "complexity",
       "messageId": "complex",
-      "message": "Function 'parseAuthor' has a complexity of 25. Maximum allowed is 10.",
+      "message": "Function 'parseAuthor' has a complexity of 23. Maximum allowed is 10.",
       "sourceLine": "function parseAuthor(",
       "count": 1
     },
@@ -365,7 +285,7 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "complexity",
       "messageId": "complex",
-      "message": "Function 'parseBlacklistState' has a complexity of 29. Maximum allowed is 10.",
+      "message": "Function 'parseBlacklistState' has a complexity of 28. Maximum allowed is 10.",
       "sourceLine": "export function parseBlacklistState(value: unknown): ParsedBlacklistState {",
       "count": 1
     },
@@ -374,7 +294,7 @@
       "ruleId": "complexity",
       "messageId": "complex",
       "message": "Function 'planAuthorCommit' has a complexity of 23. Maximum allowed is 10.",
-      "sourceLine": "export function planAuthorCommit(",
+      "sourceLine": "export function planAuthorCommit(state: BlacklistState, input: CommitInput): CommitPlan {",
       "count": 1
     },
     {
@@ -389,7 +309,7 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'parseBlacklistState' has too many lines (85). Maximum allowed is 50.",
+      "message": "Function 'parseBlacklistState' has too many lines (79). Maximum allowed is 50.",
       "sourceLine": "export function parseBlacklistState(value: unknown): ParsedBlacklistState {",
       "count": 1
     },
@@ -397,15 +317,15 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'planAuthorCommit' has too many lines (89). Maximum allowed is 50.",
-      "sourceLine": "export function planAuthorCommit(",
+      "message": "Function 'planAuthorCommit' has too many lines (80). Maximum allowed is 50.",
+      "sourceLine": "export function planAuthorCommit(state: BlacklistState, input: CommitInput): CommitPlan {",
       "count": 1
     },
     {
       "path": "src/content/blacklist-state.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'planMemberHashBackfill' has too many lines (56). Maximum allowed is 50.",
+      "message": "Function 'planMemberHashBackfill' has too many lines (51). Maximum allowed is 50.",
       "sourceLine": "export function planMemberHashBackfill(",
       "count": 1
     },
@@ -413,8 +333,8 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (753). Maximum allowed is 500.",
-      "sourceLine": "return { status: \"invalid\", state };",
+      "message": "File has too many lines (735). Maximum allowed is 500.",
+      "sourceLine": "if (",
       "count": 1
     },
     {
@@ -445,7 +365,7 @@
       "path": "src/content/comment-filter-controller.test.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async arrow function has too many lines (106). Maximum allowed is 80.",
+      "message": "Async arrow function has too many lines (97). Maximum allowed is 80.",
       "sourceLine": "test(\"BUG-012/AC-071 data-id maturation reaches alias backfill through the production observer whitelist\", async () => {",
       "count": 1
     },
@@ -503,22 +423,6 @@
       "messageId": "exceed",
       "message": "Function 'resolveCommentAuthorUserId' has too many lines (52). Maximum allowed is 50.",
       "sourceLine": "export function resolveCommentAuthorUserId(",
-      "count": 1
-    },
-    {
-      "path": "src/content/commit-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'executeLocked' has too many lines (59). Maximum allowed is 50.",
-      "sourceLine": "async function executeLocked(",
-      "count": 1
-    },
-    {
-      "path": "src/content/commit-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createCommitController' has too many lines (84). Maximum allowed is 50.",
-      "sourceLine": "export function createCommitController<TCard, TButton>(",
       "count": 1
     },
     {
@@ -586,18 +490,10 @@
       "count": 1
     },
     {
-      "path": "src/content/remote-block-coordinator.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createHarness' has too many lines (120). Maximum allowed is 80.",
-      "sourceLine": "function createHarness(",
-      "count": 1
-    },
-    {
       "path": "src/content/remote-block-coordinator.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'createRemoteBlockCoordinator' has too many lines (200). Maximum allowed is 50.",
+      "message": "Function 'createRemoteBlockCoordinator' has too many lines (118). Maximum allowed is 50.",
       "sourceLine": "export function createRemoteBlockCoordinator(",
       "count": 1
     },
@@ -621,7 +517,7 @@
       "path": "src/content/runtime-state-application.test.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async arrow function has too many lines (123). Maximum allowed is 80.",
+      "message": "Async arrow function has too many lines (119). Maximum allowed is 80.",
       "sourceLine": "test(\"BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshes current, retained, and replacement comments without side effects\", async () => {",
       "count": 1
     },
@@ -629,7 +525,7 @@
       "path": "src/content/runtime-state-application.test.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async arrow function has too many lines (99). Maximum allowed is 80.",
+      "message": "Async arrow function has too many lines (97). Maximum allowed is 80.",
       "sourceLine": "test(\"BUG-003/AC-066 hover commit applies state through a full connected-comment refresh\", async () => {",
       "count": 1
     },
@@ -637,7 +533,7 @@
       "path": "src/content/voter-batch-controller.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async method 'run' has too many lines (125). Maximum allowed is 50.",
+      "message": "Async method 'run' has too many lines (105). Maximum allowed is 50.",
       "sourceLine": "async run(request) {",
       "count": 1
     },
@@ -645,7 +541,7 @@
       "path": "src/content/voter-batch-controller.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'createVoterBatchController' has too many lines (131). Maximum allowed is 50.",
+      "message": "Function 'createVoterBatchController' has too many lines (111). Maximum allowed is 50.",
       "sourceLine": "export function createVoterBatchController(",
       "count": 1
     },
@@ -914,30 +810,6 @@
       "count": 1
     },
     {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 23. Maximum allowed is 10.",
-      "sourceLine": "test(\"PLATFORM-001/AC-090 management renders an independent platform column/filter through composed storage refreshes\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (101). Maximum allowed is 80.",
-      "sourceLine": "test(\"PROFILE-001/AC-086 management links profiles and preserves tag filtering across refreshes\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (140). Maximum allowed is 80.",
-      "sourceLine": "test(\"PLATFORM-001/AC-090 management renders an independent platform column/filter through composed storage refreshes\", async () => {",
-      "count": 1
-    },
-    {
       "path": "src/options/app.ts",
       "ruleId": "@typescript-eslint/no-unused-vars",
       "messageId": "unusedVar",
@@ -965,7 +837,7 @@
       "path": "src/options/app.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'bootstrapOptions' has too many lines (624). Maximum allowed is 50.",
+      "message": "Function 'bootstrapOptions' has too many lines (604). Maximum allowed is 50.",
       "sourceLine": "export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsApp {",
       "count": 1
     },
@@ -981,8 +853,8 @@
       "path": "src/options/app.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (683). Maximum allowed is 500.",
-      "sourceLine": ": `已替换为 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`;",
+      "message": "File has too many lines (669). Maximum allowed is 500.",
+      "sourceLine": "transferStatus.textContent = \"未选择可导入的数据。\";",
       "count": 1
     },
     {
@@ -1085,14 +957,6 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "complexity",
       "messageId": "complex",
-      "message": "Arrow function has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "chrome.storage.onChanged.addListener((changes, areaName) => {",
-      "count": 1
-    },
-    {
-      "path": "src/plugins/zhihu/runtime.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
       "message": "Function 'getAuthorName' has a complexity of 11. Maximum allowed is 10.",
       "sourceLine": "function getAuthorName(card: HTMLElement): string {",
       "count": 1
@@ -1109,7 +973,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (820). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (700). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -1117,8 +981,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (992). Maximum allowed is 500.",
-      "sourceLine": "preferences: RemotePreferences,",
+      "message": "File has too many lines (864). Maximum allowed is 500.",
+      "sourceLine": "const hrefs = Array.from(",
       "count": 1
     },
     {
@@ -1130,18 +994,10 @@
       "count": 1
     },
     {
-      "path": "src/popup/app.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (88). Maximum allowed is 80.",
-      "sourceLine": "test(\"PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names plain across rerenders\", async () => {",
-      "count": 1
-    },
-    {
       "path": "src/popup/app.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'bootstrapPopup' has too many lines (219). Maximum allowed is 50.",
+      "message": "Function 'bootstrapPopup' has too many lines (203). Maximum allowed is 50.",
       "sourceLine": "export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {",
       "count": 1
     },

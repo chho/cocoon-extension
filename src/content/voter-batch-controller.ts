@@ -1,7 +1,3 @@
-import {
-  ZHIHU_PLATFORM_ID,
-  type ParsedBlacklistState,
-} from "./blacklist-state.ts";
 import type { RemoteBlockCoordinator } from "./remote-block-coordinator.ts";
 import type {
   CurrentUserResult,
@@ -13,12 +9,7 @@ import type { ZhihuContentSource } from "./zhihu-content-source.ts";
 const PERSIST_CONCURRENCY = 3;
 
 export type VoterBatchPhase =
-  | "preparing"
-  | "fetching"
-  | "persisting"
-  | "complete"
-  | "stopped"
-  | "failed";
+  "preparing" | "fetching" | "persisting" | "complete" | "stopped" | "failed";
 
 export interface VoterBatchProgress {
   readonly phase: VoterBatchPhase;
@@ -38,17 +29,13 @@ export interface VoterBatchRequest {
 }
 
 export interface VoterBatchControllerDependencies {
-  readonly fetchCurrentUser: (
-    isStopped: () => boolean,
-  ) => Promise<CurrentUserResult>;
+  readonly fetchCurrentUser: (isStopped: () => boolean) => Promise<CurrentUserResult>;
   readonly fetchVoters: (
     source: ZhihuContentSource,
     isStopped: () => boolean,
     onProgress: (progress: VoterFetchProgress) => void,
   ) => Promise<VoterFetchResult>;
-  readonly readState: () => Promise<ParsedBlacklistState>;
   readonly coordinator: RemoteBlockCoordinator;
-  readonly reportMalformedStorage: () => void;
   readonly reportProgress: (progress: VoterBatchProgress) => void;
 }
 
@@ -124,26 +111,9 @@ export function createVoterBatchController(
         return progress;
       }
 
-      const parsed = await dependencies.readState();
-      if (parsed.status === "malformed") {
-        dependencies.reportMalformedStorage();
-        report({ phase: "failed", unprocessed: voters.users.length });
-        return progress;
-      }
-      const locallyBlocked = new Set(
-        parsed.state.authors.flatMap((author) =>
-          author.platformId !== ZHIHU_PLATFORM_ID
-            ? []
-            : author.memberHashId === null
-            ? [author.userId]
-            : [author.userId, author.memberHashId]
-        ),
-      );
       const queue = voters.users.filter((voter) => {
         const shouldSkip =
-          voter.userId === currentUser.userId ||
-          voter.userId === request.directAuthorUserId ||
-          locallyBlocked.has(voter.userId);
+          voter.userId === currentUser.userId || voter.userId === request.directAuthorUserId;
         if (shouldSkip) {
           skipped += 1;
         }
@@ -194,10 +164,7 @@ export function createVoterBatchController(
       }
 
       await Promise.all(
-        Array.from(
-          { length: Math.min(PERSIST_CONCURRENCY, queue.length) },
-          async () => worker(),
-        ),
+        Array.from({ length: Math.min(PERSIST_CONCURRENCY, queue.length) }, async () => worker()),
       );
       const unprocessed = queue.length - started + stoppedAfterStart;
       const phase = request.isStopped() ? "stopped" : "complete";

@@ -1,6 +1,6 @@
 {
   "name": "cocoon-extension",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Local-first Chrome extension for quiet, plugin-based control over content feeds.",
   "keywords": [
     "browser-extension",
@@ -44,6 +44,7 @@
     "@types/node": "^24.10.0",
     "eslint": "^10.9.0",
     "eslint-config-prettier": "^10.1.8",
+    "fake-indexeddb": "^6.2.5",
     "globals": "^17.11.0",
     "jsdom": "29.0.0",
     "prettier": "^3.9.6",

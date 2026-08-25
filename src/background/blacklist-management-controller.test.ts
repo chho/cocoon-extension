@@ -5,10 +5,19 @@ import {
   DEFAULT_TAG_ID,
   STORAGE_KEY,
   createInitialState,
+  parseBlacklistState,
+  planAuthorBatchRemoval,
+  planAuthorRemoval,
+  planAuthorRestoration,
+  planTagDeletion,
+  planTagRename,
   type BlacklistState,
 } from "../content/blacklist-state.ts";
 import {
+  MAX_BLACKLIST_TRANSFER_BYTES,
+  blacklistRpcJsonByteLength,
   createBlacklistRpcRequest,
+  createBlacklistRpcResponse,
   parseBlacklistRpcResponse,
   type BlacklistAuthorDto,
   type BlacklistRpcOperation,
@@ -16,6 +25,7 @@ import {
   type BlacklistTransferEnvelope,
 } from "../core/blacklist-rpc-contract.ts";
 import { createBlacklistManagementController } from "./blacklist-management-controller.ts";
+import type { BlacklistRepository } from "./blacklist-repository-types.ts";
 
 const TIME = "2026-08-21T10:00:00.000Z";
 const HASH = "a".repeat(32);
@@ -42,18 +52,20 @@ class MemoryStorage {
   readonly setPayloads: Record<string, unknown>[] = [];
   readonly separateValues: Record<string, unknown>;
   failGet = false;
+  failGetAfter: number | null = null;
   failSet = false;
+  getCalls = 0;
 
-  constructor(
-    value: unknown,
-    separateValues: Record<string, unknown> = {},
-  ) {
+  constructor(value: unknown, separateValues: Record<string, unknown> = {}) {
     this.value = value;
     this.separateValues = { ...separateValues };
   }
 
   async get(key: string): Promise<Record<string, unknown>> {
-    if (this.failGet) throw new Error("get failed");
+    this.getCalls += 1;
+    if (this.failGet || (this.failGetAfter !== null && this.getCalls > this.failGetAfter)) {
+      throw new Error("get failed");
+    }
     return this.value === undefined ? {} : { [key]: this.value };
   }
 
@@ -63,6 +75,142 @@ class MemoryStorage {
     this.sets.push(items[STORAGE_KEY]);
     this.value = items[STORAGE_KEY];
   }
+}
+
+function repositoryContext(storage: MemoryStorage, state: BlacklistState) {
+  return {
+    baseRevision: storage.sets.length,
+    revision: storage.sets.length,
+    authorCount: state.authors.length,
+    tagCount: state.tags.length,
+  };
+}
+
+class MemoryRepository implements BlacklistRepository {
+  private readonly storage: MemoryStorage;
+
+  constructor(storage: MemoryStorage) {
+    this.storage = storage;
+  }
+
+  private async read(): Promise<BlacklistState> {
+    const values = await this.storage.get(STORAGE_KEY);
+    const parsed = parseBlacklistState(values[STORAGE_KEY]);
+    if (parsed.status === "malformed") throw new Error("unreadable state");
+    if (parsed.status === "missing" || parsed.status === "migrated") {
+      await this.write(parsed.state);
+    }
+    return parsed.state;
+  }
+
+  private async write(state: BlacklistState): Promise<void> {
+    await this.storage.set({ [STORAGE_KEY]: state });
+  }
+
+  async hydrate() {
+    return { state: await this.read(), revision: this.storage.sets.length };
+  }
+
+  async removeAuthor(identity: Parameters<typeof planAuthorRemoval>[1]) {
+    const state = await this.read();
+    const plan = planAuthorRemoval(state, identity);
+    if (plan.status !== "ready") {
+      return {
+        status: "missing" as const,
+        removed: null,
+        ...repositoryContext(this.storage, state),
+      };
+    }
+    await this.write(plan.state);
+    return {
+      status: "persisted" as const,
+      removed: plan.removed,
+      ...repositoryContext(this.storage, plan.state),
+    };
+  }
+
+  async restoreAuthor(author: Parameters<typeof planAuthorRestoration>[1]) {
+    const state = await this.read();
+    const plan = planAuthorRestoration(state, author);
+    if (plan.status !== "ready") {
+      return { status: plan.status, ...repositoryContext(this.storage, state) };
+    }
+    await this.write(plan.state);
+    return { status: "persisted" as const, ...repositoryContext(this.storage, plan.state) };
+  }
+
+  async removeAuthors(identities: Parameters<typeof planAuthorBatchRemoval>[1]) {
+    const state = await this.read();
+    const plan = planAuthorBatchRemoval(state, identities);
+    if (plan.status !== "ready") {
+      return {
+        status: plan.status,
+        removedCount: 0,
+        ...repositoryContext(this.storage, state),
+      };
+    }
+    await this.write(plan.state);
+    return {
+      status: "persisted" as const,
+      removedCount: plan.removedCount,
+      ...repositoryContext(this.storage, plan.state),
+    };
+  }
+
+  async renameTag(tagId: string, name: string) {
+    const state = await this.read();
+    const plan = planTagRename(state, tagId, name);
+    if (plan.status !== "ready") {
+      return { status: plan.status, tag: null, ...repositoryContext(this.storage, state) };
+    }
+    await this.write(plan.state);
+    const tag = plan.state.tags.find((candidate) => candidate.tagId === tagId) ?? null;
+    return {
+      status: "persisted" as const,
+      tag,
+      ...repositoryContext(this.storage, plan.state),
+    };
+  }
+
+  async deleteTag(tagId: string) {
+    const state = await this.read();
+    const plan = planTagDeletion(state, tagId);
+    if (plan.status !== "ready") {
+      return {
+        status: plan.status,
+        deletedTagId: null,
+        ...repositoryContext(this.storage, state),
+      };
+    }
+    await this.write(plan.state);
+    return {
+      status: "persisted" as const,
+      deletedTagId: tagId,
+      ...repositoryContext(this.storage, plan.state),
+    };
+  }
+
+  async replaceAll(state: BlacklistState) {
+    await this.write(state);
+    return { state, revision: this.storage.sets.length };
+  }
+
+  async commitAuthor(): Promise<never> {
+    throw new Error("not used by management tests");
+  }
+  async backfillMemberHash(): Promise<never> {
+    throw new Error("not used by management tests");
+  }
+  async commitUpvoter(): Promise<never> {
+    throw new Error("not used by management tests");
+  }
+  async preflightDirect(): Promise<never> {
+    throw new Error("not used by management tests");
+  }
+}
+
+function createMemoryRepository(storage: MemoryStorage): BlacklistRepository {
+  return new MemoryRepository(storage);
 }
 
 function createHarness(
@@ -77,7 +225,7 @@ function createHarness(
   const storage = new MemoryStorage(value, options.separateValues);
   let lockCalls = 0;
   const controller = createBlacklistManagementController(
-    storage,
+    createMemoryRepository(storage),
     {
       async runExclusive(operation) {
         lockCalls += 1;
@@ -115,11 +263,57 @@ function dto(value: BlacklistState["authors"][number]): BlacklistAuthorDto {
   };
 }
 
+function removeResponseBytes(
+  state: BlacklistState,
+  removed: BlacklistState["authors"][number] | null,
+): number {
+  const response = createBlacklistRpcResponse("remove-one", true, {
+    snapshot: {
+      authors: state.authors.map(dto),
+      tags: state.tags.map((tag) => ({
+        ...tag,
+        isDefault: tag.tagId === DEFAULT_TAG_ID,
+      })),
+    },
+    removed: removed ? dto(removed) : null,
+  });
+  return blacklistRpcJsonByteLength(response) ?? Number.POSITIVE_INFINITY;
+}
+
+function nearLimitRemovalState() {
+  const removed = author("r".repeat(512), {
+    authorNameAtCapture: "R".repeat(500),
+    memberHashId: HASH,
+  });
+  const createState = (count: number): BlacklistState => ({
+    ...createInitialState(),
+    authors: Array.from({ length: count }, (_, index) =>
+      author(`filler-${index}`, { authorNameAtCapture: "F".repeat(500) }),
+    ),
+  });
+  let low = 0;
+  let high = 20_000;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (removeResponseBytes(createState(middle), null) <= MAX_BLACKLIST_TRANSFER_BYTES) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const candidate = createState(low);
+  if (removeResponseBytes(candidate, removed) <= MAX_BLACKLIST_TRANSFER_BYTES) {
+    throw new Error("Unable to construct the remove response boundary fixture.");
+  }
+  return {
+    removed,
+    before: { ...candidate, authors: [removed, ...candidate.authors] } satisfies BlacklistState,
+  };
+}
+
 function transfer(
   authors: BlacklistTransferEnvelope["authors"] = [],
-  tags: BlacklistTransferEnvelope["tags"] = [
-    { tagId: DEFAULT_TAG_ID, name: "default" },
-  ],
+  tags: BlacklistTransferEnvelope["tags"] = [{ tagId: DEFAULT_TAG_ID, name: "default" }],
 ): BlacklistTransferEnvelope {
   return {
     product: "cocoon-blacklist",
@@ -291,16 +485,17 @@ test("MANAGE-002 rename and delete use latest state and preserve author fields",
   strictEqual(harness.storage.sets.length, 1);
   deepStrictEqual(renamed.data.snapshot?.authors[0], dto(tagged));
 
-  const deleted = await harness.controller.handle(
-    request("delete-tag", { tagId: "reading" }),
-  );
+  const deleted = await harness.controller.handle(request("delete-tag", { tagId: "reading" }));
   strictEqual(deleted.ok, true);
   strictEqual(harness.storage.sets.length, 2);
   deepStrictEqual(deleted.data.snapshot?.authors[0], {
     ...dto(tagged),
     tagId: DEFAULT_TAG_ID,
   });
-  strictEqual(deleted.data.snapshot?.tags.some(({ tagId }) => tagId === "reading"), false);
+  strictEqual(
+    deleted.data.snapshot?.tags.some(({ tagId }) => tagId === "reading"),
+    false,
+  );
 
   for (const operation of [
     request("rename-tag", { tagId: DEFAULT_TAG_ID, name: "Other" }),
@@ -329,6 +524,40 @@ test("MANAGE-001 save failure returns the latest rollback snapshot without chang
   deepStrictEqual(harness.storage.sets, []);
 });
 
+test("AC-095 committed removal stays successful without a post-commit snapshot read", async () => {
+  const state: BlacklistState = { ...createInitialState(), authors: [author("one")] };
+  const harness = createHarness(state);
+  harness.storage.failGetAfter = 2;
+
+  const response = await harness.controller.handle(
+    request("remove-one", {
+      identity: { platformId: "zhihu", userId: "one" },
+    }),
+  );
+
+  strictEqual(response.ok, true);
+  strictEqual(response.data.removed?.userId, "one");
+  strictEqual(response.data.snapshot?.authors.length, 0);
+  strictEqual(harness.storage.getCalls, 2);
+  strictEqual((harness.storage.value as BlacklistState).authors.length, 0);
+});
+
+test("AC-095 oversized exact remove response is rejected before persistence", async () => {
+  const { before, removed } = nearLimitRemovalState();
+  const harness = createHarness(before);
+
+  const response = await harness.controller.handle(
+    request("remove-one", {
+      identity: { platformId: removed.platformId, userId: removed.userId },
+    }),
+  );
+
+  strictEqual(response.ok, false);
+  strictEqual(response.error, "storage-unreadable");
+  deepStrictEqual(harness.storage.sets, []);
+  strictEqual((harness.storage.value as BlacklistState).authors.length, before.authors.length);
+});
+
 test("AC-089 locked export re-reads latest state, emits exact data, and does not write valid storage", async () => {
   const initial: BlacklistState = {
     ...createInitialState(),
@@ -336,10 +565,7 @@ test("AC-089 locked export re-reads latest state, emits exact data, and does not
   };
   const latest: BlacklistState = {
     ...createInitialState(),
-    tags: [
-      ...createInitialState().tags,
-      { tagId: "work", name: "Work" },
-    ],
+    tags: [...createInitialState().tags, { tagId: "work", name: "Work" }],
     authors: [
       author("latest", { tagId: "work", memberHashId: HASH }),
       author("same-id", { platformId: "youtube" }),
@@ -364,14 +590,16 @@ test("AC-089 export initializes migrated storage in one write but failures produ
   const migrated = {
     schemaVersion: 4,
     tags: [{ tagId: "default", name: "default" }],
-    authors: [{
-      userId: "legacy",
-      memberHashId: null,
-      authorNameAtCapture: "Legacy",
-      tagId: "default",
-      blacklistedAt: TIME,
-      blockSource: "direct",
-    }],
+    authors: [
+      {
+        userId: "legacy",
+        memberHashId: null,
+        authorNameAtCapture: "Legacy",
+        tagId: "default",
+        blacklistedAt: TIME,
+        blockSource: "direct",
+      },
+    ],
   };
   const success = createHarness(migrated, { now: () => new Date(TIME) });
   const exported = await success.controller.handle(request("export-json"));
@@ -410,9 +638,7 @@ test("AC-089 merge re-reads under lock, writes once atomically, and keeps local 
     },
   });
 
-  const response = await harness.controller.handle(
-    transferRequest("import-merge", imported),
-  );
+  const response = await harness.controller.handle(transferRequest("import-merge", imported));
 
   strictEqual(response.ok, true);
   strictEqual(harness.storage.sets.length, 1);
@@ -421,14 +647,17 @@ test("AC-089 merge re-reads under lock, writes once atomically, and keeps local 
     latest.authors[1],
     imported.authors[1],
   ]);
-  deepStrictEqual(response.data.snapshot?.authors.map(({ platformId, userId }) => ({
-    platformId,
-    userId,
-  })), [
-    { platformId: "zhihu", userId: "same" },
-    { platformId: "zhihu", userId: "concurrent" },
-    { platformId: "youtube", userId: "new" },
-  ]);
+  deepStrictEqual(
+    response.data.snapshot?.authors.map(({ platformId, userId }) => ({
+      platformId,
+      userId,
+    })),
+    [
+      { platformId: "zhihu", userId: "same" },
+      { platformId: "zhihu", userId: "concurrent" },
+      { platformId: "youtube", userId: "new" },
+    ],
+  );
 });
 
 test("AC-089 unchanged merge performs zero writes while migrated merge persists exactly once", async () => {
@@ -473,9 +702,7 @@ test("AC-089 replace reports exact counts, writes once, and touches only blackli
     ],
   );
 
-  const response = await harness.controller.handle(
-    transferRequest("import-replace", imported),
-  );
+  const response = await harness.controller.handle(transferRequest("import-replace", imported));
 
   strictEqual(response.ok, true);
   strictEqual(response.data.snapshot?.authors.length, 2);

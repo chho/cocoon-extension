@@ -11,16 +11,10 @@ import {
   type BlacklistRpcOperation,
   type BlacklistRpcResponse,
 } from "../core/blacklist-rpc-contract.ts";
-import {
-  createBlacklistRpcClient,
-  type BlacklistRpcClient,
-} from "../ui/background-rpc.ts";
+import { createBlacklistRpcClient, type BlacklistRpcClient } from "../ui/background-rpc.ts";
 import { bootstrapPopup } from "./app.ts";
 
-const POPUP_HTML = readFileSync(
-  new URL("../../popup/popup.html", import.meta.url),
-  "utf8",
-);
+const POPUP_HTML = readFileSync(new URL("../../popup/popup.html", import.meta.url), "utf8");
 const POPUP_CSS = readFileSync(new URL("./popup.css", import.meta.url), "utf8");
 
 const AUTHOR: BlacklistAuthorDto = {
@@ -39,7 +33,8 @@ const EMPTY: BlacklistSnapshotDto = {
 const INITIAL: BlacklistSnapshotDto = { ...EMPTY, authors: [AUTHOR] };
 
 function fixture(): JSDOM {
-  return new JSDOM(`<!doctype html><body><main>
+  return new JSDOM(
+    `<!doctype html><body><main>
     <p id="page-status" data-state="checking" aria-label="页面状态：正在检查…">
       <span class="status-dot" aria-hidden="true"></span><span id="page-status-text">正在检查…</span>
     </p><strong id="count"></strong><span id="count-inline"></span>
@@ -47,17 +42,16 @@ function fixture(): JSDOM {
     <h2 id="records-title"></h2><input id="search"><p id="data-message"></p><ul id="records"></ul>
     <div id="undo-strip" hidden><button id="undo">撤销</button></div>
     <p id="save-error" hidden></p><button id="manage">管理全部</button>
-  </main></body>`, { url: "chrome-extension://runtime/popup/popup.html" });
+  </main></body>`,
+    { url: "chrome-extension://runtime/popup/popup.html" },
+  );
 }
 
 function sourceFixture(): JSDOM {
-  return new JSDOM(
-    POPUP_HTML.replace("</head>", `<style>${POPUP_CSS}</style></head>`),
-    {
-      pretendToBeVisual: true,
-      url: "chrome-extension://runtime/popup/popup.html",
-    },
-  );
+  return new JSDOM(POPUP_HTML.replace("</head>", `<style>${POPUP_CSS}</style></head>`), {
+    pretendToBeVisual: true,
+    url: "chrome-extension://runtime/popup/popup.html",
+  });
 }
 
 function assertStatusView(
@@ -88,7 +82,10 @@ async function settle(): Promise<void> {
 class RpcQueue implements BlacklistRpcClient {
   readonly responses = new Map<BlacklistRpcOperation, Array<Promise<BlacklistRpcResponse>>>();
 
-  push(operation: BlacklistRpcOperation, response: BlacklistRpcResponse | Promise<BlacklistRpcResponse>): void {
+  push(
+    operation: BlacklistRpcOperation,
+    response: BlacklistRpcResponse | Promise<BlacklistRpcResponse>,
+  ): void {
     const queue = this.responses.get(operation) ?? [];
     queue.push(Promise.resolve(response));
     this.responses.set(operation, queue);
@@ -100,13 +97,19 @@ class RpcQueue implements BlacklistRpcClient {
     return response;
   }
 
-  removeOne(): Promise<BlacklistRpcResponse> { return this.request("remove-one"); }
-  restoreOne(): Promise<BlacklistRpcResponse> { return this.request("restore-one"); }
+  removeOne(): Promise<BlacklistRpcResponse> {
+    return this.request("remove-one");
+  }
+  restoreOne(): Promise<BlacklistRpcResponse> {
+    return this.request("restore-one");
+  }
 }
 
 function deferredResponse() {
   let resolve: ((value: BlacklistRpcResponse) => void) | undefined;
-  const promise = new Promise<BlacklistRpcResponse>((done) => { resolve = done; });
+  const promise = new Promise<BlacklistRpcResponse>((done) => {
+    resolve = done;
+  });
   return { promise, resolve: (value: BlacklistRpcResponse) => resolve?.(value) };
 }
 
@@ -189,10 +192,12 @@ test("POPUP-010/AC-088 keeps the neutral checking state visible while status RPC
   await settle();
 
   assertStatusView(dom, "checking", "正在检查…", "rgb(118, 126, 120)");
-  pendingStatus.resolve(createBlacklistRpcResponse("status", true, {
-    status: "running",
-    count: 12,
-  }));
+  pendingStatus.resolve(
+    createBlacklistRpcResponse("status", true, {
+      status: "running",
+      count: 12,
+    }),
+  );
   await settle();
   assertStatusView(dom, "running", "运行中", "rgb(63, 112, 79)");
 });
@@ -223,10 +228,13 @@ for (const statusCase of [
   test(`POPUP-010/AC-088 renders explicit ${statusCase.state} text, state, and color`, async () => {
     const dom = sourceFixture();
     const rpc = new RpcQueue();
-    rpc.push("status", createBlacklistRpcResponse("status", true, {
-      status: statusCase.state,
-      count: statusCase.count,
-    }));
+    rpc.push(
+      "status",
+      createBlacklistRpcResponse("status", true, {
+        status: statusCase.state,
+        count: statusCase.count,
+      }),
+    );
     rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
     bootstrapPopup({
       document: dom.window.document,
@@ -237,16 +245,12 @@ for (const statusCase of [
     });
     await settle();
 
-    assertStatusView(
-      dom,
-      statusCase.state,
-      statusCase.label,
-      statusCase.color,
+    assertStatusView(dom, statusCase.state, statusCase.label, statusCase.color);
+    strictEqual(dom.window.document.querySelector("#count")?.textContent, String(statusCase.count));
+    strictEqual(
+      dom.window.document.querySelector("#count-inline")?.textContent,
+      String(statusCase.count),
     );
-    strictEqual(dom.window.document.querySelector("#count")?.textContent,
-      String(statusCase.count));
-    strictEqual(dom.window.document.querySelector("#count-inline")?.textContent,
-      String(statusCase.count));
     const error = dom.window.document.querySelector<HTMLElement>("#connection-error");
     strictEqual(error?.hidden, !statusCase.connectionError);
     if (statusCase.connectionError) {
@@ -269,21 +273,12 @@ test("POPUP-010/AC-088 transport failure exposes the connection-error state with
   });
   await settle();
 
-  assertStatusView(
-    dom,
-    "connection-error",
-    "页面连接异常",
-    "rgb(162, 77, 56)",
-  );
-  strictEqual(
-    dom.window.document.querySelector<HTMLElement>("#connection-error")?.hidden,
-    false,
-  );
+  assertStatusView(dom, "connection-error", "页面连接异常", "rgb(162, 77, 56)");
+  strictEqual(dom.window.document.querySelector<HTMLElement>("#connection-error")?.hidden, false);
 });
 
-test("PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names plain across rerenders", async () => {
-  const dom = fixture();
-  const multiPlatform: BlacklistSnapshotDto = {
+function multiPlatformPopupSnapshot(): BlacklistSnapshotDto {
+  return {
     tags: EMPTY.tags,
     authors: [
       {
@@ -308,21 +303,60 @@ test("PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names p
       },
     ],
   };
+}
+
+function assertPopupPlatformNames(document: Document): void {
+  const link = document.querySelector<HTMLAnchorElement>("#records a.author-name");
+  strictEqual(link?.textContent, "Zhihu Author");
+  strictEqual(link?.href, "https://www.zhihu.com/people/author%2Fwith%20%3Fquery%23fragment%25");
+  strictEqual(link?.target, "_blank");
+  strictEqual(link?.rel, "noopener");
+  const plainNames = Array.from(
+    document.querySelectorAll<HTMLElement>("#records span.author-name"),
+  );
+  strictEqual(plainNames.length, 2);
+  strictEqual(
+    plainNames
+      .map((name) => name.textContent)
+      .sort()
+      .join("|"),
+    "Future Author|YouTube Author",
+  );
+  for (const name of plainNames) {
+    strictEqual(name.hasAttribute("href"), false);
+    strictEqual(name.hasAttribute("tabindex"), false);
+    strictEqual(name.tabIndex, -1);
+    strictEqual(name.closest("a"), null);
+  }
+}
+
+test("PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names plain across rerenders", async () => {
+  const dom = fixture();
+  const multiPlatform = multiPlatformPopupSnapshot();
   const refreshed = {
     ...multiPlatform,
     authors: multiPlatform.authors.map((author) => ({ ...author })),
   };
   const rpc = new RpcQueue();
-  rpc.push("status", createBlacklistRpcResponse("status", true, {
-    status: "running",
-    count: 3,
-  }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-    snapshot: multiPlatform,
-  }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-    snapshot: refreshed,
-  }));
+  rpc.push(
+    "status",
+    createBlacklistRpcResponse("status", true, {
+      status: "running",
+      count: 3,
+    }),
+  );
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, {
+      snapshot: multiPlatform,
+    }),
+  );
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, {
+      snapshot: refreshed,
+    }),
+  );
   const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
   bootstrapPopup({
     document: dom.window.document,
@@ -333,43 +367,21 @@ test("PROFILE-002/AC-091 Popup links only Zhihu and keeps other platform names p
   });
   await settle();
 
-  const assertPlatformNames = (): void => {
-    const link = dom.window.document.querySelector<HTMLAnchorElement>(
-      "#records a.author-name",
-    );
-    strictEqual(link?.textContent, "Zhihu Author");
-    strictEqual(
-      link?.href,
-      "https://www.zhihu.com/people/author%2Fwith%20%3Fquery%23fragment%25",
-    );
-    strictEqual(link?.target, "_blank");
-    strictEqual(link?.rel, "noopener");
-    const plainNames = Array.from(
-      dom.window.document.querySelectorAll<HTMLElement>("#records span.author-name"),
-    );
-    strictEqual(plainNames.length, 2);
-    strictEqual(plainNames.map((name) => name.textContent).sort().join("|"),
-      "Future Author|YouTube Author");
-    for (const name of plainNames) {
-      strictEqual(name.hasAttribute("href"), false);
-      strictEqual(name.hasAttribute("tabindex"), false);
-      strictEqual(name.tabIndex, -1);
-      strictEqual(name.closest("a"), null);
-    }
-  };
-  assertPlatformNames();
+  assertPopupPlatformNames(dom.window.document);
 
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   await settle();
-  assertPlatformNames();
+  assertPopupPlatformNames(dom.window.document);
 
   const search = dom.window.document.querySelector<HTMLInputElement>("#search");
   if (!search) throw new Error("search missing");
   search.value = "YouTube";
   search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   strictEqual(dom.window.document.querySelectorAll("#records a.author-name").length, 0);
-  strictEqual(dom.window.document.querySelector("#records span.author-name")?.textContent,
-    "YouTube Author");
+  strictEqual(
+    dom.window.document.querySelector("#records span.author-name")?.textContent,
+    "YouTube Author",
+  );
   strictEqual(dom.window.document.querySelectorAll("#records button").length, 1);
 });
 
@@ -416,23 +428,69 @@ test("POPUP production bootstrap coalesces storage and mutation refreshes to the
 
   const stale = deferredResponse();
   rpc.push("snapshot", stale.promise);
-  rpc.push("remove-one", createBlacklistRpcResponse("remove-one", true, {
-    snapshot: EMPTY,
-    removed: AUTHOR,
-  }));
+  rpc.push(
+    "remove-one",
+    createBlacklistRpcResponse("remove-one", true, {
+      snapshot: EMPTY,
+      removed: AUTHOR,
+    }),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
-  listeners[0]?.({ cocoonBlacklistState: {} }, "local");
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 1 } } }, "local");
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
   await settle();
   stale.resolve(createBlacklistRpcResponse("snapshot", true, { snapshot: INITIAL }));
   await settle();
 
-  strictEqual(dom.window.document.querySelector("#records")?.textContent?.includes("Author One"), false);
+  strictEqual(
+    dom.window.document.querySelector("#records")?.textContent?.includes("Author One"),
+    false,
+  );
   strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "0");
   strictEqual((dom.window.document.querySelector("#undo-strip") as HTMLElement).hidden, false);
 });
 
-test("POPUP removal refresh completed before eight seconds starts a full live undo window on display", async () => {
+test("AC-095 newer revision refresh wins over an older pending removal response", async () => {
+  const dom = fixture();
+  installFakeClock(dom);
+  const rpc = new RpcQueue();
+  const pendingRemoval = deferredResponse();
+  const later = {
+    ...EMPTY,
+    authors: [{ ...AUTHOR, authorName: "Later authority" }],
+  };
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
+  rpc.push("status", createBlacklistRpcResponse("status", true, { status: "running", count: 0 }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: INITIAL }));
+  rpc.push("remove-one", pendingRemoval.promise);
+  bootstrapPopup({
+    document: dom.window.document,
+    window: dom.window as unknown as Window,
+    rpc,
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
+    async openOptionsPage() {},
+  });
+  await settle();
+
+  dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: later }));
+  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: later }));
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 2 } } }, "local");
+  await settle();
+  pendingRemoval.resolve(
+    createBlacklistRpcResponse("remove-one", true, { snapshot: EMPTY, removed: AUTHOR }),
+  );
+  await settle();
+
+  strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "1");
+  strictEqual(
+    dom.window.document.querySelector("#records")?.textContent?.includes("Later authority"),
+    true,
+  );
+  assertUndoState(dom, false);
+});
+
+test("POPUP committed removal snapshot starts a full undo window immediately", async () => {
   const dom = fixture();
   const clock = installFakeClock(dom);
   const rpc = new RpcQueue();
@@ -447,18 +505,14 @@ test("POPUP removal refresh completed before eight seconds starts a full live un
   });
   await settle();
 
-  const refreshed = deferredResponse();
-  rpc.push("remove-one", createBlacklistRpcResponse("remove-one", true, {
-    snapshot: EMPTY,
-    removed: AUTHOR,
-  }));
-  rpc.push("snapshot", refreshed.promise);
+  rpc.push(
+    "remove-one",
+    createBlacklistRpcResponse("remove-one", true, {
+      snapshot: EMPTY,
+      removed: AUTHOR,
+    }),
+  );
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
-  await settle();
-  clock.advance(4_000);
-  assertUndoState(dom, false);
-
-  refreshed.resolve(createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
   await settle();
   assertUndoState(dom, true);
   clock.advance(7_999);
@@ -467,7 +521,7 @@ test("POPUP removal refresh completed before eight seconds starts a full live un
   assertUndoState(dom, false);
 });
 
-test("POPUP removal refresh completed after eight seconds never shows a dead undo and still gets eight seconds", async () => {
+test("POPUP delayed removal response starts undo only after commit confirmation", async () => {
   const dom = fixture();
   const clock = installFakeClock(dom);
   const rpc = new RpcQueue();
@@ -482,18 +536,19 @@ test("POPUP removal refresh completed after eight seconds never shows a dead und
   });
   await settle();
 
-  const refreshed = deferredResponse();
-  rpc.push("remove-one", createBlacklistRpcResponse("remove-one", true, {
-    snapshot: EMPTY,
-    removed: AUTHOR,
-  }));
-  rpc.push("snapshot", refreshed.promise);
+  const committed = deferredResponse();
+  rpc.push("remove-one", committed.promise);
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
   await settle();
   clock.advance(8_000);
   assertUndoState(dom, false);
 
-  refreshed.resolve(createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
+  committed.resolve(
+    createBlacklistRpcResponse("remove-one", true, {
+      snapshot: EMPTY,
+      removed: AUTHOR,
+    }),
+  );
   await settle();
   assertUndoState(dom, true);
   clock.advance(7_999);
@@ -502,17 +557,19 @@ test("POPUP removal refresh completed after eight seconds never shows a dead und
   assertUndoState(dom, false);
 });
 
-test("POPUP does not expose undo when the post-removal refresh is unreadable", async () => {
+test("POPUP committed removal remains visible and undoable without a post-read", async () => {
   const dom = fixture();
   installFakeClock(dom);
   const rpc = new RpcQueue();
   rpc.push("status", createBlacklistRpcResponse("status", true, { status: "running", count: 0 }));
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: INITIAL }));
-  rpc.push("remove-one", createBlacklistRpcResponse("remove-one", true, {
-    snapshot: EMPTY,
-    removed: AUTHOR,
-  }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", false, {}, "storage-unreadable"));
+  rpc.push(
+    "remove-one",
+    createBlacklistRpcResponse("remove-one", true, {
+      snapshot: EMPTY,
+      removed: AUTHOR,
+    }),
+  );
   bootstrapPopup({
     document: dom.window.document,
     window: dom.window as unknown as Window,
@@ -523,9 +580,9 @@ test("POPUP does not expose undo when the post-removal refresh is unreadable", a
   await settle();
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
   await settle();
-  assertUndoState(dom, false);
-  strictEqual(dom.window.document.querySelector("#data-message")?.textContent,
-    "本地数据无法读取，Cocoon 未进行修改。");
+  assertUndoState(dom, true);
+  strictEqual(dom.window.document.querySelector<HTMLElement>("#data-message")?.hidden, true);
+  strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "0");
 });
 
 test("POPUP does not expose undo when the refreshed snapshot has an intervening identity conflict", async () => {
@@ -539,22 +596,32 @@ test("POPUP does not expose undo when the refreshed snapshot has an intervening 
   };
   rpc.push("status", createBlacklistRpcResponse("status", true, { status: "running", count: 0 }));
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: INITIAL }));
-  rpc.push("remove-one", createBlacklistRpcResponse("remove-one", true, {
-    snapshot: EMPTY,
-    removed: AUTHOR,
-  }));
-  rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, {
-    snapshot: { ...EMPTY, authors: [conflict] },
-  }));
+  rpc.push(
+    "remove-one",
+    createBlacklistRpcResponse("remove-one", true, {
+      snapshot: EMPTY,
+      removed: AUTHOR,
+    }),
+  );
+  rpc.push(
+    "snapshot",
+    createBlacklistRpcResponse("snapshot", true, {
+      snapshot: { ...EMPTY, authors: [conflict] },
+    }),
+  );
+  const listeners: Array<(changes: Record<string, unknown>, area: string) => void> = [];
   bootstrapPopup({
     document: dom.window.document,
     window: dom.window as unknown as Window,
     rpc,
-    storageChanges: { addListener() {} },
+    storageChanges: { addListener: (listener) => listeners.push(listener) },
     async openOptionsPage() {},
   });
   await settle();
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
+  await settle();
+  assertUndoState(dom, true);
+  listeners[0]?.({ cocoonBlacklistRevision: { newValue: { version: 1, revision: 2 } } }, "local");
   await settle();
   assertUndoState(dom, false);
 });
@@ -562,14 +629,19 @@ test("POPUP does not expose undo when the refreshed snapshot has an intervening 
 test("POPUP contains openOptionsPage rejection in its local alert", async () => {
   const dom = fixture();
   const rpc = new RpcQueue();
-  rpc.push("status", createBlacklistRpcResponse("status", true, { status: "unsupported", count: 0 }));
+  rpc.push(
+    "status",
+    createBlacklistRpcResponse("status", true, { status: "unsupported", count: 0 }),
+  );
   rpc.push("snapshot", createBlacklistRpcResponse("snapshot", true, { snapshot: EMPTY }));
   bootstrapPopup({
     document: dom.window.document,
     window: dom.window as unknown as Window,
     rpc,
     storageChanges: { addListener() {} },
-    async openOptionsPage() { throw new Error("open failed"); },
+    async openOptionsPage() {
+      throw new Error("open failed");
+    },
   });
   await settle();
   dom.window.document.querySelector<HTMLButtonElement>("#manage")?.click();
@@ -596,8 +668,10 @@ test("POPUP storage-unreadable mutation immediately clears undo and all write ac
   dom.window.document.querySelector<HTMLButtonElement>("#records button")?.click();
   await settle();
 
-  strictEqual(dom.window.document.querySelector("#data-message")?.textContent,
-    "本地数据无法读取，Cocoon 未进行修改。");
+  strictEqual(
+    dom.window.document.querySelector("#data-message")?.textContent,
+    "本地数据无法读取，Cocoon 未进行修改。",
+  );
   strictEqual(dom.window.document.querySelectorAll("#records button").length, 0);
   strictEqual((dom.window.document.querySelector("#undo-strip") as HTMLElement).hidden, true);
   strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "—");

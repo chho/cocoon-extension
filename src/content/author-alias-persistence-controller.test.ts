@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   createInitialState,
   parseBlacklistState,
+  planMemberHashBackfill,
   type BlacklistState,
   type ParsedBlacklistState,
 } from "./blacklist-state.ts";
@@ -25,58 +26,74 @@ function author(userId: string, memberHashId: string | null = null) {
   };
 }
 
-function stateWith(
-  ...authors: BlacklistState["authors"]
-): BlacklistState {
+function stateWith(...authors: BlacklistState["authors"]): BlacklistState {
   return { ...createInitialState(), authors };
 }
 
-function createHarness(options: {
-  readonly initial?: BlacklistState;
-  readonly resolvedUserId?: string | null;
-  readonly parsedState?: ParsedBlacklistState;
-  readonly beforeLock?: () => void;
-  readonly failLock?: boolean;
-  readonly failRead?: boolean;
-  readonly failWrite?: boolean;
-} = {}) {
+function createHarness(
+  options: {
+    readonly initial?: BlacklistState;
+    readonly resolvedUserId?: string | null;
+    readonly parsedState?: ParsedBlacklistState;
+    readonly beforeLock?: () => void;
+    readonly failLock?: boolean;
+    readonly failRead?: boolean;
+    readonly failWrite?: boolean;
+  } = {},
+) {
   let stored = options.initial ?? stateWith(author("canonical-token"));
   const requestedHashes: string[] = [];
   let locks = 0;
   let reads = 0;
   let writes = 0;
   let applies = 0;
+  let revision = 0;
   const controller = createAuthorAliasPersistenceController({
     async resolveMemberUserId(memberHashId) {
       requestedHashes.push(memberHashId);
-      return options.resolvedUserId === undefined
-        ? "canonical-token"
-        : options.resolvedUserId;
+      return options.resolvedUserId === undefined ? "canonical-token" : options.resolvedUserId;
     },
-    async withExclusiveLock(operation) {
+    async backfillMemberHash(identity, memberHashId) {
       locks += 1;
       options.beforeLock?.();
-      if (options.failLock) {
-        throw new Error("lock failed");
-      }
-      return operation();
-    },
-    async readState() {
+      if (options.failLock) throw new Error("lock failed");
       reads += 1;
-      if (options.failRead) {
-        throw new Error("read failed");
+      if (options.failRead) throw new Error("read failed");
+      const parsed = options.parsedState ?? parseBlacklistState(stored);
+      const context = {
+        baseRevision: revision,
+        revision,
+        authorCount: stored.authors.length,
+        tagCount: stored.tags.length,
+      };
+      if (parsed.status === "malformed") {
+        return { status: "invalid" as const, author: null, ...context };
       }
-      return options.parsedState ?? parseBlacklistState(stored);
-    },
-    async writeState(state) {
+      const plan = planMemberHashBackfill(parsed.state, identity, memberHashId);
+      if (plan.status === "invalid") {
+        return { status: "invalid" as const, author: null, ...context };
+      }
+      const author = plan.state.authors.find(
+        (candidate) =>
+          candidate.platformId === identity.platformId && candidate.userId === identity.userId,
+      );
+      if (!author) throw new Error("targeted alias result is missing its author");
+      if (plan.status === "already-present") {
+        return { status: "unchanged" as const, author, ...context };
+      }
       writes += 1;
-      if (options.failWrite) {
-        throw new Error("write failed");
-      }
-      stored = state;
-    },
-    applyPersistedState() {
+      if (options.failWrite) throw new Error("write failed");
+      stored = plan.state;
       applies += 1;
+      revision += 1;
+      return {
+        status: "persisted" as const,
+        author,
+        baseRevision: context.baseRevision,
+        revision,
+        authorCount: stored.authors.length,
+        tagCount: stored.tags.length,
+      };
     },
   });
 
@@ -102,10 +119,7 @@ test("BUG-008 alias persistence requires exact member GET proof before storage w
 
 test("BUG-008 alias persistence re-reads under lock and preserves intervening state", async () => {
   const initial = stateWith(author("canonical-token"));
-  const intervening = stateWith(
-    author("canonical-token"),
-    author("intervening-user", HASH_B),
-  );
+  const intervening = stateWith(author("canonical-token"), author("intervening-user", HASH_B));
   let harness: ReturnType<typeof createHarness>;
   harness = createHarness({
     initial,
@@ -134,10 +148,7 @@ test("PLATFORM-001 alias backfill targets only the Zhihu owner when another plat
   const result = await harness.controller.persistMemberHashAlias(HASH_A);
 
   strictEqual(result.status, "persisted");
-  deepStrictEqual(harness.state().authors, [
-    youtube,
-    { ...zhihu, memberHashId: HASH_A },
-  ]);
+  deepStrictEqual(harness.state().authors, [youtube, { ...zhihu, memberHashId: HASH_A }]);
   deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 1, applies: 1 });
 });
 
@@ -148,10 +159,7 @@ test("PLATFORM-001 a non-Zhihu-only record cannot receive a Zhihu alias", async 
   });
   const harness = createHarness({ initial });
 
-  deepStrictEqual(
-    await harness.controller.persistMemberHashAlias(HASH_A),
-    { status: "failed" },
-  );
+  deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
   strictEqual(harness.state(), initial);
   deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 0, applies: 0 });
 });
@@ -165,10 +173,7 @@ test("BUG-008 alias backfill changes one field in one atomic write", async () =>
   strictEqual(result.status, "persisted");
   deepStrictEqual(harness.state(), {
     ...before,
-    authors: [
-      { ...before.authors[0]!, memberHashId: HASH_A },
-      before.authors[1],
-    ],
+    authors: [{ ...before.authors[0]!, memberHashId: HASH_A }, before.authors[1]],
   });
   deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 1, applies: 1 });
 });
@@ -186,10 +191,7 @@ test("BUG-008 an already-owned alias is idempotent", async () => {
 test("BUG-008 missing or self-identical member tokens fail before storage", async () => {
   for (const resolvedUserId of [null, HASH_A]) {
     const harness = createHarness({ resolvedUserId });
-    deepStrictEqual(
-      await harness.controller.persistMemberHashAlias(HASH_A),
-      { status: "failed" },
-    );
+    deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
     deepStrictEqual(harness.counts(), { locks: 0, reads: 0, writes: 0, applies: 0 });
   }
 });
@@ -202,10 +204,7 @@ test("BUG-008 unknown tokens and hash ownership conflicts never backfill", async
     stateWith(author("canonical-token", HASH_B)),
   ]) {
     const harness = createHarness({ initial });
-    deepStrictEqual(
-      await harness.controller.persistMemberHashAlias(HASH_A),
-      { status: "failed" },
-    );
+    deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
     strictEqual(harness.state(), initial);
     deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 0, applies: 0 });
   }
@@ -215,20 +214,14 @@ test("BUG-008 malformed state fails without a write or runtime apply", async () 
   const harness = createHarness({
     parsedState: { status: "malformed", state: createInitialState() },
   });
-  deepStrictEqual(
-    await harness.controller.persistMemberHashAlias(HASH_A),
-    { status: "failed" },
-  );
+  deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
   deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 0, applies: 0 });
 });
 
 test("BUG-008 lock and read failures do not write or apply", async () => {
   for (const options of [{ failLock: true }, { failRead: true }] as const) {
     const harness = createHarness(options);
-    deepStrictEqual(
-      await harness.controller.persistMemberHashAlias(HASH_A),
-      { status: "failed" },
-    );
+    deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
     strictEqual(harness.counts().writes, 0);
     strictEqual(harness.counts().applies, 0);
   }
@@ -237,10 +230,7 @@ test("BUG-008 lock and read failures do not write or apply", async () => {
 test("BUG-008 write failure does not apply an unpersisted alias", async () => {
   const initial = stateWith(author("canonical-token"));
   const harness = createHarness({ initial, failWrite: true });
-  deepStrictEqual(
-    await harness.controller.persistMemberHashAlias(HASH_A),
-    { status: "failed" },
-  );
+  deepStrictEqual(await harness.controller.persistMemberHashAlias(HASH_A), { status: "failed" });
   strictEqual(harness.state(), initial);
   deepStrictEqual(harness.counts(), { locks: 1, reads: 1, writes: 1, applies: 0 });
 });
