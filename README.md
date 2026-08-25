@@ -31,7 +31,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 <table>
   <tr>
-    <td><strong>Local</strong><br>Blacklist records and preferences stay in Chrome storage.</td>
+    <td><strong>Local</strong><br>Blacklist records and preferences stay in extension-owned local storage.</td>
     <td><strong>Explicit</strong><br>Nothing is blocked until you choose a tag.</td>
     <td><strong>Continuous</strong><br>New feed cards and comments are filtered as they appear.</td>
   </tr>
