@@ -103,7 +103,6 @@ git diff --check
 - Developer 完成实现和自动化检查后，将需求交给 Reviewer；审查期间可由主协调者标记为 `IN_REVIEW`。
 - Reviewer 必须按需求 ID 和验收标准独立审查代码、测试、构建、Manifest、安全性及相关快照证据。Reviewer `PASS` 后，主协调者即可将对应需求更新为 `DELIVERED`；真实浏览器验收不再是该状态的前置条件。
 - 真实浏览器验收由用户负责。用户反馈失败时，应新增或更新对应 `BUG-*`/替代需求并标为 `READY_FOR_DEV`；原需求保留 `DELIVERED` 以记录当时已通过开发与审查，除非其产品行为已被新需求取代，此时标记为 `SUPERSEDED`。
-- 未经用户明确授权，Developer 和 Reviewer 不得自行操作浏览器；未执行的浏览器检查必须明确报告为“用户验收待进行”，但不妨碍 Reviewer 基于其职责范围给出 `PASS`。
 - 新增或变更需求时应更新规格版本、状态和交付记录；已交付但被替代的行为标记为 `SUPERSEDED`，不得删除历史决策。
 
 ## Chrome 中的测试方式
@@ -120,45 +119,24 @@ git diff --check
    - 无限滚动、评论重开和动态插入不重复注入且继续过滤；
    - 若涉及知乎操作，直接作者远程 POST 与点赞者仅本地入库的边界不被破坏。
 
-修改 Manifest、background 或内容脚本后，必须重新加载扩展；修改目标页面行为后还必须刷新知乎首页。未经用户授权不得自行执行这些浏览器操作。
+修改 Manifest、background 或内容脚本后，必须重新加载扩展；修改目标页面行为后还必须刷新知乎首页。
 
-### Chrome DevTools 连接约定
+### Chrome DevTools 端口约定
 
-Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chrome DevTools 自动启动浏览器：
-
-```json
-{
-  "browser": {
-    "autoLaunch": false
-  }
-}
-```
-
-配置后直接运行 `pi`；不得再使用已弃用的 `PI_CHROME_DEVTOOLS_AUTO_LAUNCH` 环境变量。浏览器检查必须遵守：
-
-- 本项目显式覆盖用户级默认端口约定：默认只连接用户已经运行且已登录、监听于 `127.0.0.1:9223` 的 Chrome，不得默认连接 `9222`，也不得启动新的 Chrome、Chromium 或 Chrome for Testing 实例。
-- 不得创建临时浏览器 Profile，也不得通过 `bash`、`open`、`nohup` 或其他子进程绕过限制启动浏览器；`9223` 对应的浏览器和 Profile 必须由用户自行启动与管理。
-- 首次发现通过 `http://127.0.0.1:9223/json/version` 取得 `webSocketDebuggerUrl`；只接受指向同一 `127.0.0.1:9223` 且路径为 `/devtools/browser/<id>` 的 Browser WebSocket URL。
-- 只有用户明确提供其他现有端口，或为快照脚本设置 `COCOON_CHROME_DEVTOOLS_PORT` / `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT` 时，才允许覆盖默认 `9223`；不得因发现失败而自行改连 `9222`。
-- 通过 Browser WebSocket 调用 `Target.getTargets` 查找现有标签页，再使用 `Target.attachToTarget`、`flatten: true` 和带 `sessionId` 的 CDP 命令（如 `Runtime.evaluate`）检查页面。
-- `9223` 发现端点失败只表示该现有 CDP 实例不可用；应报告准确错误，不得因此启动其他浏览器、创建 Profile 或扫描其他调试端口。
-- 同一次用户授权的浏览器检查必须优先建立一个长生命周期的 Browser WebSocket，并复用同一个目标页 `sessionId` 完成全部已规划检查；不得为每个查询分别启动短命进程、重复连接或重复 attach。
-- 应先汇总需要执行的只读检查，再在单个 CDP 会话中批量完成。只有连接意外断开或目标会话失效时才允许重连。
-- 除非用户明确要求，不得导航、刷新或关闭用户已有标签页。
-- 浏览器验证报告必须区分真实观察结果与源码推断，不得把未执行的检查描述为已验证。
+- 本项目默认使用 `127.0.0.1:9223`，不得默认改用 `9222`。
+- 用户提供其他端口，或快照脚本设置 `COCOON_CHROME_DEVTOOLS_PORT` / `COCOON_CHROME_DEVTOOLS_ACTIVE_PORT` 时，使用对应端口。
 
 ### 本地知乎快照规则
 
 - 涉及知乎 DOM、选择器、字段解析或成员接口契约的开发与审查，必须先读取 `.pi/browser-snapshots-local/zhihu/latest.json` 及其指向的快照，再考虑使用 CDP 检查真实页面。
 - Developer 应以源码、测试和最新快照作为首轮实现依据；Reviewer 必须独立检查最新快照及相关代码，不能只依赖 Developer 的摘要或结论。
-- 快照不存在、格式无效、缺少相关样本，或与当前源码/线上行为冲突时，应明确报告局限；只有任务确实需要且用户允许浏览器检查时，才使用现有 Chrome 补充证据。
+- 快照不存在、格式无效、缺少相关样本，或与当前源码/线上行为冲突时，应明确报告局限；只有任务确实需要时，才使用 Chrome 补充证据。
 - 快照包含真实个人数据。终端输出和开发、审查报告只能给出字段、数量和验证结论，不得复述作者名、成员 hash、`url_token` 等真实值。
 - 仅在明确需要更新本地证据时运行 `npm run snapshot:zhihu`；脚本不得自动随构建或测试执行。
 - 快照只写入 `.pi/browser-snapshots-local/zhihu/`，该目录必须保持 Git 忽略，不得强制提交真实采集数据。
 - 快照包含真实作者名、成员 hash、资料页 `url_token` 等个人数据；不得提交、分享、上传、附加到 issue，或用于本机开发以外的任何场景；不再需要时必须删除。
 - 只提交采集脚本、纯函数测试和必要配置；`docs/` 中仅 `docs/blacklist-spec.md` 允许跟踪，不得强制加入被忽略的快照说明、真实快照或其他本地文档。
 - 采集范围必须保持用途限定和严格白名单，不得恢复标题、内容/问题 ID、跟踪数据、完整 HTML、Cookie、请求头、Storage、通知、React 内部数据、头像 URL 或无关信息流数据。
-- 采集只能连接现有 Chrome 和精确 URL `https://www.zhihu.com/` 的唯一已有标签页，不得导航、刷新、关闭页面或启动浏览器。
 - 快照是采集时的本地开发证据，不代表当前生产 DOM，不能替代用户最终浏览器验收。公开 clone 不提供被忽略的本地快照说明，开发与审查必须以本节、采集脚本和已跟踪规格为准。
 
 ## 构建约束
@@ -171,6 +149,13 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - `package.json` 和 `public/manifest.json` 的版本号应保持一致；最终 Manifest 版本必须继续来自该基础文件。
 - `scripts/build/plugin-manifest.ts` 必须严格拒绝缺失配对入口、非法/重复 ID、非法/空/重复 matches、跨插件重复 matches、额外 descriptor 字段和孤立 `plugin.ts`/`plugin.json`。
 - 构建扫描不得跟随 symlink 插件目录或入口；watch 模式下插件 registry、构建 bundle 和 Manifest 页面范围必须保持一致，失败时不得留下部分更新的 Manifest。
+
+### 版本号管理
+
+- 每次开发任务结束时，主代理必须主动判断项目版本号是否需要变更，不等待用户另行提出版本升级要求。
+- 遵循语义化版本：向后兼容的缺陷修复升级 patch，向后兼容的新功能升级 minor，破坏公开契约的变更升级 major；普通文档、仅测试、格式化、内部重构或未完成工作默认不升级版本。
+- 需要升级时，必须在同一原子改动中同步 `package.json` 与 `public/manifest.json`，并同步项目明确要求的其他版本记录；`dist/` 仍只由构建生成，不得手工修改。
+- 完成报告必须说明本次版本决策及理由。升级版本不代表自动发布或创建 Release，除非用户或项目发布流程另有明确要求。
 
 ## 站点插件架构
 
@@ -219,10 +204,8 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 - 网络、消息、长任务和可等待 UI 必须定义合理的 timeout 或取消边界。成功、超时、取消、抛错和 worker/port 中断都必须收敛到可再次操作的稳定状态，并在 `finally` 中释放锁、listener、timer、observer 和临时 DOM。
 - Service Worker 随时可能终止；黑名单权威状态写入扩展自有 IndexedDB，偏好与其他持久 Chrome 状态写入 `chrome.storage.local`，会话状态写入 `chrome.storage.session`。模块内缓存只能是可丢弃优化，事件处理必须能够从持久状态重建且保持幂等。
 
-### 外部数据、DOM 与可访问性
+### DOM 与可访问性
 
-- Storage、RPC、`postMessage`、网络 JSON、DOM dataset、文件导入和插件 descriptor 一律以 `unknown` 进入系统；先校验对象形状、精确键、类型、范围、长度、版本和 discriminant，再缩窄为领域类型。不得用类型断言代替运行时校验。
-- Schema 迁移必须幂等、失败安全并保持不变量；每个受支持旧版本、当前版本、未知未来版本、缺失/额外字段、损坏数据和重复迁移都要有测试。写回只能发生在完整验证和迁移成功之后。
 - DOM 扫描和批量更新通过 `requestAnimationFrame` 分批调度，必要时主动让出主线程；动态页面操作必须幂等，重复 observer 通知不能重复按钮、listener、请求或计数。
 - controller 必须拥有并清理自己创建的 observer、listener、timer、port 和临时节点；卸载、重挂载、抽屉关闭和页面生命周期结束后不得留下活动副作用。
 - 注入 UI 使用语义化原生控件，提供可访问名称、键盘操作、可见 focus、合理焦点恢复和状态文本；不得只靠颜色表达状态，并尊重受限尺寸、长文本和缩放。
@@ -313,7 +296,7 @@ Pi 必须通过用户级配置 `~/.pi/agent/pi-chrome-devtools.json` 禁止 Chro
 
 ## TypeScript 与代码风格
 
-- 保持 `strict` 类型检查通过，不使用 `any`；外部数据按 unknown-first 规则校验后再缩窄。
+- 保持 `strict` 类型检查通过，不使用 `any`。
 - 优先使用 `const`，仅在需要重新赋值时使用 `let`；类型导入使用 `import type` 或 inline type specifier。
 - 使用 `async/await`，不要新增 `.then()` 链；Promise 所有权、并发和失败路径遵循上文规则。
 - 不使用 `eval()`、`new Function()` 或其他违反扩展 CSP 的实现。
