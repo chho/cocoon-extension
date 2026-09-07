@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
+import { createEntryCopyPlugin } from "./scripts/build/entry-copy-plugin.ts";
 import { createExtensionBuildPlugin } from "./scripts/build/extension-build-plugin.ts";
 import { createStaticAssetsPlugin } from "./scripts/build/static-assets-plugin.ts";
 
@@ -12,6 +13,7 @@ const iconAssets = [16, 32, 48, 128].map((size) => ({
 export default defineConfig({
   publicDir: false,
   plugins: [
+    createEntryCopyPlugin(),
     createStaticAssetsPlugin({
       projectRoot: import.meta.dirname,
       assets: iconAssets,
