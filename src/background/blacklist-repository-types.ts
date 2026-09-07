@@ -1,16 +1,20 @@
 import type {
   AuthorIdentity,
-  BlacklistState,
   BlacklistedAuthor,
   CocoonTag,
   CommitInput,
   UpvoterCommitInput,
 } from "../content/blacklist-state.ts";
-
-export interface BlacklistHydration {
-  readonly state: BlacklistState;
-  readonly revision: number;
-}
+import type {
+  AuthorPageQuery,
+  AuthorPageResult,
+  IdentityMatchQuery,
+  IdentityMatchResult,
+  PlatformPageResult,
+  RevisionPageQuery,
+  TagPageResult,
+} from "./blacklist-repository-query.ts";
+import type { BlacklistTransferRepository } from "./blacklist-transfer-repository-types.ts";
 
 export interface MutationContext {
   readonly baseRevision: number;
@@ -45,6 +49,7 @@ export type AliasMutationResult = MutationContext &
 export type TagDeletionMutationResult = MutationContext & {
   readonly status: "persisted" | "protected" | "missing";
   readonly deletedTagId: string | null;
+  readonly migratedCount: number;
 };
 
 export type AuthorRemovalResult = MutationContext & {
@@ -71,7 +76,15 @@ export interface DirectPreflightInput extends AuthorIdentity {
 }
 
 export interface BlacklistRepository {
-  hydrate(): Promise<BlacklistHydration>;
+  querySummary(): Promise<{
+    readonly revision: number;
+    readonly authorCount: number;
+    readonly tagCount: number;
+  }>;
+  queryAuthorsPage(query: AuthorPageQuery): Promise<AuthorPageResult>;
+  queryTagsPage(query: RevisionPageQuery): Promise<TagPageResult>;
+  queryPlatformsPage(query: RevisionPageQuery): Promise<PlatformPageResult>;
+  queryIdentityMatches(query: IdentityMatchQuery): Promise<IdentityMatchResult>;
   commitAuthor(input: CommitInput): Promise<AuthorMutationResult>;
   backfillMemberHash(identity: AuthorIdentity, memberHashId: string): Promise<AliasMutationResult>;
   commitUpvoter(input: UpvoterCommitInput): Promise<AuthorMutationResult>;
@@ -81,5 +94,6 @@ export interface BlacklistRepository {
   restoreAuthor(author: BlacklistedAuthor): Promise<AuthorRestorationResult>;
   removeAuthors(identities: readonly AuthorIdentity[]): Promise<AuthorBatchRemovalResult>;
   renameTag(tagId: string, name: string): Promise<TagRenameResult>;
-  replaceAll(state: BlacklistState): Promise<BlacklistHydration>;
 }
+
+export type TransferCapableBlacklistRepository = BlacklistRepository & BlacklistTransferRepository;

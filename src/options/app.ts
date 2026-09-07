@@ -1,156 +1,145 @@
-import {
-  MAX_BLACKLIST_TRANSFER_BYTES,
-  createBlacklistTransferFilename,
-  parseBlacklistTransferJson,
-  serializeBlacklistTransfer,
-  type BlacklistAuthorDto,
-  type BlacklistAuthorIdentityDto,
-  type BlacklistSnapshotDto,
-  type BlacklistTagDto,
-  type BlacklistTransferEnvelope,
+import type {
+  BlacklistSummaryDto,
+  BlacklistTagUsageDto,
+} from "../core/blacklist-query-rpc-contract.ts";
+import type {
+  BlacklistAuthorDto,
+  BlacklistAuthorIdentityDto,
+  BlacklistRpcResponse,
+  BlacklistTagDto,
 } from "../core/blacklist-rpc-contract.ts";
 import {
   parseBlacklistRevisionChange,
   type BlacklistChangeEventSource,
 } from "../core/blacklist-revision-contract.ts";
-import type { BlacklistRpcClient } from "../ui/background-rpc.ts";
-import {
-  MANAGEMENT_BATCH_SIZE,
-  formatLocalTime,
-  formatPlatformId,
-  formatSource,
-  managementResults,
-  nextLoadedCount,
-  summarizeBlacklist,
-  type AuthorListItem,
-  type TimeSortDirection,
-} from "../ui/blacklist-view-model.ts";
-import { createCommittedSnapshotController } from "../ui/committed-snapshot-controller.ts";
-import { createLatestRefreshController } from "../ui/latest-refresh-controller.ts";
-import { loadBlacklistSnapshot } from "../ui/blacklist-snapshot-loader.ts";
-import { createAuthorProfileUrl } from "../ui/zhihu-profile-url.ts";
+import type { StrictBlacklistRpcClient } from "../ui/background-rpc.ts";
+import type { BlacklistTransferRpcClient } from "../ui/blacklist-transfer-rpc.ts";
+import type { AuthorListItem, TimeSortDirection } from "../ui/blacklist-list-values.ts";
 import { renderAuthorListRows, resetAuthorListViewport } from "./author-list-view.ts";
 import { createConfirmationDialogController } from "./dialog-controller.ts";
-import { renderTagMaintenanceView } from "./tag-maintenance-view.ts";
 import {
-  clearTransferError,
-  showTransferError,
-  transferFailureMessage,
-} from "./transfer-feedback.ts";
+  renderOptionsPlatformFilter,
+  renderOptionsTagFilter,
+  resolveOptionsElements,
+  requiredOptionsElement,
+  type OptionsElements,
+} from "./options-app-view.ts";
+import { createOptionsAuthorRow } from "./options-author-row.ts";
+import { createOptionsSelectionController } from "./options-selection-controller.ts";
+import {
+  applyDeletedTagState,
+  applyRemovedAuthorState,
+  applyRenamedTagState,
+  deletedTagCount,
+  mutationSummary,
+  removedAuthorMatches,
+} from "./options-mutation-state.ts";
+import type { OptionsAuthorQuery, OptionsBoundedState } from "./options-query-client.ts";
+import {
+  createOptionsQueryCoordinator,
+  optionsIdentityKey,
+  type OptionsAuthorResults,
+  type OptionsQueryCoordinator,
+} from "./options-query-coordinator.ts";
+import {
+  captureTagMaintenanceFocus,
+  renderTagMaintenanceView,
+  restoreTagMaintenanceFocus,
+} from "./tag-maintenance-view.ts";
+import {
+  createOptionsTransferUiController,
+  type OptionsTransferUiController,
+} from "./transfer-ui-controller.ts";
 
 export interface OptionsAppDependencies {
   readonly document: Document;
-  readonly rpc: BlacklistRpcClient;
+  readonly rpc: StrictBlacklistRpcClient;
+  readonly transferRpc: BlacklistTransferRpcClient;
   readonly storageChanges: BlacklistChangeEventSource;
   readonly requestFrame: (callback: () => void) => number;
   readonly readFileText: (file: File) => Promise<string>;
-  readonly downloadJson: (json: string, filename: string) => void;
+  readonly downloadJson: (parts: readonly BlobPart[], filename: string) => void;
 }
 
 export interface OptionsApp {
   refresh(): Promise<void>;
 }
 
-type TagFocusRole = "rename" | "delete";
+class OptionsApplication implements OptionsApp {
+  private readonly dependencies: OptionsAppDependencies;
+  private readonly elements: OptionsElements;
+  private readonly queryCoordinator: OptionsQueryCoordinator;
+  private readonly transferController: OptionsTransferUiController;
+  private readonly selectionController;
+  private readonly dialogController;
+  private summary: BlacklistSummaryDto | null = null;
+  private tags: readonly BlacklistTagUsageDto[] = [];
+  private platforms: readonly string[] = [];
+  private authorItems: readonly AuthorListItem[] = [];
+  private authorTotalCount = 0;
+  private writesEnabled = false;
+  private renderFrame: number | null = null;
+  private selectedTagId: string | null = null;
+  private selectedPlatformId: string | null = null;
+  private readonly tagIdByFilterToken = new Map<string, string>();
+  private readonly platformIdByFilterToken = new Map<string, string>();
+  private readonly pendingTagIds = new Set<string>();
 
-interface TagFocusDescriptor {
-  readonly tagId: string;
-  readonly rowIndex: number;
-  readonly role: TagFocusRole;
-  readonly ariaLabel: string | null;
-}
-
-function requiredElement<ElementType extends HTMLElement>(
-  document: Document,
-  selector: string,
-): ElementType {
-  const element = document.querySelector<ElementType>(selector);
-  if (!element) throw new Error(`Options element is missing: ${selector}`);
-  return element;
-}
-
-export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsApp {
-  const { document, rpc } = dependencies;
-  const authorTotal = requiredElement<HTMLElement>(document, "#author-total");
-  const tagTotal = requiredElement<HTMLElement>(document, "#tag-total");
-  const pageMessage = requiredElement<HTMLElement>(document, "#page-message");
-  const writeError = requiredElement<HTMLElement>(document, "#write-error");
-  const transferPanel = requiredElement<HTMLElement>(document, "#transfer-panel");
-  const exportData = requiredElement<HTMLButtonElement>(document, "#export-data");
-  const importFile = requiredElement<HTMLInputElement>(document, "#import-file");
-  const importMode = requiredElement<HTMLFieldSetElement>(document, "#import-mode");
-  const importData = requiredElement<HTMLButtonElement>(document, "#import-data");
-  const transferStatus = requiredElement<HTMLElement>(document, "#transfer-status");
-  const transferError = requiredElement<HTMLElement>(document, "#transfer-error");
-  const authorSearch = requiredElement<HTMLInputElement>(document, "#author-search");
-  const tagFilter = requiredElement<HTMLSelectElement>(document, "#tag-filter");
-  const platformFilter = requiredElement<HTMLSelectElement>(document, "#platform-filter");
-  const timeSort = requiredElement<HTMLSelectElement>(document, "#time-sort");
-  const removeSelected = requiredElement<HTMLButtonElement>(document, "#remove-selected");
-  const viewport = requiredElement<HTMLElement>(document, "#author-viewport");
-  const authorList = requiredElement<HTMLElement>(document, "#author-list");
-  const listSummary = requiredElement<HTMLElement>(document, "#list-summary");
-  const tagsHeading = requiredElement<HTMLElement>(document, "#tags-heading");
-  const tagSummary = requiredElement<HTMLElement>(document, "#tag-summary");
-  const tagList = requiredElement<HTMLElement>(document, "#tag-list");
-
-  const dialogController = createConfirmationDialogController({
-    dialog: requiredElement<HTMLDialogElement>(document, "#batch-dialog"),
-    description: requiredElement<HTMLElement>(document, "#batch-dialog-description"),
-    cancel: requiredElement<HTMLButtonElement>(document, "#batch-cancel"),
-    confirm: requiredElement<HTMLButtonElement>(document, "#batch-confirm"),
-  });
-  const replaceDialogController = createConfirmationDialogController({
-    dialog: requiredElement<HTMLDialogElement>(document, "#replace-dialog"),
-    description: requiredElement<HTMLElement>(document, "#replace-dialog-description"),
-    cancel: requiredElement<HTMLButtonElement>(document, "#replace-cancel"),
-    confirm: requiredElement<HTMLButtonElement>(document, "#replace-confirm"),
-  });
-
-  let snapshot: BlacklistSnapshotDto | null = null;
-  let writesEnabled = false;
-  let loadedCount = MANAGEMENT_BATCH_SIZE;
-  let filteredItems: readonly AuthorListItem[] = [];
-  let renderFrame: number | null = null;
-  let selectedTagId: string | null = null;
-  let selectedPlatformId: string | null = null;
-  let transfer: BlacklistTransferEnvelope | null = null;
-  let transferPending = false;
-  let fileReadSequence = 0;
-  const selectedIdentities = new Map<string, BlacklistAuthorIdentityDto>();
-  const tagIdByFilterToken = new Map<string, string>();
-  const platformIdByFilterToken = new Map<string, string>();
-  const pendingTagIds = new Set<string>();
-
-  function writesAvailable(): boolean {
-    return writesEnabled && !transferPending;
+  constructor(dependencies: OptionsAppDependencies) {
+    const { document, rpc } = dependencies;
+    this.dependencies = dependencies;
+    this.elements = resolveOptionsElements(document);
+    this.selectionController = createOptionsSelectionController({
+      action: this.elements.removeSelected,
+      onLimitReached: (limit) => {
+        this.showWriteError(`一次最多选择 ${limit} 位作者。`);
+        this.elements.writeError.focus();
+      },
+    });
+    this.dialogController = createConfirmationDialogController({
+      dialog: requiredOptionsElement(document, "#batch-dialog"),
+      description: requiredOptionsElement(document, "#batch-dialog-description"),
+      cancel: requiredOptionsElement(document, "#batch-cancel"),
+      confirm: requiredOptionsElement(document, "#batch-confirm"),
+    });
+    this.queryCoordinator = createOptionsQueryCoordinator(rpc, {
+      currentQuery: () => this.currentAuthorQuery(),
+      applyFacets: (state) => this.applyBoundedFacets(state),
+      applyAuthors: (results) => this.applyAuthorResults(results),
+      clearAuthors: () => this.clearAuthorResults(),
+      fail: () => this.showUnreadableStorage(),
+    });
+    this.transferController = createOptionsTransferUiController({
+      document,
+      rpc: dependencies.transferRpc,
+      readFileText: dependencies.readFileText,
+      downloadJson: dependencies.downloadJson,
+      reloadBounded: () => this.reloadBoundedForTransfer(),
+      showUnreadableStorage: () => this.showUnreadableStorage(),
+    });
+    this.bindEvents();
+    void this.refresh();
   }
-
-  function updateBatchAction(): void {
-    removeSelected.textContent = `解除所选（${selectedIdentities.size}）`;
-    removeSelected.disabled = !writesEnabled || selectedIdentities.size === 0;
+  refresh(): Promise<void> {
+    return this.queryCoordinator.refresh();
   }
-
-  function updateTransferControls(): void {
-    exportData.disabled = !writesEnabled || transferPending;
-    importFile.disabled = !writesEnabled || transferPending;
-    importMode.disabled = !writesEnabled || transferPending;
-    importData.disabled = !writesEnabled || transferPending || transfer === null;
-    if (transferPending) transferPanel.setAttribute("aria-busy", "true");
-    else transferPanel.removeAttribute("aria-busy");
+  private currentAuthorQuery(): OptionsAuthorQuery {
+    return {
+      search: this.elements.authorSearch.value.trim(),
+      tagId: this.selectedTagId,
+      platformId: this.selectedPlatformId,
+      direction: this.elements.timeSort.value as TimeSortDirection,
+    };
   }
-
-  function showWriteError(message = "更改未保存，请重试。"): void {
-    writeError.textContent = message;
-    writeError.hidden = false;
+  private showWriteError(message = "更改未保存，请重试。"): void {
+    this.elements.writeError.textContent = message;
+    this.elements.writeError.hidden = false;
   }
-
-  function clearWriteError(): void {
-    writeError.hidden = true;
+  private clearWriteError(): void {
+    this.elements.writeError.hidden = true;
   }
-
-  function reflectTagPendingState(tagId: string, pending: boolean): void {
-    const row = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row")).find(
+  private reflectTagPendingState(tagId: string, pending: boolean): void {
+    const row = Array.from(this.elements.tagList.querySelectorAll<HTMLElement>(".tag-row")).find(
       (candidate) => candidate.dataset.tagId === tagId,
     );
     if (!row) return;
@@ -164,547 +153,345 @@ export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsA
     const input = row.querySelector<HTMLInputElement>("input");
     if (input) input.readOnly = pending;
   }
-
-  function beginTagMutation(tagId: string): boolean {
-    if (pendingTagIds.has(tagId)) return false;
-    pendingTagIds.add(tagId);
-    reflectTagPendingState(tagId, true);
+  private beginTagMutation(tagId: string): boolean {
+    if (this.pendingTagIds.has(tagId)) return false;
+    this.pendingTagIds.add(tagId);
+    this.reflectTagPendingState(tagId, true);
     return true;
   }
-
-  function endTagMutation(tagId: string): void {
-    pendingTagIds.delete(tagId);
-    reflectTagPendingState(tagId, false);
+  private endTagMutation(tagId: string): void {
+    this.pendingTagIds.delete(tagId);
+    this.reflectTagPendingState(tagId, false);
   }
-
-  function createAuthorRow(item: AuthorListItem): HTMLElement {
-    const { author, tag } = item;
-    const row = document.createElement("div");
-    row.className = "author-row";
-    row.setAttribute("role", "listitem");
-    const selection = document.createElement("input");
-    const identity = {
-      platformId: author.platformId,
-      userId: author.userId,
-    };
-    const key = JSON.stringify([identity.platformId, identity.userId]);
-    selection.type = "checkbox";
-    selection.checked = selectedIdentities.has(key);
-    selection.setAttribute("aria-label", `选择 ${author.authorName || "未知作者"}`);
-    selection.disabled = !writesEnabled;
-    selection.addEventListener("change", () => {
-      if (selection.checked) selectedIdentities.set(key, identity);
-      else selectedIdentities.delete(key);
-      updateBatchAction();
+  private createAuthorRow(item: AuthorListItem): HTMLElement {
+    const identity = { platformId: item.author.platformId, userId: item.author.userId };
+    const key = optionsIdentityKey(identity);
+    return createOptionsAuthorRow({
+      document: this.dependencies.document,
+      item,
+      writesEnabled: this.writesEnabled,
+      selected: this.selectionController.has(key),
+      onSelectionChange: (nextIdentity, selected) =>
+        this.selectionController.change(key, nextIdentity, selected),
+      onRemove: (author, button) => {
+        void this.removeOne(author, button);
+      },
     });
-    const profileUrl = createAuthorProfileUrl(author.platformId, author.userId);
-    const name = profileUrl ? document.createElement("a") : document.createElement("span");
-    name.className = "author-name";
-    name.textContent = author.authorName || "未知作者";
-    if (name instanceof document.defaultView!.HTMLAnchorElement) {
-      name.href = profileUrl!;
-      name.target = "_blank";
-      name.rel = "noopener";
-    }
-    const tagName = document.createElement("span");
-    tagName.className = "tag-name";
-    tagName.textContent = tag.name;
-    const platform = document.createElement("span");
-    platform.className = "platform-name";
-    platform.textContent = formatPlatformId(author.platformId);
-    const source = document.createElement("span");
-    source.className = "source-name";
-    source.textContent = formatSource(author.source);
-    const time = document.createElement("time");
-    time.textContent = formatLocalTime(author.blacklistedAt);
-    if (author.blacklistedAt) time.dateTime = author.blacklistedAt;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "danger-text";
-    remove.textContent = "解除屏蔽";
-    remove.setAttribute("aria-label", `解除屏蔽 ${author.authorName || "未知作者"}`);
-    remove.disabled = !writesEnabled;
-    remove.addEventListener("click", () => {
-      void removeOne(author, remove);
-    });
-    row.append(selection, name, tagName, platform, source, time, remove);
-    return row;
   }
-
-  function renderAuthors(): void {
-    renderFrame = null;
-    if (!snapshot) {
-      authorList.replaceChildren();
-      filteredItems = [];
-      listSummary.textContent = "";
+  private renderAuthors(): void {
+    this.renderFrame = null;
+    if (!this.summary) {
+      this.elements.authorList.replaceChildren();
+      this.elements.listSummary.textContent = "";
       return;
     }
-    filteredItems = managementResults(
-      snapshot,
-      authorSearch.value,
-      selectedTagId,
-      selectedPlatformId,
-      timeSort.value as TimeSortDirection,
-    );
     const rendered = renderAuthorListRows({
-      list: authorList,
-      items: filteredItems,
-      loadedCount,
-      scrollTop: viewport.scrollTop,
-      viewportHeight: viewport.clientHeight,
-      createRow: createAuthorRow,
-      focusFallback: viewport,
+      list: this.elements.authorList,
+      items: this.authorItems,
+      loadedCount: this.authorItems.length,
+      candidateCount: this.authorTotalCount,
+      scrollTop: this.elements.viewport.scrollTop,
+      viewportHeight: this.elements.viewport.clientHeight,
+      createRow: (item) => this.createAuthorRow(item),
+      focusFallback: this.elements.viewport,
     });
-    listSummary.textContent =
-      rendered.loadedCount < filteredItems.length
-        ? `已载入 ${rendered.loadedCount} / ${filteredItems.length} 位作者`
-        : `共 ${filteredItems.length} 位作者`;
+    this.elements.listSummary.textContent =
+      rendered.loadedCount < this.authorTotalCount
+        ? `已载入 ${rendered.loadedCount} / ${this.authorTotalCount} 位作者`
+        : `共 ${this.authorTotalCount} 位作者`;
   }
-
-  function scheduleAuthorRender(): void {
-    if (renderFrame !== null) return;
-    renderFrame = dependencies.requestFrame(renderAuthors);
+  private scheduleAuthorRender(): void {
+    if (this.renderFrame !== null) return;
+    this.renderFrame = this.dependencies.requestFrame(() => this.renderAuthors());
   }
-
-  function resetAuthorList(): void {
-    loadedCount = resetAuthorListViewport(viewport);
-    selectedIdentities.clear();
-    updateBatchAction();
-    renderAuthors();
+  private clearAuthorResults(): void {
+    resetAuthorListViewport(this.elements.viewport);
+    this.authorItems = [];
+    this.authorTotalCount = 0;
+    this.selectionController.clear();
+    this.renderAuthors();
   }
-
-  function renderTagFilter(): void {
-    tagIdByFilterToken.clear();
-    const allTags = document.createElement("option");
-    allTags.value = "";
-    allTags.textContent = "全部标签";
-    tagFilter.replaceChildren(allTags);
-    if (!snapshot) return;
-    if (!snapshot.tags.some((tag) => tag.tagId === selectedTagId)) {
-      selectedTagId = null;
-    }
-    let selectedToken = "";
-    snapshot.tags.forEach((tag, index) => {
-      const token = `tag-filter-${index + 1}`;
-      tagIdByFilterToken.set(token, tag.tagId);
-      const option = document.createElement("option");
-      option.value = token;
-      option.textContent = tag.name;
-      tagFilter.add(option);
-      if (tag.tagId === selectedTagId) selectedToken = token;
+  private applyAuthorResults(results: OptionsAuthorResults): void {
+    this.authorItems = results.items;
+    this.authorTotalCount = results.totalCount;
+    this.renderAuthors();
+  }
+  private renderTagFilter(): void {
+    this.selectedTagId = renderOptionsTagFilter({
+      document: this.dependencies.document,
+      select: this.elements.tagFilter,
+      tags: this.tags,
+      selectedTagId: this.selectedTagId,
+      tokens: this.tagIdByFilterToken,
     });
-    tagFilter.value = selectedToken;
   }
-
-  function renderPlatformFilter(): void {
-    platformIdByFilterToken.clear();
-    const allPlatforms = document.createElement("option");
-    allPlatforms.value = "";
-    allPlatforms.textContent = "全部站点";
-    platformFilter.replaceChildren(allPlatforms);
-    if (!snapshot) return;
-    const platformIds = [...new Set(snapshot.authors.map((author) => author.platformId))].sort(
-      (left, right) =>
-        formatPlatformId(left).localeCompare(formatPlatformId(right), "zh-CN") ||
-        left.localeCompare(right),
-    );
-    if (!platformIds.includes(selectedPlatformId ?? "")) {
-      selectedPlatformId = null;
-    }
-    let selectedToken = "";
-    platformIds.forEach((platformId, index) => {
-      const token = `platform-filter-${index + 1}`;
-      platformIdByFilterToken.set(token, platformId);
-      const option = document.createElement("option");
-      option.value = token;
-      option.textContent = formatPlatformId(platformId);
-      platformFilter.add(option);
-      if (platformId === selectedPlatformId) selectedToken = token;
+  private renderPlatformFilter(): void {
+    this.selectedPlatformId = renderOptionsPlatformFilter({
+      document: this.dependencies.document,
+      select: this.elements.platformFilter,
+      platforms: this.platforms,
+      selectedPlatformId: this.selectedPlatformId,
+      tokens: this.platformIdByFilterToken,
     });
-    platformFilter.value = selectedToken;
   }
-
-  function captureTagFocus(): TagFocusDescriptor | null {
-    const active = document.activeElement;
-    if (!active || !tagList.contains(active)) return null;
-    const row = active.closest<HTMLElement>(".tag-row");
-    if (!row?.dataset.tagId) return null;
-    const rows = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row"));
-    return {
-      tagId: row.dataset.tagId,
-      rowIndex: Math.max(0, rows.indexOf(row)),
-      role: active.matches(".tag-delete") ? "delete" : "rename",
-      ariaLabel: active.getAttribute("aria-label"),
-    };
-  }
-
-  function restoreTagFocus(descriptor: TagFocusDescriptor | null): void {
-    if (!descriptor) return;
-    const buttons = Array.from(tagList.querySelectorAll<HTMLButtonElement>("button"));
-    const exact = descriptor.ariaLabel
-      ? buttons.find((button) => button.getAttribute("aria-label") === descriptor.ariaLabel)
-      : undefined;
-    const rows = Array.from(tagList.querySelectorAll<HTMLElement>(".tag-row"));
-    const sameTag = rows.find((row) => row.dataset.tagId === descriptor.tagId);
-    const fallbackRow =
-      sameTag ?? rows[Math.min(descriptor.rowIndex, Math.max(0, rows.length - 1))];
-    const roleSelector =
-      descriptor.role === "delete" ? ".tag-delete" : "button[aria-label^='重命名标签 ']";
-    const equivalent = fallbackRow?.querySelector<HTMLButtonElement>(roleSelector);
-    (exact ?? equivalent ?? (writeError.hidden ? tagsHeading : writeError)).focus();
-  }
-
-  function renderTags(): void {
-    const focus = captureTagFocus();
-    if (!snapshot) {
-      tagSummary.textContent = "— 个自定义标签";
-      tagList.replaceChildren();
-      restoreTagFocus(focus);
+  private renderTags(): void {
+    const focus = captureTagMaintenanceFocus(this.dependencies.document, this.elements.tagList);
+    const focusFallback = this.elements.writeError.hidden
+      ? this.elements.tagsHeading
+      : this.elements.writeError;
+    if (!this.summary) {
+      this.elements.tagSummary.textContent = "— 个自定义标签";
+      this.elements.tagList.replaceChildren();
+      restoreTagMaintenanceFocus(this.elements.tagList, focus, focusFallback);
       return;
     }
     renderTagMaintenanceView({
-      container: tagList,
-      summary: tagSummary,
-      tags: snapshot.tags,
-      authors: snapshot.authors,
-      writesEnabled,
-      pendingTagIds,
-      onRename(tag, name, button) {
-        void renameTag(tag, name, button);
-      },
-      onDelete(tag, button) {
-        void deleteTag(tag, button);
-      },
+      container: this.elements.tagList,
+      summary: this.elements.tagSummary,
+      tags: this.tags,
+      writesEnabled: this.writesEnabled,
+      pendingTagIds: this.pendingTagIds,
+      onRename: (tag, name) => void this.renameTag(tag, name),
+      onDelete: (tag) => void this.deleteTag(tag),
     });
-    restoreTagFocus(focus);
+    restoreTagMaintenanceFocus(this.elements.tagList, focus, focusFallback);
   }
 
-  function applySuccessfulSnapshot(next: BlacklistSnapshotDto): void {
-    snapshot = next;
-    writesEnabled = true;
-    selectedIdentities.clear();
-    pageMessage.hidden = true;
-    const summary = summarizeBlacklist(next);
-    authorTotal.textContent = String(summary.authorCount);
-    tagTotal.textContent = String(summary.tagCount);
-    renderTagFilter();
-    renderPlatformFilter();
-    renderTags();
-    resetAuthorList();
-    updateTransferControls();
+  private applyBoundedFacets(state: OptionsBoundedState): void {
+    this.summary = state.summary;
+    this.tags = state.tags;
+    this.platforms = state.platforms;
+    this.writesEnabled = true;
+    this.selectionController.setWritesEnabled(true);
+    this.selectionController.clear();
+    this.elements.pageMessage.hidden = true;
+    this.elements.authorTotal.textContent = String(state.summary.authorCount);
+    this.elements.tagTotal.textContent = String(state.summary.tagCount);
+    this.renderTagFilter();
+    this.renderPlatformFilter();
+    this.renderTags();
+    resetAuthorListViewport(this.elements.viewport);
+    this.transferController.setStorageAvailable(true);
   }
 
-  function showUnreadableStorage(): void {
-    refreshController.invalidate();
-    snapshot = null;
-    writesEnabled = false;
-    selectedIdentities.clear();
-    pageMessage.hidden = false;
-    pageMessage.textContent = "本地数据无法读取，Cocoon 未进行修改。";
-    authorTotal.textContent = "—";
-    tagTotal.textContent = "—";
-    renderTagFilter();
-    renderPlatformFilter();
-    renderTags();
-    renderAuthors();
-    updateBatchAction();
-    updateTransferControls();
+  private showUnreadableStorage(): void {
+    this.summary = null;
+    this.tags = [];
+    this.platforms = [];
+    this.authorItems = [];
+    this.authorTotalCount = 0;
+    this.writesEnabled = false;
+    this.selectionController.setWritesEnabled(false);
+    this.selectionController.clear();
+    this.elements.pageMessage.hidden = false;
+    this.elements.pageMessage.textContent = "本地数据无法读取，Cocoon 未进行修改。";
+    this.elements.authorTotal.textContent = "—";
+    this.elements.tagTotal.textContent = "—";
+    this.renderTagFilter();
+    this.renderPlatformFilter();
+    this.renderTags();
+    this.renderAuthors();
+    this.transferController.setStorageAvailable(false);
   }
 
-  const loadSnapshot = async () => loadBlacklistSnapshot(rpc);
-  const committedSnapshots = createCommittedSnapshotController(
-    applySuccessfulSnapshot,
-    loadSnapshot,
-  );
-  const refreshController = createLatestRefreshController<BlacklistSnapshotDto>({
-    load: loadSnapshot,
-    apply: committedSnapshots.applyRefresh,
-    fail: showUnreadableStorage,
-  });
+  private async reloadBoundedForTransfer(): Promise<boolean> {
+    await this.refresh();
+    return this.writesEnabled;
+  }
 
-  async function finishMutationFailure(
-    storageUnreadable: boolean,
-    message?: string,
-  ): Promise<void> {
-    showWriteError(message);
+  private async finishMutationFailure(storageUnreadable: boolean, message?: string): Promise<void> {
+    this.showWriteError(message);
     if (storageUnreadable) {
-      showUnreadableStorage();
+      this.showUnreadableStorage();
       return;
     }
-    await refreshController.request();
+    await this.refresh();
   }
 
-  function setTransferPending(pending: boolean): void {
-    transferPending = pending;
-    updateTransferControls();
+  private async acceptMutationSummary(response: BlacklistRpcResponse): Promise<boolean> {
+    const next = mutationSummary(response);
+    if (!next) {
+      await this.finishMutationFailure(false);
+      return false;
+    }
+    if (!(await this.queryCoordinator.acceptMutationSummary(next))) return false;
+    this.summary = next;
+    this.elements.authorTotal.textContent = String(next.authorCount);
+    this.elements.tagTotal.textContent = String(next.tagCount);
+    return true;
   }
 
-  async function exportTransfer(): Promise<void> {
-    if (!writesAvailable()) return;
-    clearTransferError(transferError);
-    transferStatus.textContent = "正在准备导出…";
-    setTransferPending(true);
-    try {
-      const response = await rpc.request("export-json");
-      const exported = response.data.transfer;
-      if (!response.ok || !exported) {
-        transferStatus.textContent = "未导出数据。";
-        if (response.error === "storage-unreadable") {
-          showUnreadableStorage();
-        }
-        showTransferError(
-          transferError,
-          response.error === "storage-unreadable"
-            ? "本地数据无法读取，Cocoon 未进行修改。"
-            : response.error === "transfer-too-large"
-              ? "导出数据超过 8 MiB 限制。"
-              : "无法导出本地数据，请重试。",
-        );
-        return;
-      }
-      const json = serializeBlacklistTransfer(exported);
-      const filename = createBlacklistTransferFilename(exported.exportedAt);
-      if (!json || !filename) {
-        transferStatus.textContent = "未导出数据。";
-        showTransferError(transferError, "无法导出本地数据，请重试。");
-        return;
-      }
-      dependencies.downloadJson(json, filename);
-      transferStatus.textContent = `已导出 ${exported.authors.length} 位作者和 ${exported.tags.length} 个标签。`;
-      transferStatus.focus();
-    } catch {
-      transferStatus.textContent = "未导出数据。";
-      showTransferError(transferError, "无法导出本地数据，请重试。");
-    } finally {
-      setTransferPending(false);
-    }
-  }
-
-  async function importTransfer(operation: "import-merge" | "import-replace"): Promise<void> {
-    const selectedTransfer = transfer;
-    if (!writesAvailable() || !selectedTransfer) return;
-    clearTransferError(transferError);
-    clearWriteError();
-    transferStatus.textContent =
-      operation === "import-merge" ? "正在合并导入…" : "正在替换本地记录…";
-    setTransferPending(true);
-    const marker = committedSnapshots.beginMutation();
-    try {
-      const response = await rpc.request(operation, {
-        transfer: selectedTransfer,
-      });
-      if (!response.ok || !response.data.snapshot) {
-        transferStatus.textContent = "未导入数据。";
-        if (response.error === "storage-unreadable") {
-          showUnreadableStorage();
-        } else {
-          await refreshController.request();
-        }
-        showTransferError(transferError, transferFailureMessage(response.error));
-        return;
-      }
-      marker(response.data.snapshot, refreshController.invalidate);
-      transfer = null;
-      importFile.value = "";
-      transferStatus.textContent =
-        operation === "import-merge"
-          ? `合并完成；文件包含 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`
-          : `已替换为 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签。`;
-      transferStatus.focus();
-    } catch {
-      transferStatus.textContent = "未导入数据。";
-      await refreshController.request();
-      showTransferError(transferError, "导入未保存，请重试。");
-    } finally {
-      setTransferPending(false);
-    }
-  }
-
-  async function readSelectedTransferFile(): Promise<void> {
-    const sequence = ++fileReadSequence;
-    const file = importFile.files?.[0] ?? null;
-    transfer = null;
-    clearTransferError(transferError);
-    if (!file) {
-      transferStatus.textContent = "请选择 Cocoon 导出的 JSON 文件。";
-      updateTransferControls();
-      return;
-    }
-    if (file.size > MAX_BLACKLIST_TRANSFER_BYTES) {
-      transferStatus.textContent = "未选择可导入的数据。";
-      showTransferError(transferError, "导入文件超过 8 MiB 限制。");
-      updateTransferControls();
-      return;
-    }
-
-    setTransferPending(true);
-    transferStatus.textContent = "正在校验导入文件…";
-    try {
-      const json = await dependencies.readFileText(file);
-      if (sequence !== fileReadSequence) return;
-      const parsed = parseBlacklistTransferJson(json);
-      if (parsed.status !== "valid") {
-        transferStatus.textContent = "未选择可导入的数据。";
-        showTransferError(
-          transferError,
-          parsed.status === "too-large"
-            ? "导入文件超过 8 MiB 限制。"
-            : "导入文件无效或格式不受支持。",
-        );
-        return;
-      }
-      transfer = parsed.transfer;
-      transferStatus.textContent = `已校验 ${transfer.authors.length} 位作者和 ${transfer.tags.length} 个标签。`;
-    } catch {
-      if (sequence !== fileReadSequence) return;
-      transferStatus.textContent = "未选择可导入的数据。";
-      showTransferError(transferError, "无法读取导入文件，请重新选择。");
-    } finally {
-      if (sequence === fileReadSequence) {
-        setTransferPending(false);
-      }
-    }
-  }
-
-  function requestImport(): void {
-    if (!writesAvailable() || !transfer) return;
-    const mode = document.querySelector<HTMLInputElement>(
-      "input[name='import-mode']:checked",
-    )?.value;
-    if (mode !== "replace") {
-      void importTransfer("import-merge");
-      return;
-    }
-    const selectedTransfer = transfer;
-    replaceDialogController.openWithDescription(
-      `将用文件中的 ${selectedTransfer.authors.length} 位作者和 ${selectedTransfer.tags.length} 个标签替换当前列表。现有设置会保留。`,
-      importData,
-      () => {
-        if (transfer === selectedTransfer) {
-          void importTransfer("import-replace");
-        }
-      },
+  private applyRenamedTag(tag: BlacklistTagDto): void {
+    this.tags = applyRenamedTagState(this.tags, tag);
+    this.queryCoordinator.updateLoadedAuthors((items) =>
+      items.map((item) => (item.tag.tagId === tag.tagId ? { ...item, tag } : item)),
     );
+    this.renderTagFilter();
+    this.renderTags();
   }
 
-  async function removeOne(author: BlacklistAuthorDto, button: HTMLButtonElement): Promise<void> {
-    if (!writesEnabled) return;
-    clearWriteError();
+  private applyDeletedTag(tagId: string, migratedCount: number): boolean {
+    const next = applyDeletedTagState(this.tags, tagId, migratedCount);
+    if (!next) return false;
+    this.tags = next.tags;
+    this.queryCoordinator.updateLoadedAuthors((items) =>
+      items.map((item) =>
+        item.author.tagId === tagId
+          ? { author: { ...item.author, tagId: next.replacement.tagId }, tag: next.replacement }
+          : item,
+      ),
+    );
+    if (this.selectedTagId === tagId) this.selectedTagId = null;
+    this.renderTagFilter();
+    this.renderTags();
+    return true;
+  }
+
+  private applyRemovedAuthors(identities: readonly BlacklistAuthorIdentityDto[]): void {
+    const next = applyRemovedAuthorState(
+      this.tags,
+      this.authorItems,
+      this.authorTotalCount,
+      identities,
+    );
+    this.tags = next.tags;
+    this.queryCoordinator.updateLoadedAuthors(() => next.items, next.totalCount);
+    this.selectionController.clear();
+    this.renderTags();
+  }
+
+  private async removeOne(author: BlacklistAuthorDto, button: HTMLButtonElement): Promise<void> {
+    if (!this.writesEnabled) return;
+    this.clearWriteError();
     button.disabled = true;
-    const marker = committedSnapshots.beginMutation();
     try {
-      const response = await rpc.removeOne({
+      const response = await this.dependencies.rpc.removeOne({
         platformId: author.platformId,
         userId: author.userId,
       });
-      if (!response.ok || !response.data.snapshot) {
-        await finishMutationFailure(response.error === "storage-unreadable");
+      if (!removedAuthorMatches(response, author)) {
+        await this.finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      marker(response.data.snapshot, refreshController.invalidate);
-      authorSearch.focus();
+      if (!(await this.acceptMutationSummary(response))) return;
+      this.applyRemovedAuthors([{ platformId: author.platformId, userId: author.userId }]);
+      await this.queryCoordinator.reloadAuthors();
+      this.elements.authorSearch.focus();
     } catch {
-      await finishMutationFailure(false);
+      await this.finishMutationFailure(false);
     }
   }
 
-  async function removeMany(identities: readonly BlacklistAuthorIdentityDto[]): Promise<void> {
-    if (!writesEnabled) return;
-    clearWriteError();
-    removeSelected.disabled = true;
-    const marker = committedSnapshots.beginMutation();
+  private async removeMany(identities: readonly BlacklistAuthorIdentityDto[]): Promise<void> {
+    if (!this.writesEnabled) return;
+    this.clearWriteError();
+    this.elements.removeSelected.disabled = true;
     try {
-      const response = await rpc.request("remove-many", { identities });
-      if (!response.ok || !response.data.snapshot) {
-        await finishMutationFailure(response.error === "storage-unreadable");
+      const response = await this.dependencies.rpc.request("remove-many", { identities });
+      if (!response.ok || response.data.removedCount !== identities.length) {
+        await this.finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      marker(response.data.snapshot, refreshController.invalidate);
-      removeSelected.focus();
+      if (!(await this.acceptMutationSummary(response))) return;
+      this.applyRemovedAuthors(identities);
+      await this.queryCoordinator.reloadAuthors();
+      this.elements.removeSelected.focus();
     } catch {
-      await finishMutationFailure(false);
+      await this.finishMutationFailure(false);
     }
   }
 
-  async function renameTag(
-    tag: BlacklistTagDto,
-    name: string,
-    _button: HTMLButtonElement,
-  ): Promise<void> {
-    if (!writesEnabled || !beginTagMutation(tag.tagId)) return;
-    clearWriteError();
-    const marker = committedSnapshots.beginMutation();
+  private async renameTag(tag: BlacklistTagDto, name: string): Promise<void> {
+    if (!this.writesEnabled || !this.beginTagMutation(tag.tagId)) return;
+    this.clearWriteError();
+    const shouldReloadAuthors = this.queryCoordinator.hasUnloadedAuthors();
     try {
-      const response = await rpc.request("rename-tag", { tagId: tag.tagId, name });
-      if (!response.ok || !response.data.snapshot) {
-        await finishMutationFailure(
-          response.error === "storage-unreadable",
-          response.error === "invalid-tag" ? "标签名称无效或已存在。" : undefined,
-        );
+      const response = await this.dependencies.rpc.request("rename-tag", {
+        tagId: tag.tagId,
+        name,
+      });
+      if (!response.ok || response.data.tag?.tagId !== tag.tagId) {
+        const message = response.error === "invalid-tag" ? "标签名称无效或已存在。" : undefined;
+        await this.finishMutationFailure(response.error === "storage-unreadable", message);
         return;
       }
-      marker(response.data.snapshot, refreshController.invalidate);
+      if (!(await this.acceptMutationSummary(response))) return;
+      this.applyRenamedTag(response.data.tag);
+      if (shouldReloadAuthors) await this.queryCoordinator.reloadAuthors();
     } catch {
-      await finishMutationFailure(false);
+      await this.finishMutationFailure(false);
     } finally {
-      endTagMutation(tag.tagId);
+      this.endTagMutation(tag.tagId);
     }
   }
 
-  async function deleteTag(tag: BlacklistTagDto, _button: HTMLButtonElement): Promise<void> {
-    if (!writesEnabled || !beginTagMutation(tag.tagId)) return;
-    clearWriteError();
-    const marker = committedSnapshots.beginMutation();
+  private async deleteTag(tag: BlacklistTagDto): Promise<void> {
+    if (!this.writesEnabled || !this.beginTagMutation(tag.tagId)) return;
+    this.clearWriteError();
+    const shouldReload =
+      this.selectedTagId === tag.tagId || this.queryCoordinator.hasUnloadedAuthors();
     try {
-      const response = await rpc.request("delete-tag", { tagId: tag.tagId });
-      if (!response.ok || !response.data.snapshot) {
-        await finishMutationFailure(response.error === "storage-unreadable");
+      const response = await this.dependencies.rpc.request("delete-tag", { tagId: tag.tagId });
+      const migratedCount = deletedTagCount(response, tag.tagId);
+      if (migratedCount === null) {
+        await this.finishMutationFailure(response.error === "storage-unreadable");
         return;
       }
-      marker(response.data.snapshot, refreshController.invalidate);
+      if (!(await this.acceptMutationSummary(response))) return;
+      if (!this.applyDeletedTag(tag.tagId, migratedCount)) {
+        await this.refresh();
+        return;
+      }
+      if (shouldReload) await this.queryCoordinator.reloadAuthors();
     } catch {
-      await finishMutationFailure(false);
+      await this.finishMutationFailure(false);
     } finally {
-      endTagMutation(tag.tagId);
+      this.endTagMutation(tag.tagId);
     }
   }
 
-  authorSearch.addEventListener("input", resetAuthorList);
-  tagFilter.addEventListener("change", () => {
-    selectedTagId = tagIdByFilterToken.get(tagFilter.value) ?? null;
-    resetAuthorList();
-  });
-  platformFilter.addEventListener("change", () => {
-    selectedPlatformId = platformIdByFilterToken.get(platformFilter.value) ?? null;
-    resetAuthorList();
-  });
-  timeSort.addEventListener("change", resetAuthorList);
-  viewport.addEventListener("scroll", () => {
-    const nearEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 128;
-    if (nearEnd && loadedCount < filteredItems.length) {
-      loadedCount = nextLoadedCount(loadedCount, filteredItems.length);
-    }
-    scheduleAuthorRender();
-  });
-  removeSelected.addEventListener("click", () => {
-    const identities = [...selectedIdentities.values()];
-    dialogController.open(identities.length, removeSelected, () => {
-      void removeMany(identities);
+  private bindEvents(): void {
+    this.elements.authorSearch.addEventListener(
+      "input",
+      () => void this.queryCoordinator.reloadAuthors(),
+    );
+    this.elements.tagFilter.addEventListener("change", () => {
+      this.selectedTagId = this.tagIdByFilterToken.get(this.elements.tagFilter.value) ?? null;
+      void this.queryCoordinator.reloadAuthors();
     });
-  });
-  exportData.addEventListener("click", () => {
-    void exportTransfer();
-  });
-  importFile.addEventListener("change", () => {
-    void readSelectedTransferFile();
-  });
-  importData.addEventListener("click", requestImport);
-  dependencies.storageChanges.addListener((changes, areaName) => {
-    if (!parseBlacklistRevisionChange(changes, areaName)) return;
-    committedSnapshots.noteRevision();
-    void refreshController.request();
-  });
+    this.elements.platformFilter.addEventListener("change", () => {
+      this.selectedPlatformId =
+        this.platformIdByFilterToken.get(this.elements.platformFilter.value) ?? null;
+      void this.queryCoordinator.reloadAuthors();
+    });
+    this.elements.timeSort.addEventListener(
+      "change",
+      () => void this.queryCoordinator.reloadAuthors(),
+    );
+    this.elements.viewport.addEventListener("scroll", () => this.handleAuthorScroll());
+    this.elements.removeSelected.addEventListener("click", () => this.requestRemoveMany());
+    this.dependencies.storageChanges.addListener((changes, areaName) => {
+      if (parseBlacklistRevisionChange(changes, areaName)) void this.refresh();
+    });
+  }
 
-  void refreshController.request();
-  return { refresh: () => refreshController.request() };
+  private handleAuthorScroll(): void {
+    const { viewport } = this.elements;
+    const nearEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 128;
+    if (nearEnd && this.queryCoordinator.hasUnloadedAuthors()) {
+      void this.queryCoordinator.loadNextAuthors();
+    }
+    this.scheduleAuthorRender();
+  }
+
+  private requestRemoveMany(): void {
+    const identities = this.selectionController.values();
+    this.dialogController.open(identities.length, this.elements.removeSelected, () => {
+      void this.removeMany(identities);
+    });
+  }
+}
+
+export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsApp {
+  return new OptionsApplication(dependencies);
 }

@@ -50,14 +50,6 @@
       "sha256": "3fd2434bc0ad4d8c50fdd233deb1964af788f06f4caf9e3110cfc4d509c33a7c"
     },
     {
-      "path": "src/background/blacklist-transfer-planner.test.ts",
-      "sha256": "2cf15326a794cdbdc877a2723dfa8bfad58d1c60d7f9211c954cc044cf684e0d"
-    },
-    {
-      "path": "src/background/blacklist-transfer-planner.ts",
-      "sha256": "8a7037249dc261b978ec6467273ffba5b93acb327ce9c395e5e144e47601bff6"
-    },
-    {
       "path": "src/background/status-controller.test.ts",
       "sha256": "0e6bb23cc05696a091150152e6305c24c9f4677c699db19f06f3c377c3fd97a8"
     },
@@ -84,14 +76,6 @@
     {
       "path": "src/content/badge-reporter.ts",
       "sha256": "91fb1887dd4dcb05f02c355674cd3bd1e8eb378f16a2b4ad4c463802ca574695"
-    },
-    {
-      "path": "src/content/card-filter-controller.ts",
-      "sha256": "18d42aa67fc94dcdfbd3b24708a375d2fb48349a7b54fb1a8f6897656729f11c"
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "sha256": "b850b7f588c0e66c85b3f681c14bd58e33334263d29d66bcaf0e2abf6800949d"
     },
     {
       "path": "src/content/drawer-controller.test.ts",
@@ -186,10 +170,6 @@
       "sha256": "c8f620e6d77b98df2de0e77454afbe4f88a1c8aa8467c0a4a5df8094df02ae31"
     },
     {
-      "path": "src/content/runtime-state-application.ts",
-      "sha256": "ff5679ed0d8a9ac36d0b26c7c4aec268bd791842b4a052b6a0452b595ed654df"
-    },
-    {
       "path": "src/content/status-ping.ts",
       "sha256": "4d323e72715b8511c408f7b87faff2ac9fc3488356c20e226732baa49fba7645"
     },
@@ -220,14 +200,6 @@
     {
       "path": "src/core/badge-message-contract.ts",
       "sha256": "5ddb8a77ece7194b698a48367ee29a1480b87b96db0a524a0de3abcb5a4f27e8"
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.test.ts",
-      "sha256": "1d68f164e93fec02c19fbc1c853a313a53ac7b987e8c2e0949cea8c21b7c1ee5"
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "sha256": "78a42b5a7dc9126012848796029a87c5882d11f8c9e0c78ba01cd491fb559cd2"
     },
     {
       "path": "src/core/plugin/bootstrap.test.ts",
@@ -262,14 +234,6 @@
       "sha256": "8dd233665e5291dc97039639a7d37c941decb99308b719a52624c379ace35d8b"
     },
     {
-      "path": "src/options/author-list-view.test.ts",
-      "sha256": "c7968d5a554817039d21467ca6cedf6612e0e10c3834093367055c198555344f"
-    },
-    {
-      "path": "src/options/author-list-view.ts",
-      "sha256": "0e1661261522c7cce72ceba559bf9e59b1b0f8cdcf7576bf98ee6ff8bbc43b1b"
-    },
-    {
       "path": "src/options/dialog-controller.test.ts",
       "sha256": "06be0aa01e27bbe52b7b0673cb415b77b42644f1d129c12cefe53d1b9cec2e9b"
     },
@@ -278,28 +242,8 @@
       "sha256": "cc85f46f5413311f16031b4543b02d10c84be6c9466685d05fa86e5a846059d4"
     },
     {
-      "path": "src/options/main.ts",
-      "sha256": "0811f0bfdcd03c4adada2f731258d18331010144a37f2635ce77b88afe9a77ae"
-    },
-    {
       "path": "src/options/options.css",
       "sha256": "30c4047bb36a4758e846fcccb4bb15bc007b5a3bc95be742250dc235a42403ae"
-    },
-    {
-      "path": "src/options/tag-maintenance-view.test.ts",
-      "sha256": "76024ac7e5c664715e49dd4b27d1ba7f77edccb795e67aafa7b944b6170f3d49"
-    },
-    {
-      "path": "src/options/tag-maintenance-view.ts",
-      "sha256": "0c3197180de5df99a987d314db4e6c831ef31d2eacc67a3ea5e0154e57da7a40"
-    },
-    {
-      "path": "src/options/transfer-file.test.ts",
-      "sha256": "0299a739773c3e271921a816937c87fd99787f7ba162c0bc668a7d0a6c7479b7"
-    },
-    {
-      "path": "src/plugins/zhihu/badge-visibility.test.ts",
-      "sha256": "f9ab5247b747111ec79562ac9fedb36ad366b19605600a6061fbbdc442a1ec7d"
     },
     {
       "path": "src/plugins/zhihu/plugin.css",
@@ -312,22 +256,6 @@
     {
       "path": "src/popup/popup.css",
       "sha256": "94ce8fbefb3aecad4a0ce24d07b4c52ab11a87fda10d5b2d3ade185f4786ffc4"
-    },
-    {
-      "path": "src/popup/record-list-view.ts",
-      "sha256": "aec46ca26dd2abef79b1fa3405495612545fb4decf1e152be1fbad8d4a252d89"
-    },
-    {
-      "path": "src/popup/undo-controller.test.ts",
-      "sha256": "34ac7468ca2f85890900a232eaf779c6e9b2f5e6814cc4eea3c45244d9d54e68"
-    },
-    {
-      "path": "src/ui/blacklist-view-model.test.ts",
-      "sha256": "d40e42d0185cd90ae2344e5d5c3ce14cbe7cfc4f68278516432b2c2545a8b434"
-    },
-    {
-      "path": "src/ui/blacklist-view-model.ts",
-      "sha256": "1325c1f6b4135c56f5561e40a98fa84092800a9ea326908e2f914455962fd853"
     },
     {
       "path": "src/ui/latest-refresh-controller.test.ts",

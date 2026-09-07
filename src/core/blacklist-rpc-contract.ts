@@ -1,107 +1,35 @@
+import {
+  contractJsonByteLength,
+  hasExactContractKeys,
+  isContractRecord,
+  isNonNegativeSafeInteger,
+  valueOrNull,
+} from "./blacklist-contract-validation.ts";
+import {
+  isBlacklistTagId,
+  isBoundedBlacklistTagName,
+  parseBlacklistAuthorDto,
+  parseBlacklistAuthorIdentityDto,
+  parseBlacklistTagDto,
+  scopedBlacklistIdentifierKey,
+  type BlacklistAuthorDto,
+  type BlacklistAuthorIdentityDto,
+  type BlacklistTagDto,
+} from "./blacklist-rpc-values.ts";
+
 export const BLACKLIST_RPC_VERSION = 2 as const;
 export const BLACKLIST_RPC_REQUEST_TYPE = "cocoon.blacklist.request" as const;
 export const BLACKLIST_RPC_RESPONSE_TYPE = "cocoon.blacklist.response" as const;
-
-export const BLACKLIST_TRANSFER_PRODUCT = "cocoon-blacklist" as const;
-export const BLACKLIST_TRANSFER_FORMAT_VERSION = 1 as const;
-export const BLACKLIST_TRANSFER_SCHEMA_VERSION = 5 as const;
-export const MAX_BLACKLIST_TRANSFER_BYTES = 8 * 1024 * 1024;
-export const MAX_BLACKLIST_TRANSFER_AUTHORS = 20_000;
-export const MAX_BLACKLIST_TRANSFER_TAGS = 2_000;
-export const MAX_PLATFORM_ID_ASCII_LENGTH = 64;
-export const MAX_STABLE_ID_CODE_POINTS = 512;
-export const MAX_AUTHOR_NAME_CODE_POINTS = 500;
-export const MAX_TRANSFER_TAG_NAME_CODE_POINTS = 30;
-
-const ZHIHU_PLATFORM_ID = "zhihu";
-const DEFAULT_TAG_ID = "default";
-const PLATFORM_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
-const MEMBER_HASH_PATTERN = /^[0-9a-f]{32}$/;
-const MEMBER_HASH_CASE_INSENSITIVE_PATTERN = /^[0-9a-f]{32}$/i;
-const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+export const MAX_BLACKLIST_MANAGEMENT_RPC_BYTES = 256 * 1024;
+export const MAX_BLACKLIST_MUTATION_IDENTITIES = 500;
 
 export type BlacklistRpcOperation =
-  | "status"
-  | "snapshot"
-  | "remove-one"
-  | "restore-one"
-  | "remove-many"
-  | "rename-tag"
-  | "delete-tag"
-  | "export-json"
-  | "import-merge"
-  | "import-replace";
+  "status" | "remove-one" | "restore-one" | "remove-many" | "rename-tag" | "delete-tag";
 
-export interface BlacklistAuthorIdentityDto {
-  readonly platformId: string;
-  readonly userId: string;
-}
-
-export interface BlacklistAuthorDto extends BlacklistAuthorIdentityDto {
-  readonly memberHashId: string | null;
-  readonly authorName: string;
-  readonly tagId: string;
-  readonly blacklistedAt: string | null;
-  readonly source: "direct" | "upvoter";
-}
-
-export interface BlacklistTagDto {
-  readonly tagId: string;
-  readonly name: string;
-  readonly isDefault: boolean;
-}
-
-export interface BlacklistSnapshotDto {
-  readonly authors: readonly BlacklistAuthorDto[];
-  readonly tags: readonly BlacklistTagDto[];
-}
-
-export interface BlacklistTransferAuthor {
-  readonly platformId: string;
-  readonly userId: string;
-  readonly memberHashId: string | null;
-  readonly authorNameAtCapture: string;
-  readonly tagId: string;
-  readonly blacklistedAt: string | null;
-  readonly blockSource: "direct" | "upvoter";
-}
-
-export interface BlacklistTransferTag {
-  readonly tagId: string;
-  readonly name: string;
-}
-
-export interface BlacklistTransferEnvelope {
-  readonly product: typeof BLACKLIST_TRANSFER_PRODUCT;
-  readonly formatVersion: typeof BLACKLIST_TRANSFER_FORMAT_VERSION;
-  readonly exportedAt: string;
-  readonly schemaVersion: typeof BLACKLIST_TRANSFER_SCHEMA_VERSION;
-  readonly authors: readonly BlacklistTransferAuthor[];
-  readonly tags: readonly BlacklistTransferTag[];
-}
-
-export type BlacklistTransferParseResult =
-  | {
-      readonly status: "valid";
-      readonly transfer: BlacklistTransferEnvelope;
-    }
-  | { readonly status: "invalid" | "too-large" };
+export type { BlacklistAuthorDto, BlacklistAuthorIdentityDto, BlacklistTagDto };
+export { parseBlacklistAuthorDto, parseBlacklistTagDto };
 
 export type CurrentPageStatus = "running" | "unsupported" | "connection-error";
-
-export type BlacklistRpcRequest =
-  | RpcRequest<"status", Record<never, never>>
-  | RpcRequest<"snapshot", Record<never, never>>
-  | RpcRequest<"remove-one", { readonly identity: BlacklistAuthorIdentityDto }>
-  | RpcRequest<"restore-one", { readonly author: BlacklistAuthorDto }>
-  | RpcRequest<"remove-many", {
-      readonly identities: readonly BlacklistAuthorIdentityDto[];
-    }>
-  | RpcRequest<"rename-tag", { readonly tagId: string; readonly name: string }>
-  | RpcRequest<"delete-tag", { readonly tagId: string }>
-  | RpcRequest<"export-json", Record<never, never>>
-  | RpcRequest<"import-merge", { readonly transfer: BlacklistTransferEnvelope }>
-  | RpcRequest<"import-replace", { readonly transfer: BlacklistTransferEnvelope }>;
 
 interface RpcRequest<Operation extends BlacklistRpcOperation, Input> {
   readonly version: typeof BLACKLIST_RPC_VERSION;
@@ -110,22 +38,28 @@ interface RpcRequest<Operation extends BlacklistRpcOperation, Input> {
   readonly input: Input;
 }
 
+export type BlacklistRpcRequest =
+  | RpcRequest<"status", Record<never, never>>
+  | RpcRequest<"remove-one", { readonly identity: BlacklistAuthorIdentityDto }>
+  | RpcRequest<"restore-one", { readonly author: BlacklistAuthorDto }>
+  | RpcRequest<"remove-many", { readonly identities: readonly BlacklistAuthorIdentityDto[] }>
+  | RpcRequest<"rename-tag", { readonly tagId: string; readonly name: string }>
+  | RpcRequest<"delete-tag", { readonly tagId: string }>;
+
 export type BlacklistRpcError =
-  | "storage-unreadable"
-  | "save-failed"
-  | "conflict"
-  | "not-found"
-  | "invalid-tag"
-  | "invalid-transfer"
-  | "transfer-conflict"
-  | "transfer-too-large";
+  "storage-unreadable" | "save-failed" | "conflict" | "not-found" | "invalid-tag";
 
 export interface BlacklistRpcData {
   readonly status: CurrentPageStatus | null;
   readonly count: number | null;
-  readonly snapshot: BlacklistSnapshotDto | null;
   readonly removed: BlacklistAuthorDto | null;
-  readonly transfer: BlacklistTransferEnvelope | null;
+  readonly revision: number | null;
+  readonly authorCount: number | null;
+  readonly tagCount: number | null;
+  readonly removedCount: number | null;
+  readonly tag: BlacklistTagDto | null;
+  readonly deletedTagId: string | null;
+  readonly migratedCount: number | null;
 }
 
 export interface BlacklistRpcResponse {
@@ -139,20 +73,18 @@ export interface BlacklistRpcResponse {
 
 const OPERATIONS: readonly BlacklistRpcOperation[] = [
   "status",
-  "snapshot",
   "remove-one",
   "restore-one",
   "remove-many",
   "rename-tag",
   "delete-tag",
-  "export-json",
-  "import-merge",
-  "import-replace",
 ];
-const TRANSFER_OPERATIONS: readonly BlacklistRpcOperation[] = [
-  "export-json",
-  "import-merge",
-  "import-replace",
+const MANAGEMENT_MUTATION_OPERATIONS: readonly BlacklistRpcOperation[] = [
+  "remove-one",
+  "restore-one",
+  "remove-many",
+  "rename-tag",
+  "delete-tag",
 ];
 const ERRORS: readonly BlacklistRpcError[] = [
   "storage-unreadable",
@@ -160,555 +92,312 @@ const ERRORS: readonly BlacklistRpcError[] = [
   "conflict",
   "not-found",
   "invalid-tag",
-  "invalid-transfer",
-  "transfer-conflict",
-  "transfer-too-large",
 ];
+const COMMON_MUTATION_ERRORS: readonly BlacklistRpcError[] = ["storage-unreadable", "save-failed"];
+const OPERATION_MUTATION_ERRORS: Record<
+  Exclude<BlacklistRpcOperation, "status">,
+  readonly BlacklistRpcError[]
+> = {
+  "remove-one": ["not-found"],
+  "restore-one": ["conflict", "invalid-tag"],
+  "remove-many": ["not-found"],
+  "rename-tag": ["invalid-tag"],
+  "delete-tag": ["invalid-tag"],
+};
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const RPC_DATA_KEYS = [
+  "status",
+  "count",
+  "removed",
+  "revision",
+  "authorCount",
+  "tagCount",
+  "removedCount",
+  "tag",
+  "deletedTagId",
+  "migratedCount",
+] as const;
 
-function hasExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const actual = Object.keys(value).sort();
-  const sorted = [...expected].sort();
-  return actual.length === sorted.length &&
-    actual.every((key, index) => key === sorted[index]);
-}
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function isTrimmedNonEmpty(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value === value.trim();
-}
-
-function isValidTimestamp(value: unknown): value is string {
-  if (typeof value !== "string" || !UTC_TIMESTAMP_PATTERN.test(value)) {
-    return false;
-  }
-  const timestamp = new Date(value);
-  return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
-}
-
-function isPlatformId(value: unknown): value is string {
-  return typeof value === "string" &&
-    value.length <= MAX_PLATFORM_ID_ASCII_LENGTH &&
-    PLATFORM_ID_PATTERN.test(value);
-}
-
-function isCanonicalUserId(platformId: string, value: unknown): value is string {
-  return isTrimmedNonEmpty(value) &&
-    (platformId !== ZHIHU_PLATFORM_ID ||
-      !MEMBER_HASH_CASE_INSENSITIVE_PATTERN.test(value) ||
-      MEMBER_HASH_PATTERN.test(value));
-}
-
-function scopedIdentifierKey(platformId: string, identifier: string): string {
-  return JSON.stringify([platformId, identifier]);
-}
-
-function isEmptyInput(value: unknown): value is Record<never, never> {
-  return isRecord(value) && hasExactKeys(value, []);
-}
-
-export function blacklistJsonByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
+type RequestInputParser = (value: unknown) => BlacklistRpcRequest["input"] | null;
+type MutationOperation = Exclude<BlacklistRpcOperation, "status">;
+type MutationSuccessValidator = (data: BlacklistRpcData) => boolean;
 
 export function blacklistRpcJsonByteLength(value: unknown): number | null {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string"
-      ? blacklistJsonByteLength(serialized)
-      : null;
-  } catch {
-    return null;
-  }
+  return contractJsonByteLength(value);
 }
 
-export function isWithinBlacklistRpcLimit(value: unknown): boolean {
+export function isWithinBlacklistManagementRpcLimit(value: unknown): boolean {
   const size = blacklistRpcJsonByteLength(value);
-  return size !== null && size <= MAX_BLACKLIST_TRANSFER_BYTES;
-}
-
-function parseTransferTag(value: unknown): BlacklistTransferTag | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["tagId", "name"]) ||
-    !isTrimmedNonEmpty(value.tagId) ||
-    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
-    !isTrimmedNonEmpty(value.name) ||
-    codePointLength(value.name) > MAX_TRANSFER_TAG_NAME_CODE_POINTS
-  ) {
-    return null;
-  }
-  return { tagId: value.tagId, name: value.name };
-}
-
-function parseTransferAuthor(value: unknown): BlacklistTransferAuthor | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "platformId",
-      "userId",
-      "memberHashId",
-      "authorNameAtCapture",
-      "tagId",
-      "blacklistedAt",
-      "blockSource",
-    ]) ||
-    !isPlatformId(value.platformId) ||
-    !isCanonicalUserId(value.platformId, value.userId) ||
-    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS ||
-    (value.memberHashId !== null &&
-      (value.platformId !== ZHIHU_PLATFORM_ID ||
-        typeof value.memberHashId !== "string" ||
-        !MEMBER_HASH_PATTERN.test(value.memberHashId) ||
-        codePointLength(value.memberHashId) > MAX_STABLE_ID_CODE_POINTS)) ||
-    value.memberHashId === value.userId ||
-    typeof value.authorNameAtCapture !== "string" ||
-    codePointLength(value.authorNameAtCapture) > MAX_AUTHOR_NAME_CODE_POINTS ||
-    !isTrimmedNonEmpty(value.tagId) ||
-    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
-    (value.blacklistedAt !== null && !isValidTimestamp(value.blacklistedAt)) ||
-    (value.blockSource !== "direct" && value.blockSource !== "upvoter") ||
-    (value.blockSource === "upvoter" && value.blacklistedAt === null)
-  ) {
-    return null;
-  }
-  return {
-    platformId: value.platformId,
-    userId: value.userId,
-    memberHashId: value.memberHashId as string | null,
-    authorNameAtCapture: value.authorNameAtCapture,
-    tagId: value.tagId,
-    blacklistedAt: value.blacklistedAt as string | null,
-    blockSource: value.blockSource,
-  };
-}
-
-export function parseBlacklistTransferEnvelope(
-  value: unknown,
-): BlacklistTransferParseResult {
-  const byteLength = blacklistRpcJsonByteLength(value);
-  if (byteLength === null) {
-    return { status: "invalid" };
-  }
-  if (byteLength > MAX_BLACKLIST_TRANSFER_BYTES) {
-    return { status: "too-large" };
-  }
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "product",
-      "formatVersion",
-      "exportedAt",
-      "schemaVersion",
-      "authors",
-      "tags",
-    ]) ||
-    value.product !== BLACKLIST_TRANSFER_PRODUCT ||
-    value.formatVersion !== BLACKLIST_TRANSFER_FORMAT_VERSION ||
-    !isValidTimestamp(value.exportedAt) ||
-    value.schemaVersion !== BLACKLIST_TRANSFER_SCHEMA_VERSION ||
-    !Array.isArray(value.authors) ||
-    value.authors.length > MAX_BLACKLIST_TRANSFER_AUTHORS ||
-    !Array.isArray(value.tags) ||
-    value.tags.length > MAX_BLACKLIST_TRANSFER_TAGS
-  ) {
-    return { status: "invalid" };
-  }
-
-  const authors = value.authors.map(parseTransferAuthor);
-  const tags = value.tags.map(parseTransferTag);
-  if (authors.some((author) => author === null) || tags.some((tag) => tag === null)) {
-    return { status: "invalid" };
-  }
-  const parsedAuthors = authors as BlacklistTransferAuthor[];
-  const parsedTags = tags as BlacklistTransferTag[];
-  const tagIds = new Set<string>();
-  const tagNames = new Set<string>();
-  for (const tag of parsedTags) {
-    const nameKey = tag.name.toLowerCase();
-    if (tagIds.has(tag.tagId) || tagNames.has(nameKey)) {
-      return { status: "invalid" };
-    }
-    tagIds.add(tag.tagId);
-    tagNames.add(nameKey);
-  }
-  if (
-    parsedTags.find(({ tagId }) => tagId === DEFAULT_TAG_ID)?.name !== "default"
-  ) {
-    return { status: "invalid" };
-  }
-
-  const identifiers = new Set<string>();
-  for (const author of parsedAuthors) {
-    if (!tagIds.has(author.tagId)) {
-      return { status: "invalid" };
-    }
-    for (const identifier of [author.userId, author.memberHashId]) {
-      if (identifier === null) continue;
-      const key = scopedIdentifierKey(author.platformId, identifier);
-      if (identifiers.has(key)) {
-        return { status: "invalid" };
-      }
-      identifiers.add(key);
-    }
-  }
-
-  return {
-    status: "valid",
-    transfer: {
-      product: BLACKLIST_TRANSFER_PRODUCT,
-      formatVersion: BLACKLIST_TRANSFER_FORMAT_VERSION,
-      exportedAt: value.exportedAt,
-      schemaVersion: BLACKLIST_TRANSFER_SCHEMA_VERSION,
-      authors: parsedAuthors,
-      tags: parsedTags,
-    },
-  };
-}
-
-export function parseBlacklistTransferJson(
-  json: string,
-): BlacklistTransferParseResult {
-  if (blacklistJsonByteLength(json) > MAX_BLACKLIST_TRANSFER_BYTES) {
-    return { status: "too-large" };
-  }
-  try {
-    return parseBlacklistTransferEnvelope(JSON.parse(json) as unknown);
-  } catch {
-    return { status: "invalid" };
-  }
-}
-
-export function serializeBlacklistTransfer(
-  transfer: BlacklistTransferEnvelope,
-): string | null {
-  const parsed = parseBlacklistTransferEnvelope(transfer);
-  if (parsed.status !== "valid") {
-    return null;
-  }
-  const json = JSON.stringify(parsed.transfer);
-  return blacklistJsonByteLength(json) <= MAX_BLACKLIST_TRANSFER_BYTES
-    ? json
-    : null;
-}
-
-export function createBlacklistTransferFilename(exportedAt: string): string | null {
-  return isValidTimestamp(exportedAt)
-    ? `cocoon-blacklist-${exportedAt.slice(0, 10)}.json`
-    : null;
-}
-
-function parseIdentity(value: unknown): BlacklistAuthorIdentityDto | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["platformId", "userId"]) ||
-    !isPlatformId(value.platformId) ||
-    !isCanonicalUserId(value.platformId, value.userId) ||
-    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS
-  ) {
-    return null;
-  }
-  return { platformId: value.platformId, userId: value.userId };
-}
-
-function parseAuthor(value: unknown): BlacklistAuthorDto | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "platformId",
-      "userId",
-      "memberHashId",
-      "authorName",
-      "tagId",
-      "blacklistedAt",
-      "source",
-    ]) ||
-    !isPlatformId(value.platformId) ||
-    !isCanonicalUserId(value.platformId, value.userId) ||
-    codePointLength(value.userId) > MAX_STABLE_ID_CODE_POINTS ||
-    (value.memberHashId !== null &&
-      (value.platformId !== ZHIHU_PLATFORM_ID ||
-        typeof value.memberHashId !== "string" ||
-        !MEMBER_HASH_PATTERN.test(value.memberHashId))) ||
-    value.memberHashId === value.userId ||
-    typeof value.authorName !== "string" ||
-    codePointLength(value.authorName) > MAX_AUTHOR_NAME_CODE_POINTS ||
-    !isTrimmedNonEmpty(value.tagId) ||
-    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
-    (value.blacklistedAt !== null && !isValidTimestamp(value.blacklistedAt)) ||
-    (value.source !== "direct" && value.source !== "upvoter") ||
-    (value.source === "upvoter" && value.blacklistedAt === null)
-  ) {
-    return null;
-  }
-  return {
-    platformId: value.platformId,
-    userId: value.userId,
-    memberHashId: value.memberHashId as string | null,
-    authorName: value.authorName,
-    tagId: value.tagId,
-    blacklistedAt: value.blacklistedAt as string | null,
-    source: value.source,
-  };
-}
-
-function parseTag(value: unknown): BlacklistTagDto | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["tagId", "name", "isDefault"]) ||
-    !isTrimmedNonEmpty(value.tagId) ||
-    codePointLength(value.tagId) > MAX_STABLE_ID_CODE_POINTS ||
-    !isTrimmedNonEmpty(value.name) ||
-    Array.from(value.name).length > MAX_TRANSFER_TAG_NAME_CODE_POINTS ||
-    typeof value.isDefault !== "boolean" ||
-    value.isDefault !== (value.tagId === DEFAULT_TAG_ID) ||
-    (value.isDefault && value.name !== "default")
-  ) {
-    return null;
-  }
-  return { tagId: value.tagId, name: value.name, isDefault: value.isDefault };
-}
-
-function parseSnapshot(value: unknown): BlacklistSnapshotDto | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["authors", "tags"]) ||
-    !Array.isArray(value.authors) ||
-    value.authors.length > MAX_BLACKLIST_TRANSFER_AUTHORS ||
-    !Array.isArray(value.tags) ||
-    value.tags.length > MAX_BLACKLIST_TRANSFER_TAGS
-  ) {
-    return null;
-  }
-  const authors = value.authors.map(parseAuthor);
-  const tags = value.tags.map(parseTag);
-  if (authors.some((author) => author === null) || tags.some((tag) => tag === null)) {
-    return null;
-  }
-  const parsedAuthors = authors as BlacklistAuthorDto[];
-  const parsedTags = tags as BlacklistTagDto[];
-  const tagIds = new Set(parsedTags.map(({ tagId }) => tagId));
-  const tagNames = new Set(parsedTags.map(({ name }) => name.toLowerCase()));
-  const identifiers = new Set<string>();
-  if (
-    tagIds.size !== parsedTags.length ||
-    tagNames.size !== parsedTags.length ||
-    parsedTags.filter(({ isDefault }) => isDefault).length !== 1 ||
-    parsedAuthors.some(({ tagId }) => !tagIds.has(tagId))
-  ) {
-    return null;
-  }
-  for (const author of parsedAuthors) {
-    for (const identifier of [author.userId, author.memberHashId]) {
-      if (identifier === null) continue;
-      const key = scopedIdentifierKey(author.platformId, identifier);
-      if (identifiers.has(key)) return null;
-      identifiers.add(key);
-    }
-  }
-  return { authors: parsedAuthors, tags: parsedTags };
+  return size !== null && size <= MAX_BLACKLIST_MANAGEMENT_RPC_BYTES;
 }
 
 function isOperation(value: unknown): value is BlacklistRpcOperation {
   return typeof value === "string" && OPERATIONS.includes(value as BlacklistRpcOperation);
 }
 
-export function isBlacklistTransferOperation(
-  operation: BlacklistRpcOperation,
-): boolean {
-  return TRANSFER_OPERATIONS.includes(operation);
+function parseEmptyInput(value: unknown): Record<never, never> | null {
+  if (!isContractRecord(value)) return null;
+  return hasExactContractKeys(value, []) ? (value as Record<never, never>) : null;
+}
+
+function parseRemoveOneInput(value: unknown): BlacklistRpcRequest["input"] | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["identity"])) return null;
+  return parseBlacklistAuthorIdentityDto(value.identity)
+    ? (value as unknown as BlacklistRpcRequest["input"])
+    : null;
+}
+
+function parseRestoreOneInput(value: unknown): BlacklistRpcRequest["input"] | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["author"])) return null;
+  return parseBlacklistAuthorDto(value.author)
+    ? (value as unknown as BlacklistRpcRequest["input"])
+    : null;
+}
+
+function parseMutationIdentities(value: unknown): readonly BlacklistAuthorIdentityDto[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.length < 1 || value.length > MAX_BLACKLIST_MUTATION_IDENTITIES) return null;
+  const identities = value.map(parseBlacklistAuthorIdentityDto);
+  if (identities.some((identity) => identity === null)) return null;
+  const parsed = identities as BlacklistAuthorIdentityDto[];
+  const keys = parsed.map(({ platformId, userId }) =>
+    scopedBlacklistIdentifierKey(platformId, userId),
+  );
+  return new Set(keys).size === keys.length ? parsed : null;
+}
+
+function parseRemoveManyInput(value: unknown): BlacklistRpcRequest["input"] | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["identities"])) return null;
+  return parseMutationIdentities(value.identities)
+    ? (value as unknown as BlacklistRpcRequest["input"])
+    : null;
+}
+
+function parseRenameTagInput(value: unknown): BlacklistRpcRequest["input"] | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["tagId", "name"])) return null;
+  if (!isBlacklistTagId(value.tagId)) return null;
+  return isBoundedBlacklistTagName(value.name)
+    ? (value as unknown as BlacklistRpcRequest["input"])
+    : null;
+}
+
+function parseDeleteTagInput(value: unknown): BlacklistRpcRequest["input"] | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["tagId"])) return null;
+  return isBlacklistTagId(value.tagId) ? (value as unknown as BlacklistRpcRequest["input"]) : null;
+}
+
+const REQUEST_INPUT_PARSERS: Record<BlacklistRpcOperation, RequestInputParser> = {
+  status: parseEmptyInput,
+  "remove-one": parseRemoveOneInput,
+  "restore-one": parseRestoreOneInput,
+  "remove-many": parseRemoveManyInput,
+  "rename-tag": parseRenameTagInput,
+  "delete-tag": parseDeleteTagInput,
+};
+
+function parseRequestRecord(value: unknown): Record<string, unknown> | null {
+  if (!isWithinBlacklistManagementRpcLimit(value)) return null;
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["version", "type", "operation", "input"])) return null;
+  if (value.version !== BLACKLIST_RPC_VERSION) return null;
+  if (value.type !== BLACKLIST_RPC_REQUEST_TYPE) return null;
+  return isOperation(value.operation) ? value : null;
 }
 
 export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | null {
-  if (
-    !isWithinBlacklistRpcLimit(value) ||
-    !isRecord(value) ||
-    !hasExactKeys(value, ["version", "type", "operation", "input"]) ||
-    value.version !== BLACKLIST_RPC_VERSION ||
-    value.type !== BLACKLIST_RPC_REQUEST_TYPE ||
-    !isOperation(value.operation)
-  ) {
-    return null;
-  }
-  const input = value.input;
-  if (
-    (value.operation === "status" ||
-      value.operation === "snapshot" ||
-      value.operation === "export-json") &&
-    isEmptyInput(input)
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  if (!isRecord(input)) {
-    return null;
-  }
-  if (
-    value.operation === "remove-one" &&
-    hasExactKeys(input, ["identity"]) &&
-    parseIdentity(input.identity) !== null
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  if (
-    value.operation === "restore-one" &&
-    hasExactKeys(input, ["author"]) &&
-    parseAuthor(input.author) !== null
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  if (
-    value.operation === "remove-many" &&
-    hasExactKeys(input, ["identities"]) &&
-    Array.isArray(input.identities) &&
-    input.identities.length > 0
-  ) {
-    const identities = input.identities.map(parseIdentity);
-    if (
-      identities.every((identity) => identity !== null) &&
-      new Set(
-        (identities as BlacklistAuthorIdentityDto[]).map(({ platformId, userId }) =>
-          scopedIdentifierKey(platformId, userId)
-        ),
-      ).size === identities.length
-    ) {
-      return value as unknown as BlacklistRpcRequest;
-    }
-  }
-  if (
-    value.operation === "rename-tag" &&
-    hasExactKeys(input, ["tagId", "name"]) &&
-    isTrimmedNonEmpty(input.tagId) &&
-    typeof input.name === "string"
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  if (
-    value.operation === "delete-tag" &&
-    hasExactKeys(input, ["tagId"]) &&
-    isTrimmedNonEmpty(input.tagId)
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  if (
-    (value.operation === "import-merge" || value.operation === "import-replace") &&
-    hasExactKeys(input, ["transfer"]) &&
-    parseBlacklistTransferEnvelope(input.transfer).status === "valid"
-  ) {
-    return value as unknown as BlacklistRpcRequest;
-  }
-  return null;
+  const request = parseRequestRecord(value);
+  if (!request) return null;
+  const operation = request.operation as BlacklistRpcOperation;
+  return REQUEST_INPUT_PARSERS[operation](request.input)
+    ? (request as unknown as BlacklistRpcRequest)
+    : null;
 }
 
-function hasValidResponseShape(
+export function isBlacklistManagementMutationOperation(
   operation: BlacklistRpcOperation,
+): operation is MutationOperation {
+  return MANAGEMENT_MUTATION_OPERATIONS.includes(operation);
+}
+
+function hasNoMutationDelta(data: BlacklistRpcData): boolean {
+  return [
+    data.revision,
+    data.authorCount,
+    data.tagCount,
+    data.removedCount,
+    data.tag,
+    data.deletedTagId,
+    data.migratedCount,
+  ].every((value) => value === null);
+}
+
+function hasMutationSummary(data: BlacklistRpcData): boolean {
+  return data.revision !== null && data.authorCount !== null && data.tagCount !== null;
+}
+
+function hasNoValues(values: readonly unknown[]): boolean {
+  return values.every((value) => value === null);
+}
+
+function isRemoveOneSuccess(data: BlacklistRpcData): boolean {
+  return (
+    data.removed !== null &&
+    hasNoValues([data.removedCount, data.tag, data.deletedTagId, data.migratedCount])
+  );
+}
+
+function isRestoreOneSuccess(data: BlacklistRpcData): boolean {
+  return (
+    data.removed === null &&
+    hasNoValues([data.removedCount, data.tag, data.deletedTagId, data.migratedCount])
+  );
+}
+
+function isRemoveManySuccess(data: BlacklistRpcData): boolean {
+  return (
+    data.removed === null &&
+    data.removedCount !== null &&
+    hasNoValues([data.tag, data.deletedTagId, data.migratedCount])
+  );
+}
+
+function isRenameTagSuccess(data: BlacklistRpcData): boolean {
+  return (
+    data.removed === null &&
+    data.tag !== null &&
+    hasNoValues([data.removedCount, data.deletedTagId, data.migratedCount])
+  );
+}
+
+function isDeleteTagSuccess(data: BlacklistRpcData): boolean {
+  return (
+    data.removed === null &&
+    data.deletedTagId !== null &&
+    data.migratedCount !== null &&
+    hasNoValues([data.removedCount, data.tag])
+  );
+}
+
+const MUTATION_SUCCESS_VALIDATORS: Record<MutationOperation, MutationSuccessValidator> = {
+  "remove-one": isRemoveOneSuccess,
+  "restore-one": isRestoreOneSuccess,
+  "remove-many": isRemoveManySuccess,
+  "rename-tag": isRenameTagSuccess,
+  "delete-tag": isDeleteTagSuccess,
+};
+
+function isMutationError(operation: MutationOperation, error: BlacklistRpcError | null): boolean {
+  if (error === null) return false;
+  if (COMMON_MUTATION_ERRORS.includes(error)) return true;
+  return OPERATION_MUTATION_ERRORS[operation].includes(error);
+}
+
+function hasValidMutationShape(
+  operation: MutationOperation,
   ok: boolean,
   data: BlacklistRpcData,
   error: BlacklistRpcError | null,
 ): boolean {
-  if (operation === "status") {
-    return ok && error === null && data.status !== null && data.count !== null &&
-      data.snapshot === null && data.removed === null && data.transfer === null &&
-      (data.status !== "unsupported" || data.count === 0);
+  if (data.status !== null || data.count !== null) return false;
+  if (!ok) {
+    return data.removed === null && hasNoMutationDelta(data) && isMutationError(operation, error);
   }
-  if (data.status !== null || data.count !== null) {
-    return false;
+  if (error !== null) return false;
+  if (!hasMutationSummary(data)) return false;
+  return MUTATION_SUCCESS_VALIDATORS[operation](data);
+}
+
+function hasValidStatusShape(
+  ok: boolean,
+  data: BlacklistRpcData,
+  error: BlacklistRpcError | null,
+): boolean {
+  if (!ok || error !== null) return false;
+  if (data.status === null || data.count === null) return false;
+  if (data.removed !== null || !hasNoMutationDelta(data)) return false;
+  return data.status !== "unsupported" || data.count === 0;
+}
+
+function isCurrentPageStatus(value: unknown): value is CurrentPageStatus | null {
+  return (
+    value === null || value === "running" || value === "unsupported" || value === "connection-error"
+  );
+}
+
+function isNullableCount(value: unknown): value is number | null {
+  return value === null || isNonNegativeSafeInteger(value);
+}
+
+function hasValidDataScalars(value: Record<string, unknown>): boolean {
+  if (!isCurrentPageStatus(value.status)) return false;
+  const counts = [
+    value.count,
+    value.revision,
+    value.authorCount,
+    value.tagCount,
+    value.removedCount,
+    value.migratedCount,
+  ];
+  if (!counts.every(isNullableCount)) return false;
+  return (
+    value.removedCount === null ||
+    (value.removedCount as number) <= MAX_BLACKLIST_MUTATION_IDENTITIES
+  );
+}
+
+function hasValidDataObjects(value: Record<string, unknown>): boolean {
+  if (value.removed !== null && parseBlacklistAuthorDto(value.removed) === null) return false;
+  if (value.tag !== null && parseBlacklistTagDto(value.tag) === null) return false;
+  return value.deletedTagId === null || isBlacklistTagId(value.deletedTagId);
+}
+
+function parseRpcData(value: unknown): BlacklistRpcData | null {
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, RPC_DATA_KEYS)) return null;
+  if (!hasValidDataScalars(value)) return null;
+  if (!hasValidDataObjects(value)) return null;
+  return value as unknown as BlacklistRpcData;
+}
+
+function isRpcError(value: unknown): value is BlacklistRpcError | null {
+  return (
+    value === null || (typeof value === "string" && ERRORS.includes(value as BlacklistRpcError))
+  );
+}
+
+function parseResponseRecord(
+  value: unknown,
+  expectedOperation: BlacklistRpcOperation,
+): Record<string, unknown> | null {
+  if (!isWithinBlacklistManagementRpcLimit(value)) return null;
+  if (!isContractRecord(value)) return null;
+  if (!hasExactContractKeys(value, ["version", "type", "operation", "ok", "data", "error"])) {
+    return null;
   }
-  if (operation === "snapshot") {
-    return data.removed === null && data.transfer === null && (ok
-      ? error === null && data.snapshot !== null
-      : error === "storage-unreadable" && data.snapshot === null);
-  }
-  if (operation === "export-json") {
-    return data.snapshot === null && data.removed === null && (ok
-      ? error === null && data.transfer !== null
-      : data.transfer === null &&
-        (error === "storage-unreadable" ||
-          error === "save-failed" ||
-          error === "transfer-too-large"));
-  }
-  if (operation === "import-merge" || operation === "import-replace") {
-    if (data.removed !== null || data.transfer !== null) return false;
-    return ok
-      ? error === null && data.snapshot !== null
-      : data.snapshot === null &&
-        (error === "storage-unreadable" ||
-          error === "save-failed" ||
-          error === "invalid-transfer" ||
-          error === "transfer-conflict" ||
-          error === "transfer-too-large");
-  }
-  if (data.transfer !== null) {
-    return false;
-  }
-  if (ok) {
-    return error === null && data.snapshot !== null &&
-      (operation === "remove-one" ? data.removed !== null : data.removed === null);
-  }
-  if (data.removed !== null) {
-    return false;
-  }
-  if (error === "storage-unreadable") {
-    return data.snapshot === null;
-  }
-  if (error === "save-failed") {
-    return data.snapshot !== null;
-  }
-  if (data.snapshot === null) {
-    return false;
-  }
-  if (operation === "remove-one" || operation === "remove-many") {
-    return error === "not-found";
-  }
-  if (operation === "restore-one") {
-    return error === "conflict" || error === "invalid-tag";
-  }
-  return (operation === "rename-tag" || operation === "delete-tag") &&
-    error === "invalid-tag";
+  if (value.version !== BLACKLIST_RPC_VERSION) return null;
+  if (value.type !== BLACKLIST_RPC_RESPONSE_TYPE) return null;
+  if (value.operation !== expectedOperation) return null;
+  if (typeof value.ok !== "boolean") return null;
+  return value;
 }
 
 export function parseBlacklistRpcResponse(
   value: unknown,
   expectedOperation: BlacklistRpcOperation,
 ): BlacklistRpcResponse | null {
-  if (
-    !isWithinBlacklistRpcLimit(value) ||
-    !isRecord(value) ||
-    !hasExactKeys(value, ["version", "type", "operation", "ok", "data", "error"]) ||
-    value.version !== BLACKLIST_RPC_VERSION ||
-    value.type !== BLACKLIST_RPC_RESPONSE_TYPE ||
-    value.operation !== expectedOperation ||
-    typeof value.ok !== "boolean" ||
-    !isRecord(value.data) ||
-    !hasExactKeys(value.data, ["status", "count", "snapshot", "removed", "transfer"])
-  ) {
-    return null;
-  }
-  const { status, count, snapshot, removed, transfer } = value.data;
-  if (
-    (status !== null && status !== "running" && status !== "unsupported" && status !== "connection-error") ||
-    (count !== null && (!Number.isSafeInteger(count) || (count as number) < 0)) ||
-    (snapshot !== null && parseSnapshot(snapshot) === null) ||
-    (removed !== null && parseAuthor(removed) === null) ||
-    (transfer !== null && parseBlacklistTransferEnvelope(transfer).status !== "valid") ||
-    (value.error !== null &&
-      (typeof value.error !== "string" || !ERRORS.includes(value.error as BlacklistRpcError)))
-  ) {
-    return null;
-  }
-  const data = value.data as unknown as BlacklistRpcData;
-  const error = value.error as BlacklistRpcError | null;
-  return hasValidResponseShape(expectedOperation, value.ok, data, error)
-    ? value as unknown as BlacklistRpcResponse
-    : null;
+  const response = parseResponseRecord(value, expectedOperation);
+  if (!response) return null;
+  const data = parseRpcData(response.data);
+  if (!data || !isRpcError(response.error)) return null;
+  const valid = isBlacklistManagementMutationOperation(expectedOperation)
+    ? hasValidMutationShape(expectedOperation, response.ok as boolean, data, response.error)
+    : hasValidStatusShape(response.ok as boolean, data, response.error);
+  return valid ? (response as unknown as BlacklistRpcResponse) : null;
 }
 
 export function createBlacklistRpcRequest(
@@ -735,11 +424,16 @@ export function createBlacklistRpcResponse(
     operation,
     ok,
     data: {
-      status: data.status ?? null,
-      count: data.count ?? null,
-      snapshot: data.snapshot ?? null,
-      removed: data.removed ?? null,
-      transfer: data.transfer ?? null,
+      status: valueOrNull(data.status),
+      count: valueOrNull(data.count),
+      removed: valueOrNull(data.removed),
+      revision: valueOrNull(data.revision),
+      authorCount: valueOrNull(data.authorCount),
+      tagCount: valueOrNull(data.tagCount),
+      removedCount: valueOrNull(data.removedCount),
+      tag: valueOrNull(data.tag),
+      deletedTagId: valueOrNull(data.deletedTagId),
+      migratedCount: valueOrNull(data.migratedCount),
     },
     error,
   };

@@ -80,7 +80,20 @@ async function missingTagDeletion(database: IDBDatabase): Promise<TagDeletionMut
   const done = transactionDone(transaction);
   const metadata = await metadataFrom(transaction);
   await done;
-  return { status: "missing", deletedTagId: null, ...context(metadata) };
+  return { status: "missing", deletedTagId: null, migratedCount: 0, ...context(metadata) };
+}
+
+async function migrateTagAuthors(transaction: IDBTransaction, tag: CocoonTag): Promise<number> {
+  const authors = transaction.objectStore(BLACKLIST_STORE_NAMES.authors);
+  const referenced = await requestResult(authors.index("by-tag").getAll(tag.tagId));
+  for (const raw of referenced) {
+    const stored = parseStoredAuthor(raw as unknown, tag);
+    if (!stored) throw new Error("IndexedDB tag reference is unreadable.");
+    authors.put(
+      createStoredAuthor({ ...logicalAuthor(stored), tagId: DEFAULT_TAG_ID }, stored.order),
+    );
+  }
+  return referenced.length;
 }
 
 export async function deleteTagTarget(
@@ -99,28 +112,30 @@ export async function deleteTagTarget(
       return finish(done, {
         status: "protected",
         deletedTagId: null,
+        migratedCount: 0,
         ...context(metadata),
       });
     }
     const tag = await storedTagFrom(transaction, tagId);
     if (!tag) {
-      return finish(done, { status: "missing", deletedTagId: null, ...context(metadata) });
+      return finish(done, {
+        status: "missing",
+        deletedTagId: null,
+        migratedCount: 0,
+        ...context(metadata),
+      });
     }
-    const authors = transaction.objectStore(BLACKLIST_STORE_NAMES.authors);
-    const referenced = await requestResult(authors.index("by-tag").getAll(tagId));
-    for (const raw of referenced) {
-      const stored = parseStoredAuthor(raw as unknown, { tagId: tag.tagId, name: tag.name });
-      if (!stored) throw new Error("IndexedDB tag reference is unreadable.");
-      authors.put(
-        createStoredAuthor({ ...logicalAuthor(stored), tagId: DEFAULT_TAG_ID }, stored.order),
-      );
-    }
+    const migratedCount = await migrateTagAuthors(transaction, {
+      tagId: tag.tagId,
+      name: tag.name,
+    });
     transaction.objectStore(BLACKLIST_STORE_NAMES.tags).delete(tagId);
     const next = incrementMetadata(metadata, { tags: -1 });
     transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).put(next);
     return finish(done, {
       status: "persisted",
       deletedTagId: tagId,
+      migratedCount,
       ...context(metadata, next),
     });
   } catch (error) {

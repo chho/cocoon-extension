@@ -186,30 +186,6 @@
       "count": 1
     },
     {
-      "path": "src/background/blacklist-management-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createBlacklistManagementController' has too many lines (156). Maximum allowed is 50.",
-      "sourceLine": "export function createBlacklistManagementController(",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-transfer-planner.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'planBlacklistTransferMerge' has a complexity of 15. Maximum allowed is 10.",
-      "sourceLine": "export function planBlacklistTransferMerge(",
-      "count": 1
-    },
-    {
-      "path": "src/background/blacklist-transfer-planner.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'planBlacklistTransferMerge' has too many lines (77). Maximum allowed is 50.",
-      "sourceLine": "export function planBlacklistTransferMerge(",
-      "count": 1
-    },
-    {
       "path": "src/background/listeners.ts",
       "ruleId": "complexity",
       "messageId": "complex",
@@ -338,30 +314,6 @@
       "count": 1
     },
     {
-      "path": "src/content/card-filter-controller.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async function 'filter' has a complexity of 15. Maximum allowed is 10.",
-      "sourceLine": "async function filter(card: TCard, evaluation: object): Promise<void> {",
-      "count": 1
-    },
-    {
-      "path": "src/content/card-filter-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'filter' has too many lines (52). Maximum allowed is 50.",
-      "sourceLine": "async function filter(card: TCard, evaluation: object): Promise<void> {",
-      "count": 1
-    },
-    {
-      "path": "src/content/card-filter-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createCardFilterController' has too many lines (141). Maximum allowed is 50.",
-      "sourceLine": "export function createCardFilterController<TCard extends object>(",
-      "count": 1
-    },
-    {
       "path": "src/content/comment-filter-controller.test.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
@@ -376,54 +328,6 @@
       "message": "'controller' is never reassigned. Use 'const' instead.",
       "sourceLine": "let controller: ReturnType<typeof createCommentFilterController>;",
       "count": 4
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'processPending' has a complexity of 19. Maximum allowed is 10.",
-      "sourceLine": "function processPending(): void {",
-      "count": 1
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'resolveCommentAuthorUserId' has a complexity of 18. Maximum allowed is 10.",
-      "sourceLine": "export function resolveCommentAuthorUserId(",
-      "count": 1
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "max-depth",
-      "messageId": "tooDeeply",
-      "message": "Blocks are nested too deeply (4). Maximum allowed is 3.",
-      "sourceLine": "try {",
-      "count": 1
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createCommentFilterController' has too many lines (188). Maximum allowed is 50.",
-      "sourceLine": "export function createCommentFilterController(",
-      "count": 1
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'processPending' has too many lines (57). Maximum allowed is 50.",
-      "sourceLine": "function processPending(): void {",
-      "count": 1
-    },
-    {
-      "path": "src/content/comment-filter-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'resolveCommentAuthorUserId' has too many lines (52). Maximum allowed is 50.",
-      "sourceLine": "export function resolveCommentAuthorUserId(",
-      "count": 1
     },
     {
       "path": "src/content/drawer-controller.ts",
@@ -511,22 +415,6 @@
       "messageId": "exceed",
       "message": "Function 'createMemberUserIdResolver' has too many lines (57). Maximum allowed is 50.",
       "sourceLine": "export function createMemberUserIdResolver(",
-      "count": 1
-    },
-    {
-      "path": "src/content/runtime-state-application.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (119). Maximum allowed is 80.",
-      "sourceLine": "test(\"BUG-004/AC-068 duplicate hover commit reapplies persisted IDs and refreshes current, retained, and replacement comments without side effects\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/content/runtime-state-application.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async arrow function has too many lines (97). Maximum allowed is 80.",
-      "sourceLine": "test(\"BUG-003/AC-066 hover commit applies state through a full connected-comment refresh\", async () => {",
       "count": 1
     },
     {
@@ -634,102 +522,6 @@
       "count": 1
     },
     {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'hasValidResponseShape' has a complexity of 52. Maximum allowed is 10.",
-      "sourceLine": "function hasValidResponseShape(",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseAuthor' has a complexity of 21. Maximum allowed is 10.",
-      "sourceLine": "function parseAuthor(value: unknown): BlacklistAuthorDto | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseBlacklistRpcRequest' has a complexity of 35. Maximum allowed is 10.",
-      "sourceLine": "export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseBlacklistRpcResponse' has a complexity of 27. Maximum allowed is 10.",
-      "sourceLine": "export function parseBlacklistRpcResponse(",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseBlacklistTransferEnvelope' has a complexity of 25. Maximum allowed is 10.",
-      "sourceLine": "export function parseBlacklistTransferEnvelope(",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseSnapshot' has a complexity of 17. Maximum allowed is 10.",
-      "sourceLine": "function parseSnapshot(value: unknown): BlacklistSnapshotDto | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseTag' has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "function parseTag(value: unknown): BlacklistTagDto | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseTransferAuthor' has a complexity of 22. Maximum allowed is 10.",
-      "sourceLine": "function parseTransferAuthor(value: unknown): BlacklistTransferAuthor | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'hasValidResponseShape' has too many lines (66). Maximum allowed is 50.",
-      "sourceLine": "function hasValidResponseShape(",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'parseBlacklistRpcRequest' has too many lines (79). Maximum allowed is 50.",
-      "sourceLine": "export function parseBlacklistRpcRequest(value: unknown): BlacklistRpcRequest | null {",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'parseBlacklistTransferEnvelope' has too many lines (79). Maximum allowed is 50.",
-      "sourceLine": "export function parseBlacklistTransferEnvelope(",
-      "count": 1
-    },
-    {
-      "path": "src/core/blacklist-rpc-contract.ts",
-      "ruleId": "max-lines",
-      "messageId": "exceed",
-      "message": "File has too many lines (696). Maximum allowed is 500.",
-      "sourceLine": "isEmptyInput(input)",
-      "count": 1
-    },
-    {
       "path": "src/core/plugin/descriptor.ts",
       "ruleId": "complexity",
       "messageId": "complex",
@@ -770,163 +562,11 @@
       "count": 1
     },
     {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE production bootstrap rolls failed rename back and enters read-only on storage-unreadable\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE-004/AC-089 export uses exact JSON/filename, guards pending actions, and clears stale success on failure\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 12. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE-004/AC-089 replace inspects exact counts, cancels safely, confirms once, and restores focus\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 13. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE-003/AC-087 successful rename and delete restore useful focus\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async arrow function has a complexity of 18. Maximum allowed is 10.",
-      "sourceLine": "test(\"PROFILE-001/AC-086 management links profiles and preserves tag filtering across refreshes\", async () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "messageId": "unusedVar",
-      "message": "'_button' is defined but never used.",
-      "sourceLine": "_button: HTMLButtonElement,",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "messageId": "unusedVar",
-      "message": "'_button' is defined but never used.",
-      "sourceLine": "async function deleteTag(tag: BlacklistTagDto, _button: HTMLButtonElement): Promise<void> {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async function 'readSelectedTransferFile' has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "async function readSelectedTransferFile(): Promise<void> {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'bootstrapOptions' has too many lines (604). Maximum allowed is 50.",
-      "sourceLine": "export function bootstrapOptions(dependencies: OptionsAppDependencies): OptionsApp {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createAuthorRow' has too many lines (53). Maximum allowed is 50.",
-      "sourceLine": "function createAuthorRow(item: AuthorListItem): HTMLElement {",
-      "count": 1
-    },
-    {
-      "path": "src/options/app.ts",
-      "ruleId": "max-lines",
-      "messageId": "exceed",
-      "message": "File has too many lines (669). Maximum allowed is 500.",
-      "sourceLine": "transferStatus.textContent = \"未选择可导入的数据。\";",
-      "count": 1
-    },
-    {
-      "path": "src/options/author-list-view.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'focusedControl' has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "function focusedControl(",
-      "count": 1
-    },
-    {
-      "path": "src/options/author-list-view.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'renderAuthorListRows' has a complexity of 16. Maximum allowed is 10.",
-      "sourceLine": "export function renderAuthorListRows(",
-      "count": 1
-    },
-    {
-      "path": "src/options/author-list-view.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'restoreFocus' has a complexity of 12. Maximum allowed is 10.",
-      "sourceLine": "function restoreFocus(",
-      "count": 1
-    },
-    {
-      "path": "src/options/author-list-view.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'renderAuthorListRows' has too many lines (104). Maximum allowed is 50.",
-      "sourceLine": "export function renderAuthorListRows(",
-      "count": 1
-    },
-    {
       "path": "src/options/dialog-controller.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
       "message": "Function 'createConfirmationDialogController' has too many lines (78). Maximum allowed is 50.",
       "sourceLine": "export function createConfirmationDialogController(",
-      "count": 1
-    },
-    {
-      "path": "src/options/tag-maintenance-view.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Arrow function has a complexity of 12. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE-003/AC-087 inline rename supports focus, unchanged state, Escape, validation, and save\", () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/tag-maintenance-view.test.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Arrow function has a complexity of 13. Maximum allowed is 10.",
-      "sourceLine": "test(\"MANAGE-003/AC-087 pending tags stay focusable while duplicate actions are guarded\", () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/tag-maintenance-view.test.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Arrow function has too many lines (84). Maximum allowed is 80.",
-      "sourceLine": "test(\"MANAGE-003/AC-087 inline rename supports focus, unchanged state, Escape, validation, and save\", () => {",
-      "count": 1
-    },
-    {
-      "path": "src/options/tag-maintenance-view.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'renderTagMaintenanceView' has too many lines (153). Maximum allowed is 50.",
-      "sourceLine": "export function renderTagMaintenanceView(",
       "count": 1
     },
     {
@@ -983,38 +623,6 @@
       "messageId": "exceed",
       "message": "File has too many lines (864). Maximum allowed is 500.",
       "sourceLine": "const hrefs = Array.from(",
-      "count": 1
-    },
-    {
-      "path": "src/plugins/zhihu/runtime.ts",
-      "ruleId": "max-params",
-      "messageId": "exceed",
-      "message": "Function 'applyCardHiddenState' has too many parameters (5). Maximum allowed is 4.",
-      "sourceLine": "export function applyCardHiddenState(",
-      "count": 1
-    },
-    {
-      "path": "src/popup/app.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'bootstrapPopup' has too many lines (203). Maximum allowed is 50.",
-      "sourceLine": "export function bootstrapPopup(dependencies: PopupAppDependencies): PopupApp {",
-      "count": 1
-    },
-    {
-      "path": "src/ui/blacklist-view-model.test.ts",
-      "ruleId": "max-params",
-      "messageId": "exceed",
-      "message": "Function 'author' has too many parameters (6). Maximum allowed is 4.",
-      "sourceLine": "function author(",
-      "count": 1
-    },
-    {
-      "path": "src/ui/blacklist-view-model.ts",
-      "ruleId": "max-params",
-      "messageId": "exceed",
-      "message": "Function 'managementResults' has too many parameters (5). Maximum allowed is 4.",
-      "sourceLine": "export function managementResults(",
       "count": 1
     },
     {

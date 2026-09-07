@@ -17,8 +17,18 @@ export function createBlacklistContentController(
     async handle(request) {
       return lock.runExclusive(async () => {
         switch (request.operation) {
-          case "hydrate":
-            return repository.hydrate();
+          case "initialize":
+            return repository.querySummary();
+          case "tags-page": {
+            const page = await repository.queryTagsPage(request.input);
+            return {
+              revision: page.revision,
+              tags: page.tags.map(({ tagId, name }) => ({ tagId, name })),
+              nextCursor: page.nextCursor,
+            };
+          }
+          case "identity-match":
+            return repository.queryIdentityMatches(request.input);
           case "commit-author":
             return repository.commitAuthor(request.input.input);
           case "backfill-member-hash":

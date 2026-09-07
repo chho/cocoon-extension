@@ -1,15 +1,14 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
+import { DEFAULT_TAG_ID, type BlacklistedAuthor, type CocoonTag } from "./blacklist-state.ts";
 import {
-  DEFAULT_TAG_ID,
-  createInitialState,
-  type BlacklistState,
-  type BlacklistedAuthor,
-} from "./blacklist-state.ts";
-import { createBlacklistSyncController } from "./blacklist-sync-controller.ts";
+  createBlacklistSyncController,
+  type ContentBlacklistDirectory,
+} from "./blacklist-sync-controller.ts";
 
 const TIMESTAMP = "2026-08-25T12:34:56.789Z";
+const DEFAULT_TAG = { tagId: DEFAULT_TAG_ID, name: "default" } as const;
 
 function author(userId: string, tagId = DEFAULT_TAG_ID): BlacklistedAuthor {
   return {
@@ -23,26 +22,66 @@ function author(userId: string, tagId = DEFAULT_TAG_ID): BlacklistedAuthor {
   };
 }
 
-function stateWith(...authors: BlacklistedAuthor[]): BlacklistState {
-  return { ...createInitialState(), authors };
+function directory(
+  revision: number,
+  tags: readonly CocoonTag[] = [DEFAULT_TAG],
+  authorCount = 0,
+): ContentBlacklistDirectory {
+  return { revision, authorCount, tagCount: tags.length, tags };
 }
 
-test("AC-095 performs one initial hydration and applies a self author delta without rereading", async () => {
-  let hydrations = 0;
-  const applied: BlacklistState[] = [];
+function createHarness(directories: ContentBlacklistDirectory[]) {
+  let loads = 0;
+  const appliedTags: Array<readonly CocoonTag[]> = [];
+  const revisions: number[] = [];
+  const remembered: Array<{ readonly author: BlacklistedAuthor; readonly revision: number }> = [];
   const controller = createBlacklistSyncController({
-    async hydrate() {
-      hydrations += 1;
-      return { state: createInitialState(), revision: 4 };
+    async loadDirectory() {
+      const next = directories[loads];
+      loads += 1;
+      if (!next) throw new Error("Unexpected directory load.");
+      return next;
     },
-    applyState(state) {
-      applied.push(state);
+    applyTags(tags) {
+      appliedTags.push(tags);
+    },
+    setRevision(revision) {
+      revisions.push(revision);
+    },
+    rememberAuthor(value, revision) {
+      remembered.push({ author: value, revision });
     },
   });
+  return {
+    controller,
+    appliedTags,
+    revisions,
+    remembered,
+    get loads() {
+      return loads;
+    },
+  };
+}
 
-  await controller.initialize();
+test("BUG-016 initialization applies only bounded tags and a revision, never authors", async () => {
+  const reading = { tagId: "reading", name: "Reading" };
+  const harness = createHarness([directory(4, [DEFAULT_TAG, reading], 100_000)]);
+
+  await harness.controller.initialize();
+
+  strictEqual(harness.loads, 1);
+  deepStrictEqual(harness.appliedTags, [[DEFAULT_TAG, reading]]);
+  deepStrictEqual(harness.revisions, [4]);
+  deepStrictEqual(harness.remembered, []);
+  strictEqual(harness.controller.getRevision(), 4);
+});
+
+test("BUG-016 self author and duplicate deltas update matcher evidence without a directory reload", async () => {
+  const harness = createHarness([directory(4)]);
+  await harness.controller.initialize();
   const added = author("self-added");
-  await controller.applyAuthorMutation({
+
+  await harness.controller.applyAuthorMutation({
     status: "persisted",
     author: added,
     tag: null,
@@ -51,32 +90,9 @@ test("AC-095 performs one initial hydration and applies a self author delta with
     authorCount: 1,
     tagCount: 1,
   });
-  strictEqual(hydrations, 1);
-  deepStrictEqual(applied.at(-1)?.authors, [added]);
-  strictEqual(controller.getRevision(), 5);
-
-  await controller.handleRevision(5);
-  strictEqual(hydrations, 1);
-});
-
-test("AC-095 duplicate author delta reapplies the current state without hydration", async () => {
-  const existing = author("duplicate");
-  let hydrations = 0;
-  let applications = 0;
-  const controller = createBlacklistSyncController({
-    async hydrate() {
-      hydrations += 1;
-      return { state: stateWith(existing), revision: 5 };
-    },
-    applyState() {
-      applications += 1;
-    },
-  });
-  await controller.initialize();
-
-  await controller.applyAuthorMutation({
+  await harness.controller.applyAuthorMutation({
     status: "duplicate",
-    author: existing,
+    author: added,
     tag: null,
     baseRevision: 5,
     revision: 5,
@@ -84,100 +100,103 @@ test("AC-095 duplicate author delta reapplies the current state without hydratio
     tagCount: 1,
   });
 
-  strictEqual(hydrations, 1);
-  strictEqual(applications, 2);
-  strictEqual(controller.getRevision(), 5);
+  strictEqual(harness.loads, 1);
+  deepStrictEqual(harness.revisions, [4, 5]);
+  deepStrictEqual(harness.remembered, [
+    { author: added, revision: 5 },
+    { author: added, revision: 5 },
+  ]);
 });
 
-test("AC-095 cross-context revision hydrates authoritatively while stale and out-of-order signals cannot overwrite", async () => {
-  const states = [
-    { state: stateWith(author("initial")), revision: 2 },
-    { state: stateWith(author("cross-context")), revision: 4 },
-  ];
-  const applied: string[][] = [];
-  const controller = createBlacklistSyncController({
-    async hydrate() {
-      const next = states.shift();
-      if (!next) throw new Error("unexpected hydration");
-      return next;
-    },
-    applyState(state) {
-      applied.push(state.authors.map(({ userId }) => userId));
-    },
-  });
+test("BUG-016 cross-context revision advances matcher immediately then refreshes only tags", async () => {
+  const reading = { tagId: "reading", name: "Reading" };
+  const harness = createHarness([directory(2), directory(4, [DEFAULT_TAG, reading], 100_000)]);
+  await harness.controller.initialize();
 
-  await controller.initialize();
-  await controller.handleRevision(4);
-  await controller.handleRevision(3);
-  await controller.handleRevision(4);
-  deepStrictEqual(applied, [["initial"], ["cross-context"]]);
-  strictEqual(controller.getRevision(), 4);
+  const refresh = harness.controller.handleRevision(4);
+  deepStrictEqual(harness.revisions, [2, 4]);
+  await refresh;
+  await harness.controller.handleRevision(3);
+  await harness.controller.handleRevision(4);
+
+  strictEqual(harness.loads, 2);
+  deepStrictEqual(harness.appliedTags, [[DEFAULT_TAG], [DEFAULT_TAG, reading]]);
+  strictEqual(harness.controller.getRevision(), 4);
 });
 
-test("AC-095 a raced self delta falls back to one authoritative hydration", async () => {
-  let hydrations = 0;
-  const authoritative = stateWith(author("other-context"), author("self"));
-  const applied: BlacklistState[] = [];
-  const controller = createBlacklistSyncController({
-    async hydrate() {
-      hydrations += 1;
-      return hydrations === 1
-        ? { state: createInitialState(), revision: 1 }
-        : { state: authoritative, revision: 3 };
-    },
-    applyState(state) {
-      applied.push(state);
-    },
-  });
-  await controller.initialize();
+test("BUG-016 self commit and its revision notification converge without hydration", async () => {
+  const harness = createHarness([directory(1)]);
+  await harness.controller.initialize();
+  const committed = author("self");
 
-  await controller.applyAuthorMutation({
+  harness.controller.beginLocalMutation();
+  await harness.controller.handleRevision(2);
+  await harness.controller.applyAuthorMutation({
     status: "persisted",
-    author: author("self"),
+    author: committed,
     tag: null,
-    baseRevision: 2,
-    revision: 3,
-    authorCount: 2,
+    baseRevision: 1,
+    revision: 2,
+    authorCount: 1,
     tagCount: 1,
   });
-  strictEqual(hydrations, 2);
-  deepStrictEqual(applied.at(-1), authoritative);
+  await harness.controller.finishLocalMutation();
+
+  strictEqual(harness.loads, 1);
+  deepStrictEqual(harness.revisions, [1, 2]);
+  deepStrictEqual(harness.remembered, [{ author: committed, revision: 2 }]);
 });
 
-test("AC-095 alias and tag deltas update only local affected records", async () => {
+test("BUG-016 a newer external revision makes an older self result stale and triggers bounded refresh", async () => {
   const reading = { tagId: "reading", name: "Reading" };
-  const original = author("aliased", reading.tagId);
-  let current: BlacklistState = {
-    schemaVersion: 5,
-    tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }, reading],
-    authors: [original],
-  };
-  const controller = createBlacklistSyncController({
-    async hydrate() {
-      return { state: current, revision: 8 };
-    },
-    applyState(state) {
-      current = state;
-    },
-  });
-  await controller.initialize();
-  const updated = { ...original, memberHashId: "a".repeat(32) };
-  await controller.applyAliasMutation({
+  const harness = createHarness([directory(1), directory(3, [DEFAULT_TAG, reading], 2)]);
+  await harness.controller.initialize();
+
+  harness.controller.beginLocalMutation();
+  await harness.controller.handleRevision(3);
+  await harness.controller.applyAuthorMutation({
     status: "persisted",
-    author: updated,
+    author: author("stale-self"),
+    tag: null,
+    baseRevision: 1,
+    revision: 2,
+    authorCount: 1,
+    tagCount: 1,
+  });
+  await harness.controller.finishLocalMutation();
+
+  strictEqual(harness.loads, 2);
+  deepStrictEqual(harness.revisions, [1, 3]);
+  deepStrictEqual(harness.remembered, []);
+  deepStrictEqual(harness.appliedTags.at(-1), [DEFAULT_TAG, reading]);
+});
+
+test("BUG-016 alias and tag mutation deltas stay local while advancing revision", async () => {
+  const reading = { tagId: "reading", name: "Reading" };
+  const harness = createHarness([directory(8, [DEFAULT_TAG, reading], 1)]);
+  await harness.controller.initialize();
+  const aliased = { ...author("aliased", reading.tagId), memberHashId: "a".repeat(32) };
+
+  await harness.controller.applyAliasMutation({
+    status: "persisted",
+    author: aliased,
     baseRevision: 8,
     revision: 9,
     authorCount: 1,
     tagCount: 2,
   });
-  await controller.applyTagDeletion({
+  await harness.controller.applyTagDeletion({
     status: "persisted",
     deletedTagId: reading.tagId,
+    migratedCount: 1,
     baseRevision: 9,
     revision: 10,
     authorCount: 1,
     tagCount: 1,
   });
-  deepStrictEqual(current.tags, [{ tagId: DEFAULT_TAG_ID, name: "default" }]);
-  deepStrictEqual(current.authors, [{ ...updated, tagId: DEFAULT_TAG_ID }]);
+
+  strictEqual(harness.loads, 1);
+  deepStrictEqual(harness.revisions, [8, 9, 10]);
+  deepStrictEqual(harness.remembered, [{ author: aliased, revision: 9 }]);
+  deepStrictEqual(harness.appliedTags.at(-1), [DEFAULT_TAG]);
 });

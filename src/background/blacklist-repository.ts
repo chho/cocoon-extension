@@ -2,7 +2,6 @@ import type * as BlacklistStateModule from "../content/blacklist-state.ts";
 import type {
   BlacklistState,
   BlacklistedAuthor,
-  CocoonTag,
   CommitInput,
   UpvoterCommitInput,
 } from "../content/blacklist-state.ts";
@@ -20,12 +19,8 @@ import {
   createStoredAuthor,
   createStoredIdentifier,
   createStoredTag,
-  identifierKey,
   openBlacklistDatabase,
-  parseStoredAuthor,
-  parseStoredIdentifier,
   parseStoredMetadata,
-  parseStoredTag,
   requestResult,
   transactionDone,
   type StoredBlacklistMetadata,
@@ -38,12 +33,23 @@ import {
   restoreAuthorTarget,
 } from "./blacklist-repository-management.ts";
 import {
+  queryAuthorsPage,
+  queryIdentityMatches,
+  queryPlatformsPage,
+  querySummary,
+  queryTagsPage,
+} from "./blacklist-repository-query.ts";
+import {
   backfillMemberHashTarget,
   commitAuthorTarget,
   commitUpvoterTarget,
   preflightDirectTarget,
 } from "./blacklist-repository-targets.ts";
-import type { BlacklistHydration, BlacklistRepository } from "./blacklist-repository-types.ts";
+import type {
+  BlacklistRepository,
+  TransferCapableBlacklistRepository,
+} from "./blacklist-repository-types.ts";
+import { createBlacklistTransferRepository } from "./blacklist-repository-transfer-adapter.ts";
 
 const { STORAGE_KEY, parseBlacklistState } =
   backgroundBlacklistState as typeof BlacklistStateModule;
@@ -54,7 +60,10 @@ const {
 } = backgroundRevisionContract as typeof RevisionContractModule;
 
 export { BLACKLIST_DATABASE_VERSION, BLACKLIST_STORE_NAMES };
-export type { BlacklistRepository } from "./blacklist-repository-types.ts";
+export type {
+  BlacklistRepository,
+  TransferCapableBlacklistRepository,
+} from "./blacklist-repository-types.ts";
 
 interface LocalStorageArea {
   get(key: string): Promise<Record<string, unknown>>;
@@ -67,24 +76,9 @@ export interface BlacklistRepositoryOptions {
   readonly storage: LocalStorageArea;
   readonly databaseName?: string;
   readonly beforeMigrationComplete?: () => void;
-}
-
-function logicalAuthor(
-  author: NonNullable<ReturnType<typeof parseStoredAuthor>>,
-): BlacklistedAuthor {
-  return {
-    platformId: author.platformId,
-    userId: author.userId,
-    memberHashId: author.memberHashId,
-    authorNameAtCapture: author.authorNameAtCapture,
-    tagId: author.tagId,
-    blacklistedAt: author.blacklistedAt,
-    blockSource: author.blockSource,
-  };
-}
-
-function logicalTag(tag: NonNullable<ReturnType<typeof parseStoredTag>>): CocoonTag {
-  return { tagId: tag.tagId, name: tag.name };
+  readonly clock?: () => number;
+  readonly randomSessionId?: () => string;
+  readonly beforeFinalizeCommit?: (transaction: IDBTransaction) => void;
 }
 
 function abort(transaction: IDBTransaction): void {
@@ -122,125 +116,6 @@ async function readMetadata(database: IDBDatabase): Promise<StoredBlacklistMetad
   return metadata;
 }
 
-function validateOrders(values: readonly { readonly order: number }[], nextOrder: number): boolean {
-  const orders = new Set(values.map(({ order }) => order));
-  return orders.size === values.length && values.every(({ order }) => order < nextOrder);
-}
-
-interface RawHydration {
-  readonly metadata: unknown;
-  readonly authors: readonly unknown[];
-  readonly identifiers: readonly unknown[];
-  readonly tags: readonly unknown[];
-}
-
-async function readRawHydration(database: IDBDatabase): Promise<RawHydration> {
-  const transaction = database.transaction(Object.values(BLACKLIST_STORE_NAMES), "readonly");
-  const done = transactionDone(transaction);
-  const [metadata, authors, identifiers, tags] = await Promise.all([
-    requestResult(
-      transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).get(BLACKLIST_METADATA_KEY),
-    ),
-    requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.authors).getAll()),
-    requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.identifiers).getAll()),
-    requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.tags).getAll()),
-  ]);
-  await done;
-  return { metadata, authors, identifiers, tags };
-}
-
-function requireParsed<Value>(values: readonly (Value | null)[], message: string): Value[] {
-  if (values.some((value) => value === null)) throw new Error(message);
-  return values as Value[];
-}
-
-function parseHydrationTags(values: readonly unknown[]): ReturnType<typeof parseStoredTag>[] {
-  return values.map(parseStoredTag);
-}
-
-function parseHydrationAuthors(
-  values: readonly unknown[],
-  tags: readonly NonNullable<ReturnType<typeof parseStoredTag>>[],
-): ReturnType<typeof parseStoredAuthor>[] {
-  const tagsById = new Map(tags.map((tag) => [tag.tagId, logicalTag(tag)]));
-  return values.map((value) => {
-    if (typeof value !== "object" || value === null || !("tagId" in value)) return null;
-    const tag = typeof value.tagId === "string" ? tagsById.get(value.tagId) : undefined;
-    return tag ? parseStoredAuthor(value, tag) : null;
-  });
-}
-
-function validateHydrationMetadata(
-  metadata: StoredBlacklistMetadata,
-  authors: readonly NonNullable<ReturnType<typeof parseStoredAuthor>>[],
-  tags: readonly NonNullable<ReturnType<typeof parseStoredTag>>[],
-): void {
-  const countsMatch = metadata.authorCount === authors.length && metadata.tagCount === tags.length;
-  const ordersMatch =
-    validateOrders(authors, metadata.nextAuthorOrder) &&
-    validateOrders(tags, metadata.nextTagOrder);
-  if (!countsMatch || !ordersMatch) {
-    throw new Error("IndexedDB blacklist metadata does not match its records.");
-  }
-}
-
-function validateIdentifierNamespace(
-  authors: readonly NonNullable<ReturnType<typeof parseStoredAuthor>>[],
-  identifiers: readonly NonNullable<ReturnType<typeof parseStoredIdentifier>>[],
-): void {
-  const expected = new Map<string, string>();
-  for (const author of authors) {
-    expected.set(identifierKey(author.platformId, author.userId), author.authorKey);
-    if (author.memberHashId !== null) {
-      expected.set(identifierKey(author.platformId, author.memberHashId), author.authorKey);
-    }
-  }
-  const matches = identifiers.every(
-    (identifier) => expected.get(identifier.identifierKey) === identifier.authorKey,
-  );
-  if (expected.size !== identifiers.length || !matches) {
-    throw new Error("IndexedDB identifier namespace is incomplete or conflicting.");
-  }
-}
-
-function createHydrationState(
-  authors: NonNullable<ReturnType<typeof parseStoredAuthor>>[],
-  tags: NonNullable<ReturnType<typeof parseStoredTag>>[],
-): BlacklistState {
-  authors.sort((left, right) => left.order - right.order);
-  tags.sort((left, right) => left.order - right.order);
-  const candidate = {
-    schemaVersion: 5,
-    tags: tags.map(logicalTag),
-    authors: authors.map(logicalAuthor),
-  } satisfies BlacklistState;
-  const parsed = parseBlacklistState(candidate);
-  if (parsed.status !== "valid")
-    throw new Error("IndexedDB logical blacklist state is unreadable.");
-  return parsed.state;
-}
-
-async function readHydration(database: IDBDatabase): Promise<BlacklistHydration> {
-  const raw = await readRawHydration(database);
-  const metadata = parseStoredMetadata(raw.metadata);
-  if (!metadata) throw new Error("IndexedDB blacklist state is unreadable.");
-  const tags = requireParsed(
-    parseHydrationTags(raw.tags),
-    "IndexedDB blacklist state is unreadable.",
-  );
-  const authors = requireParsed(
-    parseHydrationAuthors(raw.authors, tags),
-    "IndexedDB blacklist state is unreadable.",
-  );
-  const identifiers = requireParsed(
-    raw.identifiers.map(parseStoredIdentifier),
-    "IndexedDB blacklist state is unreadable.",
-  );
-  validateHydrationMetadata(metadata, authors, tags);
-  validateIdentifierNamespace(authors, identifiers);
-  return { state: createHydrationState(authors, tags), revision: metadata.revision };
-}
-
 async function migrateState(
   database: IDBDatabase,
   state: BlacklistState,
@@ -266,34 +141,6 @@ async function migrateState(
     metadataStore.add(metadata);
     await done;
     return metadata;
-  } catch (error) {
-    abort(transaction);
-    await done.catch(() => undefined);
-    throw error;
-  }
-}
-
-async function replaceState(database: IDBDatabase, state: BlacklistState): Promise<number> {
-  const transaction = database.transaction(Object.values(BLACKLIST_STORE_NAMES), "readwrite");
-  const done = transactionDone(transaction);
-  try {
-    const metadataStore = transaction.objectStore(BLACKLIST_STORE_NAMES.metadata);
-    const raw = await requestResult(metadataStore.get(BLACKLIST_METADATA_KEY));
-    const current = parseStoredMetadata(raw as unknown);
-    if (!current || current.revision >= Number.MAX_SAFE_INTEGER) {
-      throw new Error("IndexedDB blacklist metadata is unreadable.");
-    }
-    for (const storeName of [
-      BLACKLIST_STORE_NAMES.authors,
-      BLACKLIST_STORE_NAMES.identifiers,
-      BLACKLIST_STORE_NAMES.tags,
-    ]) {
-      transaction.objectStore(storeName).clear();
-    }
-    writeStateRecords(transaction, state);
-    metadataStore.put(createMetadata(state, current.revision + 1));
-    await done;
-    return current.revision + 1;
   } catch (error) {
     abort(transaction);
     await done.catch(() => undefined);
@@ -405,7 +252,7 @@ async function publishResult<Result extends { readonly revision: number }>(
   return result;
 }
 
-class IndexedDbBlacklistRepository implements BlacklistRepository {
+class IndexedDbBlacklistRepository {
   readonly environment: RepositoryEnvironment;
 
   constructor(options: BlacklistRepositoryOptions) {
@@ -421,8 +268,24 @@ class IndexedDbBlacklistRepository implements BlacklistRepository {
     };
   }
 
-  async hydrate(): Promise<BlacklistHydration> {
-    return readHydration(await ensureInitialized(this.environment));
+  async querySummary() {
+    return querySummary(await ensureInitialized(this.environment));
+  }
+
+  async queryAuthorsPage(query: Parameters<BlacklistRepository["queryAuthorsPage"]>[0]) {
+    return queryAuthorsPage(await ensureInitialized(this.environment), query);
+  }
+
+  async queryTagsPage(query: Parameters<BlacklistRepository["queryTagsPage"]>[0]) {
+    return queryTagsPage(await ensureInitialized(this.environment), query);
+  }
+
+  async queryPlatformsPage(query: Parameters<BlacklistRepository["queryPlatformsPage"]>[0]) {
+    return queryPlatformsPage(await ensureInitialized(this.environment), query);
+  }
+
+  async queryIdentityMatches(query: Parameters<BlacklistRepository["queryIdentityMatches"]>[0]) {
+    return queryIdentityMatches(await ensureInitialized(this.environment), query);
   }
 
   commitAuthor(input: CommitInput) {
@@ -475,19 +338,18 @@ class IndexedDbBlacklistRepository implements BlacklistRepository {
       renameTagTarget(database, tagId, name),
     );
   }
-
-  async replaceAll(untrustedState: BlacklistState): Promise<BlacklistHydration> {
-    const parsed = parseBlacklistState(untrustedState);
-    if (parsed.status !== "valid") throw new Error("Replacement blacklist state is invalid.");
-    const database = await ensureInitialized(this.environment);
-    const revision = await replaceState(database, parsed.state);
-    await publishRevision(this.environment, revision);
-    return { state: parsed.state, revision };
-  }
 }
 
 export function createBlacklistRepository(
   options: BlacklistRepositoryOptions,
-): BlacklistRepository {
-  return new IndexedDbBlacklistRepository(options);
+): TransferCapableBlacklistRepository {
+  const repository = new IndexedDbBlacklistRepository(options);
+  const transfer = createBlacklistTransferRepository({
+    database: () => ensureInitialized(repository.environment),
+    clock: options.clock ?? Date.now,
+    randomSessionId: options.randomSessionId ?? (() => crypto.randomUUID().replaceAll("-", "")),
+    beforeFinalizeCommit: options.beforeFinalizeCommit,
+    publishRevision: (revision) => publishRevision(repository.environment, revision),
+  });
+  return Object.assign(repository, transfer);
 }

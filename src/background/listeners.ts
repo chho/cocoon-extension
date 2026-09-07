@@ -8,15 +8,34 @@ import {
   type BadgeController,
   type BadgeMessageSender,
 } from "./badge-controller.ts";
+import type * as QueryRpcContractModule from "../core/blacklist-query-rpc-contract.ts";
+import type {
+  BlacklistQueryRequest,
+  BlacklistQueryResponse,
+} from "../core/blacklist-query-rpc-contract.ts";
+// @ts-expect-error Vite resolves the background-only copy during bundling.
+import * as backgroundQueryRpcContract from "../core/blacklist-query-rpc-contract.ts?background-copy";
 import type * as RpcContractModule from "../core/blacklist-rpc-contract.ts";
 import type { BlacklistRpcRequest, BlacklistRpcResponse } from "../core/blacklist-rpc-contract.ts";
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundRpcContract from "../core/blacklist-rpc-contract.ts?background-copy";
+import type * as TransferRpcContractModule from "../core/blacklist-transfer-rpc-contract.ts";
+import type {
+  BlacklistTransferRequest,
+  BlacklistTransferResponse,
+} from "../core/blacklist-transfer-rpc-contract.ts";
+// @ts-expect-error Vite resolves the background-only copy during bundling.
+import * as backgroundTransferRpcContract from "../core/blacklist-transfer-rpc-contract.ts?background-copy";
+import { mapBlacklistTransferError } from "./blacklist-transfer-controller.ts";
 
-const { createBlacklistRpcResponse, isBlacklistTransferOperation, parseBlacklistRpcRequest } =
+const { createBlacklistQueryResponse, parseBlacklistQueryRequest } =
+  backgroundQueryRpcContract as typeof QueryRpcContractModule;
+const { createBlacklistRpcResponse, parseBlacklistRpcRequest } =
   backgroundRpcContract as typeof RpcContractModule;
 const { createBlacklistContentResponse, parseBlacklistContentRequest } =
   backgroundContentRpcContract as typeof ContentRpcContractModule;
+const { createBlacklistTransferResponse, parseBlacklistTransferRequest } =
+  backgroundTransferRpcContract as typeof TransferRpcContractModule;
 
 export type BadgeRuntimeMessageListener = (
   message: unknown,
@@ -39,10 +58,15 @@ export type BlacklistRuntimeMessageListener = (
 
 export interface BlacklistRpcHandler {
   handle(request: BlacklistRpcRequest): Promise<BlacklistRpcResponse>;
+  handleQuery?(request: BlacklistQueryRequest): Promise<BlacklistQueryResponse>;
 }
 
 export interface BlacklistContentRpcHandler {
   handle(request: ContentRpcContractModule.BlacklistContentRequest): Promise<unknown>;
+}
+
+export interface BlacklistTransferRpcHandler {
+  handleTransfer(request: BlacklistTransferRequest): Promise<BlacklistTransferResponse>;
 }
 
 function authorizedUiPath(sender: UiMessageSender, runtimeId: string): string | null {
@@ -109,34 +133,26 @@ export function createBlacklistContentRuntimeMessageListener(
   };
 }
 
-export function createBlacklistRuntimeMessageListener(
-  handler: BlacklistRpcHandler,
+export function createBlacklistTransferRuntimeMessageListener(
+  handler: BlacklistTransferRpcHandler,
   runtimeId: string,
   reportFailure: () => void,
 ): BlacklistRuntimeMessageListener {
   return (message, sender, sendResponse) => {
-    const request = parseBlacklistRpcRequest(message);
-    if (
-      !request ||
-      !isAuthorizedUiSender(sender, runtimeId) ||
-      (isBlacklistTransferOperation(request.operation) &&
-        !isAuthorizedTransferSender(sender, runtimeId))
-    ) {
-      return false;
-    }
+    const request = parseBlacklistTransferRequest(message);
+    if (!request || !isAuthorizedTransferSender(sender, runtimeId)) return false;
     void (async () => {
-      let response: BlacklistRpcResponse;
+      let response: BlacklistTransferResponse;
       try {
-        response = await handler.handle(request);
-      } catch {
+        response = await handler.handleTransfer(request);
+      } catch (error) {
         reportFailure();
-        response =
-          request.operation === "status"
-            ? createBlacklistRpcResponse("status", true, {
-                status: "connection-error",
-                count: 0,
-              })
-            : createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
+        response = createBlacklistTransferResponse(
+          request.operation,
+          false,
+          null,
+          mapBlacklistTransferError(request.operation, error),
+        );
       }
       try {
         sendResponse(response);
@@ -144,6 +160,71 @@ export function createBlacklistRuntimeMessageListener(
         reportFailure();
       }
     })();
+    return true;
+  };
+}
+
+async function respondToBlacklistQuery(
+  handleQuery: (request: BlacklistQueryRequest) => Promise<BlacklistQueryResponse>,
+  query: BlacklistQueryRequest,
+  sendResponse: (response?: unknown) => void,
+  reportFailure: () => void,
+): Promise<void> {
+  let response: BlacklistQueryResponse;
+  try {
+    response = await handleQuery(query);
+  } catch {
+    reportFailure();
+    response = createBlacklistQueryResponse(query.operation, false, null, "storage-unreadable");
+  }
+  try {
+    sendResponse(response);
+  } catch {
+    reportFailure();
+  }
+}
+
+function managementFailureResponse(request: BlacklistRpcRequest): BlacklistRpcResponse {
+  return request.operation === "status"
+    ? createBlacklistRpcResponse("status", true, { status: "connection-error", count: 0 })
+    : createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
+}
+
+async function respondToBlacklistManagement(
+  handler: BlacklistRpcHandler,
+  request: BlacklistRpcRequest,
+  sendResponse: (response?: unknown) => void,
+  reportFailure: () => void,
+): Promise<void> {
+  let response: BlacklistRpcResponse;
+  try {
+    response = await handler.handle(request);
+  } catch {
+    reportFailure();
+    response = managementFailureResponse(request);
+  }
+  try {
+    sendResponse(response);
+  } catch {
+    reportFailure();
+  }
+}
+
+export function createBlacklistRuntimeMessageListener(
+  handler: BlacklistRpcHandler,
+  runtimeId: string,
+  reportFailure: () => void,
+): BlacklistRuntimeMessageListener {
+  return (message, sender, sendResponse) => {
+    const query = parseBlacklistQueryRequest(message);
+    if (query) {
+      if (!isAuthorizedUiSender(sender, runtimeId) || !handler.handleQuery) return false;
+      void respondToBlacklistQuery(handler.handleQuery, query, sendResponse, reportFailure);
+      return true;
+    }
+    const request = parseBlacklistRpcRequest(message);
+    if (!request || !isAuthorizedUiSender(sender, runtimeId)) return false;
+    void respondToBlacklistManagement(handler, request, sendResponse, reportFailure);
     return true;
   };
 }

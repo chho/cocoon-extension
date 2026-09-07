@@ -241,10 +241,11 @@ git diff --check
 ## Background RPC、管理事务与导入导出
 
 - Popup/options 的黑名单读写必须通过严格版本化 RPC 和 background IndexedDB 事务边界；未知、额外字段、错误 operation、未授权 sender 或超限消息必须 fail closed。
-- 普通管理 RPC 只接受精确内置 Popup/options 页面；JSON transfer operation 只能接受精确 `options/options.html` sender。
-- 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors 和 tags，不得包含设置、Badge/session 状态或其他 storage 数据。
-- 导入合并与替换必须先完成固定键、版本、字段、长度、数量、标签引用、平台身份和 alias 冲突校验，再在锁内重读并最多执行一次原子写入；解析、冲突、锁或写入失败时不得留下部分状态或虚假成功。
-- Transfer 文件和 RPC JSON 上限为 8 MiB，作者最多 20,000 条、标签最多 2,000 个；不得为导出新增 `downloads` 权限，继续使用扩展页面本地 Blob 下载。
+- 普通管理 RPC 只接受精确内置 Popup/options 页面；content 身份查询只接受同扩展知乎主 frame；JSON transfer operation 只能接受精确 `options/options.html` sender。
+- Popup/options/content 必须使用有界摘要、keyset 分页或身份批查，不得通过单条消息读取完整作者集合；普通 RPC 单条 JSON 最多 256 KiB，作者页最多 50 条、标签页最多 100 条、身份批查最多 200 个、管理 mutation batch 最多 500 个，cursor 最多 2 KiB。
+- 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors 和 tags，不得包含设置、Badge/session 状态或其他 storage 数据；导出必须绑定 revision 分页读取并在 options 本地组装 Blob，中途 revision 变化时中止。
+- 导入合并与替换必须先完成固定键、版本、字段、长度、标签引用、平台身份和 alias 冲突校验，再以持久 session 和有界 chunk staging 接收，最后在锁内重读并最多执行一次原子 finalize；解析、冲突、锁或写入失败时不得留下部分权威状态或虚假成功。
+- IndexedDB 作者总数不设 Cocoon 人工上限；实际容量受浏览器配额和设备资源约束。单次 transfer 文件上限为 32 MiB，标签最多 2,000 个，每个 chunk 最多 500 位作者且单条消息最多 256 KiB；这些操作边界不得被当作数据库总容量限制。不得为导出新增 `downloads` 权限，继续使用扩展页面本地 Blob 下载。
 - 真实 `cocoon-blacklist-*.json` 导出包含作者名称、稳定 ID、alias、标签、来源和时间等个人数据，不得提交、分享、上传或附加到 Issue，也不得直接用作测试 fixture。测试必须使用合成标识和最小构造数据。
 
 ## 公开仓库与敏感文件规则

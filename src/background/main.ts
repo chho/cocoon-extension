@@ -3,11 +3,14 @@ import {
   createBadgeRuntimeMessageListener,
   createBlacklistContentRuntimeMessageListener,
   createBlacklistRuntimeMessageListener,
+  createBlacklistTransferRuntimeMessageListener,
 } from "./listeners.ts";
 import { createBlacklistContentController } from "./blacklist-content-controller.ts";
 import { createBlacklistLockCoordinator } from "./blacklist-lock-coordinator.ts";
 import { createBlacklistManagementController } from "./blacklist-management-controller.ts";
+import { createBlacklistQueryController } from "./blacklist-query-controller.ts";
 import { createBlacklistRepository } from "./blacklist-repository.ts";
+import { createBlacklistTransferController } from "./blacklist-transfer-controller.ts";
 import { createStatusController } from "./status-controller.ts";
 
 function reportBadgeFailure(): void {
@@ -91,6 +94,8 @@ const blacklistManagementController = createBlacklistManagementController(
   blacklistLockCoordinator,
   statusController,
 );
+const blacklistQueryController = createBlacklistQueryController(blacklistRepository);
+const blacklistTransferController = createBlacklistTransferController(blacklistRepository);
 
 chrome.runtime.onMessage.addListener(
   createBadgeRuntimeMessageListener(badgeController, reportBadgeFailure),
@@ -103,8 +108,18 @@ chrome.runtime.onMessage.addListener(
   ),
 );
 chrome.runtime.onMessage.addListener(
+  createBlacklistTransferRuntimeMessageListener(
+    blacklistTransferController,
+    chrome.runtime.id,
+    reportBlacklistFailure,
+  ),
+);
+chrome.runtime.onMessage.addListener(
   createBlacklistRuntimeMessageListener(
-    blacklistManagementController,
+    {
+      handle: blacklistManagementController.handle,
+      handleQuery: blacklistQueryController.handleQuery,
+    },
     chrome.runtime.id,
     reportBlacklistFailure,
   ),

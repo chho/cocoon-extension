@@ -3,21 +3,20 @@ import type {
   AuthorMutationResult,
   TagDeletionMutationResult,
 } from "../background/blacklist-repository-types.ts";
-import {
-  DEFAULT_TAG_ID,
-  type BlacklistState,
-  type BlacklistedAuthor,
-  type CocoonTag,
-} from "./blacklist-state.ts";
+import type { BlacklistedAuthor, CocoonTag } from "./blacklist-state.ts";
 
-interface BlacklistHydration {
-  readonly state: BlacklistState;
+export interface ContentBlacklistDirectory {
   readonly revision: number;
+  readonly authorCount: number;
+  readonly tagCount: number;
+  readonly tags: readonly CocoonTag[];
 }
 
 interface BlacklistSyncDependencies {
-  hydrate(): Promise<BlacklistHydration>;
-  applyState(state: BlacklistState): void;
+  loadDirectory(): Promise<ContentBlacklistDirectory>;
+  applyTags(tags: readonly CocoonTag[]): void;
+  setRevision(revision: number): void;
+  rememberAuthor(author: BlacklistedAuthor, revision: number): void;
 }
 
 export interface BlacklistSyncController {
@@ -31,37 +30,17 @@ export interface BlacklistSyncController {
   getRevision(): number;
 }
 
-interface DeltaApplication {
-  readonly baseRevision: number;
-  readonly revision: number;
-  readonly authorCount: number;
-  readonly tagCount: number;
-  readonly update: (state: BlacklistState) => BlacklistState;
-}
-
-function replaceAuthor(
-  authors: readonly BlacklistedAuthor[],
-  author: BlacklistedAuthor,
-): BlacklistedAuthor[] {
-  const index = authors.findIndex(
-    (candidate) => candidate.platformId === author.platformId && candidate.userId === author.userId,
-  );
-  if (index === -1) return [...authors, author];
-  return authors.map((candidate, candidateIndex) =>
-    candidateIndex === index ? author : candidate,
-  );
-}
-
 function addTag(tags: readonly CocoonTag[], tag: CocoonTag | null): CocoonTag[] {
   if (tag === null || tags.some(({ tagId }) => tagId === tag.tagId)) return [...tags];
   return [...tags, tag];
 }
 
 class BlacklistSyncControllerImpl implements BlacklistSyncController {
-  private currentState: BlacklistState | null = null;
+  private tags: readonly CocoonTag[] = [];
   private currentRevision = -1;
+  private directoryRevision = -1;
   private pendingLocalMutations = 0;
-  private deferredRevision = -1;
+  private deferredDirectoryRevision = -1;
   private operationTail = Promise.resolve();
   private readonly dependencies: BlacklistSyncDependencies;
 
@@ -85,39 +64,52 @@ class BlacklistSyncControllerImpl implements BlacklistSyncController {
     })();
   }
 
-  private applyHydration(hydration: BlacklistHydration, minimumRevision = -1): void {
-    if (hydration.revision < minimumRevision || hydration.revision < this.currentRevision) return;
-    this.currentState = hydration.state;
-    this.currentRevision = hydration.revision;
-    this.dependencies.applyState(hydration.state);
+  private advanceRevision(revision: number): void {
+    if (revision <= this.currentRevision) return;
+    this.currentRevision = revision;
+    this.dependencies.setRevision(revision);
   }
 
-  private async rehydrate(minimumRevision = -1): Promise<void> {
-    this.applyHydration(await this.dependencies.hydrate(), minimumRevision);
+  private applyDirectory(directory: ContentBlacklistDirectory, minimumRevision = -1): void {
+    if (directory.revision < minimumRevision || directory.revision < this.currentRevision) return;
+    this.tags = [...directory.tags];
+    this.directoryRevision = directory.revision;
+    this.dependencies.applyTags(this.tags);
+    this.advanceRevision(directory.revision);
   }
 
-  private async applyDelta(application: DeltaApplication): Promise<void> {
-    if (application.revision <= this.currentRevision) return;
-    if (this.currentState === null || application.baseRevision !== this.currentRevision) {
-      await this.rehydrate(application.revision);
-      return;
-    }
-    const next = application.update(this.currentState);
-    if (
-      next.authors.length !== application.authorCount ||
-      next.tags.length !== application.tagCount
-    ) {
-      await this.rehydrate(application.revision);
-      return;
-    }
-    this.currentState = next;
-    this.currentRevision = application.revision;
-    this.dependencies.applyState(next);
+  private async reloadDirectory(minimumRevision = -1): Promise<void> {
+    this.applyDirectory(await this.dependencies.loadDirectory(), minimumRevision);
+  }
+
+  private applyLocalTags(
+    tags: readonly CocoonTag[],
+    revision: number,
+    expectedCount: number,
+  ): boolean {
+    if (tags.length !== expectedCount) return false;
+    this.tags = [...tags];
+    this.directoryRevision = revision;
+    this.dependencies.applyTags(this.tags);
+    return true;
+  }
+
+  private canAdvanceUnchangedDirectory(baseRevision: number): boolean {
+    return this.directoryRevision === baseRevision;
+  }
+
+  private async prepareMutationRevision(baseRevision: number, revision: number): Promise<boolean> {
+    if (revision < this.currentRevision) return false;
+    this.advanceRevision(revision);
+    if (revision !== this.currentRevision) return false;
+    if (revision === baseRevision || this.canAdvanceUnchangedDirectory(baseRevision)) return true;
+    await this.reloadDirectory(revision);
+    return revision === this.currentRevision && revision === this.directoryRevision;
   }
 
   initialize(): Promise<void> {
     return this.enqueue(async () => {
-      if (this.currentState === null) await this.rehydrate();
+      if (this.directoryRevision < 0) await this.reloadDirectory();
     });
   }
 
@@ -130,78 +122,63 @@ class BlacklistSyncControllerImpl implements BlacklistSyncController {
       return Promise.reject(new Error("No local blacklist mutation is pending."));
     }
     this.pendingLocalMutations -= 1;
-    if (this.pendingLocalMutations > 0 || this.deferredRevision <= this.currentRevision) {
+    if (
+      this.pendingLocalMutations > 0 ||
+      this.deferredDirectoryRevision <= this.directoryRevision
+    ) {
       return Promise.resolve();
     }
-    const revision = this.deferredRevision;
-    this.deferredRevision = -1;
-    return this.enqueue(async () => this.rehydrate(revision));
+    const revision = this.deferredDirectoryRevision;
+    this.deferredDirectoryRevision = -1;
+    return this.enqueue(async () => this.reloadDirectory(revision));
   }
 
   handleRevision(revision: number): Promise<void> {
+    if (revision <= this.currentRevision) return Promise.resolve();
+    this.advanceRevision(revision);
     if (this.pendingLocalMutations > 0) {
-      this.deferredRevision = Math.max(this.deferredRevision, revision);
+      this.deferredDirectoryRevision = Math.max(this.deferredDirectoryRevision, revision);
       return Promise.resolve();
     }
     return this.enqueue(async () => {
-      if (revision > this.currentRevision) await this.rehydrate(revision);
+      if (revision > this.directoryRevision) await this.reloadDirectory(revision);
     });
   }
 
   applyAuthorMutation(result: AuthorMutationResult): Promise<void> {
     return this.enqueue(async () => {
       if (result.status === "invalid") return;
-      if (result.revision === result.baseRevision) {
-        this.reapplyDuplicate(result);
-        return;
+      const prepared = await this.prepareMutationRevision(result.baseRevision, result.revision);
+      if (!prepared) return;
+      const nextTags = addTag(this.tags, result.tag);
+      if (!this.applyLocalTags(nextTags, result.revision, result.tagCount)) {
+        await this.reloadDirectory(result.revision);
       }
-      await this.applyDelta({
-        ...result,
-        update: (state) => ({
-          ...state,
-          tags: addTag(state.tags, result.tag),
-          authors: replaceAuthor(state.authors, result.author),
-        }),
-      });
+      if (result.revision === this.currentRevision) {
+        this.dependencies.rememberAuthor(result.author, result.revision);
+      }
     });
-  }
-
-  private reapplyDuplicate(result: AuthorMutationResult): void {
-    if (result.status !== "duplicate" || this.currentState === null) return;
-    this.currentState = {
-      ...this.currentState,
-      authors: replaceAuthor(this.currentState.authors, result.author),
-    };
-    this.dependencies.applyState(this.currentState);
   }
 
   applyAliasMutation(result: AliasMutationResult): Promise<void> {
     return this.enqueue(async () => {
-      if (result.status !== "persisted") return;
-      await this.applyDelta({
-        ...result,
-        update: (state) => ({
-          ...state,
-          authors: replaceAuthor(state.authors, result.author),
-        }),
-      });
+      if (result.status === "invalid") return;
+      const prepared = await this.prepareMutationRevision(result.baseRevision, result.revision);
+      if (!prepared) return;
+      this.directoryRevision = result.revision;
+      this.dependencies.rememberAuthor(result.author, result.revision);
     });
   }
 
   applyTagDeletion(result: TagDeletionMutationResult): Promise<void> {
     return this.enqueue(async () => {
       if (result.status !== "persisted" || result.deletedTagId === null) return;
-      const deletedTagId = result.deletedTagId;
-      await this.applyDelta({
-        ...result,
-        update: (state) => ({
-          ...state,
-          tags: state.tags.filter(({ tagId }) => tagId !== deletedTagId),
-          authors: state.authors.map((author) =>
-            author.tagId === deletedTagId ? { ...author, tagId: DEFAULT_TAG_ID } : author,
-          ),
-        }),
-      });
+      const prepared = await this.prepareMutationRevision(result.baseRevision, result.revision);
+      if (!prepared) return;
+      const nextTags = this.tags.filter(({ tagId }) => tagId !== result.deletedTagId);
+      if (!this.applyLocalTags(nextTags, result.revision, result.tagCount)) {
+        await this.reloadDirectory(result.revision);
+      }
     });
   }
 

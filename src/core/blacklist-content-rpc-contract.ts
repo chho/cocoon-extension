@@ -3,12 +3,16 @@ import type {
   CommitInput,
   UpvoterCommitInput,
 } from "../content/blacklist-state.ts";
+import type { BlacklistIdentityQueryDto } from "./blacklist-query-rpc-contract.ts";
 
-export const BLACKLIST_CONTENT_RPC_VERSION = 1 as const;
+export const BLACKLIST_CONTENT_RPC_VERSION = 2 as const;
 export const BLACKLIST_CONTENT_RPC_REQUEST_TYPE = "cocoon.blacklist.content.request" as const;
 export const BLACKLIST_CONTENT_RPC_RESPONSE_TYPE = "cocoon.blacklist.content.response" as const;
+export const MAX_BLACKLIST_CONTENT_RPC_BYTES = 256 * 1024;
+export const BLACKLIST_CONTENT_TAG_PAGE_SIZE = 100;
+export const BLACKLIST_CONTENT_IDENTITY_BATCH_SIZE = 200;
+export const MAX_BLACKLIST_CONTENT_CURSOR_BYTES = 2_048;
 
-const MAX_CONTENT_RPC_BYTES = 8 * 1024 * 1024;
 const MAX_PLATFORM_ID_LENGTH = 64;
 const MAX_STABLE_ID_CODE_POINTS = 512;
 const MAX_AUTHOR_NAME_CODE_POINTS = 500;
@@ -19,15 +23,30 @@ const MEMBER_HASH_CASE_INSENSITIVE_PATTERN = /^[0-9a-f]{32}$/i;
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export type BlacklistContentOperation =
-  | "hydrate"
+  | "initialize"
+  | "tags-page"
+  | "identity-match"
   | "commit-author"
   | "backfill-member-hash"
   | "commit-upvoter"
   | "preflight-direct"
   | "delete-tag";
 
+export interface BlacklistContentTagPageInput {
+  readonly revision: number;
+  readonly cursor: string | null;
+  readonly limit: number;
+}
+
+export interface BlacklistContentIdentityMatchInput {
+  readonly revision: number;
+  readonly identities: readonly BlacklistIdentityQueryDto[];
+}
+
 export type BlacklistContentRequest =
-  | ContentRequest<"hydrate", Record<string, never>>
+  | ContentRequest<"initialize", Record<string, never>>
+  | ContentRequest<"tags-page", BlacklistContentTagPageInput>
+  | ContentRequest<"identity-match", BlacklistContentIdentityMatchInput>
   | ContentRequest<"commit-author", { readonly input: CommitInput }>
   | ContentRequest<
       "backfill-member-hash",
@@ -78,6 +97,10 @@ function isTrimmedWithin(value: unknown, maximum: number): value is string {
   );
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 function isTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || !UTC_TIMESTAMP_PATTERN.test(value)) return false;
   const timestamp = new Date(value);
@@ -99,6 +122,21 @@ function isIdentity(value: unknown): value is AuthorIdentity {
     value.platformId.length <= MAX_PLATFORM_ID_LENGTH &&
     isCanonicalZhihuUserId(value.userId)
   );
+}
+
+export function isBlacklistContentQueryIdentity(
+  value: unknown,
+): value is BlacklistIdentityQueryDto {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["platformId", "identifier"]) &&
+    value.platformId === ZHIHU_PLATFORM_ID &&
+    isCanonicalZhihuUserId(value.identifier)
+  );
+}
+
+function queryIdentityKey(value: BlacklistIdentityQueryDto): string {
+  return JSON.stringify([value.platformId, value.identifier]);
 }
 
 function isTag(value: unknown): value is CommitInput["tag"] {
@@ -163,7 +201,8 @@ function isWithinContentRpcLimit(value: unknown): boolean {
   try {
     const json = JSON.stringify(value);
     return (
-      typeof json === "string" && new TextEncoder().encode(json).byteLength <= MAX_CONTENT_RPC_BYTES
+      typeof json === "string" &&
+      new TextEncoder().encode(json).byteLength <= MAX_BLACKLIST_CONTENT_RPC_BYTES
     );
   } catch {
     return false;
@@ -177,6 +216,45 @@ function requestBase(value: Record<string, unknown>): boolean {
     value.type === BLACKLIST_CONTENT_RPC_REQUEST_TYPE &&
     isRecord(value.input)
   );
+}
+
+function parseTagPage(input: Record<string, unknown>): BlacklistContentRequest | null {
+  const cursorIsValid =
+    input.cursor === null ||
+    (typeof input.cursor === "string" &&
+      input.cursor.length > 0 &&
+      new TextEncoder().encode(input.cursor).byteLength <= MAX_BLACKLIST_CONTENT_CURSOR_BYTES);
+  return hasExactKeys(input, ["revision", "cursor", "limit"]) &&
+    isNonNegativeInteger(input.revision) &&
+    cursorIsValid &&
+    Number.isSafeInteger(input.limit) &&
+    (input.limit as number) >= 1 &&
+    (input.limit as number) <= BLACKLIST_CONTENT_TAG_PAGE_SIZE
+    ? createBlacklistContentRequest("tags-page", {
+        revision: input.revision,
+        cursor: input.cursor as string | null,
+        limit: input.limit as number,
+      })
+    : null;
+}
+
+function parseIdentityMatch(input: Record<string, unknown>): BlacklistContentRequest | null {
+  if (
+    !hasExactKeys(input, ["revision", "identities"]) ||
+    !isNonNegativeInteger(input.revision) ||
+    !Array.isArray(input.identities) ||
+    input.identities.length < 1 ||
+    input.identities.length > BLACKLIST_CONTENT_IDENTITY_BATCH_SIZE ||
+    !input.identities.every(isBlacklistContentQueryIdentity)
+  ) {
+    return null;
+  }
+  const identities = input.identities as BlacklistIdentityQueryDto[];
+  if (new Set(identities.map(queryIdentityKey)).size !== identities.length) return null;
+  return createBlacklistContentRequest("identity-match", {
+    revision: input.revision,
+    identities,
+  });
 }
 
 function parseCommitAuthor(input: Record<string, unknown>): BlacklistContentRequest | null {
@@ -225,8 +303,12 @@ function parseContentOperation(
   input: Record<string, unknown>,
 ): BlacklistContentRequest | null {
   switch (operation) {
-    case "hydrate":
-      return hasExactKeys(input, []) ? createBlacklistContentRequest("hydrate", {}) : null;
+    case "initialize":
+      return hasExactKeys(input, []) ? createBlacklistContentRequest("initialize", {}) : null;
+    case "tags-page":
+      return parseTagPage(input);
+    case "identity-match":
+      return parseIdentityMatch(input);
     case "commit-author":
       return parseCommitAuthor(input);
     case "backfill-member-hash":
@@ -289,7 +371,8 @@ export function parseBlacklistContentResponseEnvelope(
     value.version !== BLACKLIST_CONTENT_RPC_VERSION ||
     value.type !== BLACKLIST_CONTENT_RPC_RESPONSE_TYPE ||
     value.operation !== operation ||
-    typeof value.ok !== "boolean"
+    typeof value.ok !== "boolean" ||
+    (!value.ok && value.result !== null)
   ) {
     return null;
   }

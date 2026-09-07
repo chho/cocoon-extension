@@ -2,75 +2,23 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  BLACKLIST_RPC_REQUEST_TYPE,
   BLACKLIST_RPC_VERSION,
-  MAX_BLACKLIST_TRANSFER_AUTHORS,
-  MAX_BLACKLIST_TRANSFER_BYTES,
-  MAX_BLACKLIST_TRANSFER_TAGS,
-  blacklistJsonByteLength,
+  MAX_BLACKLIST_MANAGEMENT_RPC_BYTES,
+  MAX_BLACKLIST_MUTATION_IDENTITIES,
   createBlacklistRpcRequest,
   createBlacklistRpcResponse,
-  createBlacklistTransferFilename,
+  isWithinBlacklistManagementRpcLimit,
   parseBlacklistRpcRequest,
   parseBlacklistRpcResponse,
-  parseBlacklistTransferEnvelope,
-  parseBlacklistTransferJson,
-  serializeBlacklistTransfer,
-  type BlacklistSnapshotDto,
-  type BlacklistTransferAuthor,
-  type BlacklistTransferEnvelope,
+  type BlacklistAuthorDto,
 } from "./blacklist-rpc-contract.ts";
 
 const TIME = "2026-08-21T10:00:00.000Z";
 const HASH = "a".repeat(32);
 
-function author(
-  platformId: string,
-  userId: string,
-  overrides: Partial<BlacklistTransferAuthor> = {},
-): BlacklistTransferAuthor {
+function author(overrides: Partial<BlacklistAuthorDto> = {}): BlacklistAuthorDto {
   return {
-    platformId,
-    userId,
-    memberHashId: null,
-    authorNameAtCapture: `Author ${userId}`,
-    tagId: "default",
-    blacklistedAt: TIME,
-    blockSource: "direct",
-    ...overrides,
-  };
-}
-
-function envelope(
-  authors: readonly BlacklistTransferAuthor[] = [],
-  tags: BlacklistTransferEnvelope["tags"] = [
-    { tagId: "default", name: "default" },
-  ],
-): BlacklistTransferEnvelope {
-  return {
-    product: "cocoon-blacklist",
-    formatVersion: 1,
-    exportedAt: TIME,
-    schemaVersion: 5,
-    authors,
-    tags,
-  };
-}
-
-function changed(
-  transfer: BlacklistTransferEnvelope,
-  changes: Record<string, unknown>,
-): unknown {
-  return { ...transfer, ...changes };
-}
-
-function withoutKey(value: object, key: string): unknown {
-  const clone: Record<string, unknown> = { ...value };
-  delete clone[key];
-  return clone;
-}
-
-const NULL_ALIAS_SNAPSHOT: BlacklistSnapshotDto = {
-  authors: [{
     platformId: "zhihu",
     userId: "author-token",
     memberHashId: null,
@@ -78,334 +26,273 @@ const NULL_ALIAS_SNAPSHOT: BlacklistSnapshotDto = {
     tagId: "default",
     blacklistedAt: TIME,
     source: "direct",
-  }],
-  tags: [{ tagId: "default", name: "default", isDefault: true }],
-};
-
-test("AC-089 parses and serializes only the exact transfer envelope and filename", () => {
-  const transfer = envelope([
-    author("zhihu", "zhihu-user", { memberHashId: HASH }),
-    author("youtube", "zhihu-user"),
-  ]);
-  deepStrictEqual(parseBlacklistTransferEnvelope(transfer), {
-    status: "valid",
-    transfer,
-  });
-  const json = serializeBlacklistTransfer(transfer);
-  strictEqual(typeof json, "string");
-  deepStrictEqual(parseBlacklistTransferJson(json ?? ""), {
-    status: "valid",
-    transfer,
-  });
-  strictEqual(createBlacklistTransferFilename(TIME), "cocoon-blacklist-2026-08-21.json");
-  strictEqual(createBlacklistTransferFilename("2026-08-21"), null);
-
-  for (const invalid of [
-    changed(transfer, { product: "other" }),
-    changed(transfer, { formatVersion: 2 }),
-    changed(transfer, { schemaVersion: 4 }),
-    changed(transfer, { exportedAt: "2026-08-21T10:00:00Z" }),
-    changed(transfer, { exportedAt: "2026-02-30T10:00:00.000Z" }),
-    { ...transfer, extra: true },
-    { product: transfer.product, formatVersion: 1 },
-    null,
-    [],
-  ]) {
-    strictEqual(parseBlacklistTransferEnvelope(invalid).status, "invalid");
-  }
-  strictEqual(parseBlacklistTransferJson("{").status, "invalid");
-});
-
-test("AC-089 strictly validates transfer author/tag fields, limits, default, and tag references", () => {
-  const validAuthor = author("zhihu", "user", { memberHashId: HASH });
-  const validTag = { tagId: "tag", name: "Tag" };
-  const authorCases: readonly unknown[] = [
-    { ...validAuthor, extra: true },
-    withoutKey(validAuthor, "platformId"),
-    withoutKey(validAuthor, "blockSource"),
-    { ...validAuthor, platformId: "Zhihu" },
-    { ...validAuthor, platformId: `a${"b".repeat(64)}` },
-    { ...validAuthor, userId: "x".repeat(513) },
-    { ...validAuthor, userId: "A".repeat(32) },
-    { ...validAuthor, memberHashId: "A".repeat(32) },
-    { ...validAuthor, memberHashId: validAuthor.userId },
-    { ...validAuthor, authorNameAtCapture: "😀".repeat(501) },
-    { ...validAuthor, tagId: "x".repeat(513) },
-    { ...validAuthor, blacklistedAt: "invalid" },
-    { ...validAuthor, blockSource: "other" },
-    { ...validAuthor, blockSource: "upvoter", blacklistedAt: null },
-    { ...author("youtube", "user"), memberHashId: HASH },
-  ];
-  for (const invalidAuthor of authorCases) {
-    strictEqual(
-      parseBlacklistTransferEnvelope(envelope([
-        invalidAuthor as BlacklistTransferAuthor,
-      ])).status,
-      "invalid",
-    );
-  }
-
-  const tagCases: readonly unknown[] = [
-    { ...validTag, extra: true },
-    withoutKey(validTag, "name"),
-    { ...validTag, tagId: "" },
-    { ...validTag, tagId: "x".repeat(513) },
-    { ...validTag, name: "" },
-    { ...validTag, name: "😀".repeat(31) },
-  ];
-  for (const invalidTag of tagCases) {
-    strictEqual(parseBlacklistTransferEnvelope(envelope([], [
-      { tagId: "default", name: "default" },
-      invalidTag as BlacklistTransferEnvelope["tags"][number],
-    ])).status, "invalid");
-  }
-
-  const exactLimits = envelope(
-    [author(`a${"b".repeat(63)}`, "😀".repeat(512), {
-      authorNameAtCapture: "😀".repeat(500),
-      tagId: "😀".repeat(512),
-    })],
-    [
-      { tagId: "default", name: "default" },
-      { tagId: "😀".repeat(512), name: "😀".repeat(30) },
-    ],
-  );
-  strictEqual(parseBlacklistTransferEnvelope(exactLimits).status, "valid");
-
-  for (const invalid of [
-    envelope([], []),
-    envelope([], [{ tagId: "default", name: "Default" }]),
-    envelope([], [
-      { tagId: "default", name: "default" },
-      { tagId: "default", name: "Other" },
-    ]),
-    envelope([], [
-      { tagId: "default", name: "default" },
-      { tagId: "other", name: "DEFAULT" },
-    ]),
-    envelope([author("zhihu", "user", { tagId: "missing" })]),
-  ]) {
-    strictEqual(parseBlacklistTransferEnvelope(invalid).status, "invalid");
-  }
-});
-
-test("AC-090 transfer collisions are platform-scoped and include user/hash aliases", () => {
-  for (const authors of [
-    [author("zhihu", "same"), author("zhihu", "same")],
-    [
-      author("zhihu", "first", { memberHashId: HASH }),
-      author("zhihu", HASH),
-    ],
-    [
-      author("zhihu", "first", { memberHashId: HASH }),
-      author("zhihu", "second", { memberHashId: HASH }),
-    ],
-  ]) {
-    strictEqual(parseBlacklistTransferEnvelope(envelope(authors)).status, "invalid");
-  }
-
-  const crossPlatform = envelope([
-    author("zhihu", "same", { memberHashId: HASH }),
-    author("youtube", "same"),
-    author("youtube", HASH),
-  ]);
-  strictEqual(parseBlacklistTransferEnvelope(crossPlatform).status, "valid");
-  strictEqual(parseBlacklistTransferEnvelope(envelope([
-    author("youtube", "A".repeat(32)),
-  ])).status, "valid");
-});
-
-test("AC-089 author and tag count boundaries use generated compact fixtures", () => {
-  const maxAuthors = Array.from(
-    { length: MAX_BLACKLIST_TRANSFER_AUTHORS },
-    (_, index) => author("p", `u${index}`, { authorNameAtCapture: "" }),
-  );
-  strictEqual(parseBlacklistTransferEnvelope(envelope(maxAuthors)).status, "valid");
-  strictEqual(parseBlacklistTransferEnvelope(envelope([
-    ...maxAuthors,
-    author("p", "overflow", { authorNameAtCapture: "" }),
-  ])).status, "invalid");
-
-  const maxTags = [
-    { tagId: "default", name: "default" },
-    ...Array.from({ length: MAX_BLACKLIST_TRANSFER_TAGS - 1 }, (_, index) => ({
-      tagId: `t${index}`,
-      name: `T${index}`,
-    })),
-  ];
-  strictEqual(parseBlacklistTransferEnvelope(envelope([], maxTags)).status, "valid");
-  strictEqual(parseBlacklistTransferEnvelope(envelope([], [
-    ...maxTags,
-    { tagId: "overflow", name: "Overflow" },
-  ])).status, "invalid");
-});
-
-function exactByteBoundaryTransfer(): BlacklistTransferEnvelope {
-  const authors = Array.from(
-    { length: MAX_BLACKLIST_TRANSFER_AUTHORS },
-    (_, index) => author("p", `u${index}`, { authorNameAtCapture: "" }),
-  );
-  const transfer = envelope(authors);
-  let remaining = MAX_BLACKLIST_TRANSFER_BYTES - blacklistJsonByteLength(
-    JSON.stringify(transfer),
-  );
-  if (remaining < 0 || remaining > authors.length * 500) {
-    throw new Error("Generated transfer cannot reach the byte boundary.");
-  }
-  for (let index = authors.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    const current = authors[index];
-    if (!current) throw new Error("Missing generated author.");
-    const length = Math.min(500, remaining);
-    authors[index] = { ...current, authorNameAtCapture: "x".repeat(length) };
-    remaining -= length;
-  }
-  strictEqual(blacklistJsonByteLength(JSON.stringify(transfer)), MAX_BLACKLIST_TRANSFER_BYTES);
-  return transfer;
+    ...overrides,
+  };
 }
 
-test("AC-089 accepts an exact 8 MiB file envelope and rejects one byte over", () => {
-  const transfer = exactByteBoundaryTransfer();
-  const json = JSON.stringify(transfer);
-  strictEqual(parseBlacklistTransferEnvelope(transfer).status, "valid");
-  strictEqual(parseBlacklistTransferJson(json).status, "valid");
-  strictEqual(serializeBlacklistTransfer(transfer), json);
-  strictEqual(parseBlacklistTransferJson(`${json} `).status, "too-large");
-});
+test("POPUP-009 status request and response keep an exact bounded contract", () => {
+  const request = createBlacklistRpcRequest("status", {});
+  strictEqual(parseBlacklistRpcRequest(request), request);
+  for (const invalid of [
+    { ...request, extra: true },
+    { ...request, version: BLACKLIST_RPC_VERSION + 1 },
+    { ...request, type: "other" },
+    { ...request, input: { extra: true } },
+  ]) {
+    strictEqual(parseBlacklistRpcRequest(invalid), null);
+  }
 
-test("AC-089 damaged non-serializable envelopes are invalid rather than misclassified as oversized", () => {
-  const cyclic: { self?: unknown } = {};
-  cyclic.self = cyclic;
-  strictEqual(parseBlacklistTransferEnvelope(cyclic).status, "invalid");
-});
+  for (const [status, count] of [
+    ["running", 12],
+    ["unsupported", 0],
+    ["connection-error", 0],
+  ] as const) {
+    const response = createBlacklistRpcResponse("status", true, { status, count });
+    strictEqual(parseBlacklistRpcResponse(response, "status"), response);
+  }
 
-test("AC-090 strict requests use compound identities and platform-scoped duplicate checks", () => {
-  const validCrossPlatform = createBlacklistRpcRequest("remove-many", {
-    identities: [
-      { platformId: "zhihu", userId: "same" },
-      { platformId: "youtube", userId: "same" },
-    ],
+  const unsupportedWithCount = createBlacklistRpcResponse("status", true, {
+    status: "unsupported",
+    count: 1,
   });
-  strictEqual(parseBlacklistRpcRequest(validCrossPlatform), validCrossPlatform);
+  strictEqual(parseBlacklistRpcResponse(unsupportedWithCount, "status"), null);
+  strictEqual(
+    parseBlacklistRpcResponse(createBlacklistRpcResponse("status", false), "status"),
+    null,
+  );
+  strictEqual(
+    parseBlacklistRpcResponse(
+      {
+        ...createBlacklistRpcResponse("status", true, { status: "running", count: 1 }),
+        extra: true,
+      },
+      "status",
+    ),
+    null,
+  );
+});
+
+test("BUG-016 management mutation requests enforce exact inputs and compound identities", () => {
+  const requests = [
+    createBlacklistRpcRequest("remove-one", {
+      identity: { platformId: "zhihu", userId: "one" },
+    }),
+    createBlacklistRpcRequest("restore-one", { author: author() }),
+    createBlacklistRpcRequest("remove-many", {
+      identities: [
+        { platformId: "zhihu", userId: "same" },
+        { platformId: "youtube", userId: "same" },
+      ],
+    }),
+    createBlacklistRpcRequest("rename-tag", { tagId: "reading", name: "Research" }),
+    createBlacklistRpcRequest("delete-tag", { tagId: "reading" }),
+  ] as const;
+  for (const request of requests) strictEqual(parseBlacklistRpcRequest(request), request);
 
   for (const invalid of [
+    {
+      ...requests[0],
+      input: { identity: { platformId: "zhihu", userId: "one" }, extra: true },
+    },
+    createBlacklistRpcRequest("remove-one", {
+      identity: { platformId: "zhihu", userId: "x".repeat(513) },
+    }),
     createBlacklistRpcRequest("remove-many", {
       identities: [
         { platformId: "zhihu", userId: "same" },
         { platformId: "zhihu", userId: "same" },
       ],
     }),
-    {
-      ...createBlacklistRpcRequest("remove-one", {
-        identity: { platformId: "zhihu", userId: "user" },
-      }),
-      input: {
-        identity: { platformId: "zhihu", userId: "user" },
-        extra: true,
-      },
-    },
-    createBlacklistRpcRequest("remove-one", {
-      identity: { platformId: "zhihu", userId: "x".repeat(513) },
+    createBlacklistRpcRequest("restore-one", {
+      author: author({ memberHashId: "A".repeat(32) }),
     }),
+    createBlacklistRpcRequest("rename-tag", { tagId: "reading", name: "x".repeat(31) }),
+    createBlacklistRpcRequest("delete-tag", { tagId: "" }),
   ]) {
     strictEqual(parseBlacklistRpcRequest(invalid), null);
   }
 });
 
-test("AC-089 transfer requests/responses enforce exact shape and the full 8 MiB RPC cap", () => {
-  const transfer = envelope([author("zhihu", "user")]);
-  const request = createBlacklistRpcRequest("import-merge", { transfer });
-  strictEqual(parseBlacklistRpcRequest(request), request);
-  strictEqual(parseBlacklistRpcRequest({
-    ...request,
-    input: { transfer, extra: true },
-  }), null);
-  strictEqual(parseBlacklistRpcRequest({
-    ...request,
-    input: { transfer: changed(transfer, { schemaVersion: 4 }) },
-  }), null);
+test("BUG-016 management operations stay bound to their exact input and response shape", () => {
+  const remove = createBlacklistRpcRequest("remove-one", {
+    identity: { platformId: "zhihu", userId: "one" },
+  });
+  const rename = createBlacklistRpcRequest("rename-tag", { tagId: "reading", name: "Research" });
+  for (const invalid of [
+    { ...remove, operation: "delete-tag" },
+    { ...rename, operation: "restore-one" },
+  ]) {
+    strictEqual(parseBlacklistRpcRequest(invalid), null);
+  }
 
-  const oversizedRpcTransfer = exactByteBoundaryTransfer();
-  strictEqual(parseBlacklistRpcRequest(createBlacklistRpcRequest(
-    "import-replace",
-    { transfer: oversizedRpcTransfer },
-  )), null);
-  strictEqual(parseBlacklistRpcResponse(createBlacklistRpcResponse(
-    "export-json",
-    true,
-    { transfer: oversizedRpcTransfer },
-  ), "export-json"), null);
+  const response = createBlacklistRpcResponse("remove-many", true, {
+    revision: 1,
+    authorCount: 0,
+    tagCount: 1,
+    removedCount: 1,
+  });
+  strictEqual(parseBlacklistRpcResponse(response, "remove-one"), null);
 });
 
-test("AC-090 snapshot response collisions are scoped by platform and DTO fields remain strict", () => {
-  const crossPlatform = createBlacklistRpcResponse("snapshot", true, {
-    snapshot: {
-      ...NULL_ALIAS_SNAPSHOT,
-      authors: [
-        NULL_ALIAS_SNAPSHOT.authors[0]!,
-        {
-          ...NULL_ALIAS_SNAPSHOT.authors[0]!,
-          platformId: "youtube",
-        },
-      ],
-    },
-  });
-  strictEqual(parseBlacklistRpcResponse(crossPlatform, "snapshot"), crossPlatform);
-
-  const collision = createBlacklistRpcResponse("snapshot", true, {
-    snapshot: {
-      ...NULL_ALIAS_SNAPSHOT,
-      authors: [
-        {
-          ...NULL_ALIAS_SNAPSHOT.authors[0]!,
-          userId: HASH,
-        },
-        {
-          ...NULL_ALIAS_SNAPSHOT.authors[0]!,
-          userId: "other",
-          memberHashId: HASH,
-        },
-      ],
-    },
-  });
-  strictEqual(parseBlacklistRpcResponse(collision, "snapshot"), null);
-
-  const oversizedId = createBlacklistRpcResponse("snapshot", true, {
-    snapshot: {
-      ...NULL_ALIAS_SNAPSHOT,
-      authors: [{
-        ...NULL_ALIAS_SNAPSHOT.authors[0]!,
-        userId: "x".repeat(513),
-      }],
-    },
-  });
-  strictEqual(parseBlacklistRpcResponse(oversizedId, "snapshot"), null);
-});
-
-test("AC-089 response parsing rejects operation-inappropriate errors and extra fields", () => {
-  const invalidError = createBlacklistRpcResponse(
-    "import-merge",
-    false,
-    { snapshot: NULL_ALIAS_SNAPSHOT },
-    "not-found",
+test("BUG-016 mutation batch and JSON byte limits are enforced at their exact boundaries", () => {
+  const identities = Array.from({ length: MAX_BLACKLIST_MUTATION_IDENTITIES }, (_, index) => ({
+    platformId: "p",
+    userId: `u${index}`,
+  }));
+  const exactBatch = createBlacklistRpcRequest("remove-many", { identities });
+  strictEqual(parseBlacklistRpcRequest(exactBatch), exactBatch);
+  strictEqual(
+    parseBlacklistRpcRequest(
+      createBlacklistRpcRequest("remove-many", {
+        identities: [...identities, { platformId: "p", userId: "overflow" }],
+      }),
+    ),
+    null,
   );
-  strictEqual(parseBlacklistRpcResponse(invalidError, "import-merge"), null);
-  strictEqual(parseBlacklistRpcResponse({
-    ...createBlacklistRpcResponse("snapshot", true, {
-      snapshot: NULL_ALIAS_SNAPSHOT,
-    }),
-    extra: true,
-  }, "snapshot"), null);
-  strictEqual(parseBlacklistRpcResponse({
-    ...createBlacklistRpcResponse("snapshot", true, {
-      snapshot: NULL_ALIAS_SNAPSHOT,
-    }),
-    version: BLACKLIST_RPC_VERSION + 1,
-  }, "snapshot"), null);
+
+  const exactBytes = "x".repeat(MAX_BLACKLIST_MANAGEMENT_RPC_BYTES - 2);
+  strictEqual(isWithinBlacklistManagementRpcLimit(exactBytes), true);
+  strictEqual(isWithinBlacklistManagementRpcLimit(`${exactBytes}x`), false);
+  const oversizedRequest = {
+    version: BLACKLIST_RPC_VERSION,
+    type: BLACKLIST_RPC_REQUEST_TYPE,
+    operation: "status",
+    input: {},
+    padding: "x".repeat(MAX_BLACKLIST_MANAGEMENT_RPC_BYTES),
+  };
+  strictEqual(parseBlacklistRpcRequest(oversizedRequest), null);
 });
 
-test("BUG-014/AC-085 strict snapshot responses accept a nullable member hash alias", () => {
-  const response = createBlacklistRpcResponse("snapshot", true, {
-    snapshot: NULL_ALIAS_SNAPSHOT,
+test("BUG-014/AC-085 mutation DTOs accept null aliases and reject cross-field invalid data", () => {
+  const nullableAlias = createBlacklistRpcRequest("restore-one", { author: author() });
+  strictEqual(parseBlacklistRpcRequest(nullableAlias), nullableAlias);
+  for (const invalidAuthor of [
+    author({ userId: HASH, memberHashId: HASH }),
+    author({ platformId: "youtube", memberHashId: HASH }),
+    author({ source: "upvoter", blacklistedAt: null }),
+    { ...author(), extra: true },
+  ]) {
+    strictEqual(
+      parseBlacklistRpcRequest(createBlacklistRpcRequest("restore-one", { author: invalidAuthor })),
+      null,
+    );
+  }
+});
+
+test("BUG-016 management mutations accept only operation-specific bounded deltas", () => {
+  const removed = author();
+  const responses = [
+    createBlacklistRpcResponse("remove-one", true, {
+      removed,
+      revision: 8,
+      authorCount: 33_524,
+      tagCount: 3,
+    }),
+    createBlacklistRpcResponse("restore-one", true, {
+      revision: 9,
+      authorCount: 33_525,
+      tagCount: 3,
+    }),
+    createBlacklistRpcResponse("remove-many", true, {
+      revision: 10,
+      authorCount: 33_523,
+      tagCount: 3,
+      removedCount: 2,
+    }),
+    createBlacklistRpcResponse("rename-tag", true, {
+      revision: 11,
+      authorCount: 33_523,
+      tagCount: 3,
+      tag: { tagId: "reading", name: "Research", isDefault: false },
+    }),
+    createBlacklistRpcResponse("delete-tag", true, {
+      revision: 12,
+      authorCount: 33_523,
+      tagCount: 2,
+      deletedTagId: "reading",
+      migratedCount: 7,
+    }),
+  ] as const;
+  for (const response of responses) {
+    strictEqual(parseBlacklistRpcResponse(response, response.operation), response);
+  }
+
+  deepStrictEqual(responses[0].data, {
+    status: null,
+    count: null,
+    removed,
+    revision: 8,
+    authorCount: 33_524,
+    tagCount: 3,
+    removedCount: null,
+    tag: null,
+    deletedTagId: null,
+    migratedCount: null,
   });
-  strictEqual(parseBlacklistRpcResponse(response, "snapshot"), response);
+
+  for (const invalid of [
+    createBlacklistRpcResponse("remove-one", true, {
+      revision: 8,
+      authorCount: 1,
+      tagCount: 1,
+    }),
+    createBlacklistRpcResponse("remove-many", true, {
+      revision: 9,
+      authorCount: 1,
+      tagCount: 1,
+    }),
+    createBlacklistRpcResponse("rename-tag", true, {
+      revision: 10,
+      authorCount: 1,
+      tagCount: 1,
+    }),
+    createBlacklistRpcResponse("delete-tag", true, {
+      revision: 11,
+      authorCount: 1,
+      tagCount: 1,
+      deletedTagId: "reading",
+    }),
+    {
+      ...responses[1],
+      data: { ...responses[1].data, extra: true },
+    },
+  ]) {
+    strictEqual(parseBlacklistRpcResponse(invalid, invalid.operation), null);
+  }
+});
+
+test("BUG-016 mutation failures allow only operation-appropriate errors and no delta", () => {
+  for (const [operation, error] of [
+    ["remove-one", "not-found"],
+    ["restore-one", "conflict"],
+    ["restore-one", "invalid-tag"],
+    ["remove-many", "not-found"],
+    ["rename-tag", "invalid-tag"],
+    ["delete-tag", "save-failed"],
+  ] as const) {
+    const failure = createBlacklistRpcResponse(operation, false, {}, error);
+    strictEqual(parseBlacklistRpcResponse(failure, operation), failure);
+    strictEqual(
+      parseBlacklistRpcResponse(
+        createBlacklistRpcResponse(operation, false, { revision: 1 }, error),
+        operation,
+      ),
+      null,
+    );
+  }
+
+  strictEqual(
+    parseBlacklistRpcResponse(
+      createBlacklistRpcResponse("restore-one", false, {}, "not-found"),
+      "restore-one",
+    ),
+    null,
+  );
+  strictEqual(
+    parseBlacklistRpcResponse(
+      { ...createBlacklistRpcResponse("remove-one", false, {}, "not-found"), extra: true },
+      "remove-one",
+    ),
+    null,
+  );
 });

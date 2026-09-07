@@ -13,6 +13,7 @@ import {
   type BlacklistedAuthor,
 } from "../content/blacklist-state.ts";
 import { BLACKLIST_REVISION_STORAGE_KEY } from "../core/blacklist-revision-contract.ts";
+import { readLogicalState, storeLogicalState } from "./blacklist-repository.test-support.ts";
 import {
   BLACKLIST_DATABASE_VERSION,
   BLACKLIST_STORE_NAMES,
@@ -142,11 +143,12 @@ test("AC-093 migrates each valid v1-v5 state once into normalized stores", async
     const legacy = legacyState(version);
     harness.storage.values.set(STORAGE_KEY, legacy);
 
-    const hydrated = await harness.repository.hydrate();
+    await harness.repository.querySummary();
+    const stored = await readLogicalState(indexedDB, harness.databaseName);
     const parsed = parseBlacklistState(legacy);
     strictEqual(parsed.status === "migrated" || parsed.status === "valid", true);
-    deepStrictEqual(hydrated.state, parsed.state);
-    strictEqual(hydrated.revision, 0);
+    deepStrictEqual(stored.state, parsed.state);
+    strictEqual(stored.revision, 0);
     strictEqual(harness.storage.values.has(STORAGE_KEY), false);
 
     const authors = await readStoreValues(harness.databaseName, BLACKLIST_STORE_NAMES.authors);
@@ -169,7 +171,11 @@ test("AC-093 migrates each valid v1-v5 state once into normalized stores", async
 
 test("AC-093 initializes only missing legacy data and keeps malformed, future, or unreadable input non-authoritative", async () => {
   const missing = createHarness("missing");
-  deepStrictEqual((await missing.repository.hydrate()).state, createInitialState());
+  await missing.repository.querySummary();
+  deepStrictEqual(
+    (await readLogicalState(indexedDB, missing.databaseName)).state,
+    createInitialState(),
+  );
 
   for (const legacy of [
     { schemaVersion: 5, authors: [], tags: [] },
@@ -178,7 +184,7 @@ test("AC-093 initializes only missing legacy data and keeps malformed, future, o
   ]) {
     const harness = createHarness("invalid");
     harness.storage.values.set(STORAGE_KEY, legacy);
-    await rejects(harness.repository.hydrate(), /unreadable|malformed/i);
+    await rejects(harness.repository.querySummary(), /unreadable|malformed/i);
     deepStrictEqual(
       await readStoreValues(harness.databaseName, BLACKLIST_STORE_NAMES.metadata),
       [],
@@ -188,7 +194,7 @@ test("AC-093 initializes only missing legacy data and keeps malformed, future, o
 
   const unreadable = createHarness("unreadable");
   unreadable.storage.failGet = true;
-  await rejects(unreadable.repository.hydrate(), /unreadable/i);
+  await rejects(unreadable.repository.querySummary(), /unreadable/i);
   deepStrictEqual(
     await readStoreValues(unreadable.databaseName, BLACKLIST_STORE_NAMES.metadata),
     [],
@@ -202,7 +208,7 @@ test("AC-093 aborts migration atomically and leaves the legacy key untouched", a
   const legacy = legacyState(5);
   harness.storage.values.set(STORAGE_KEY, legacy);
 
-  await rejects(harness.repository.hydrate(), /migration abort/i);
+  await rejects(harness.repository.querySummary(), /migration abort/i);
   strictEqual(harness.storage.values.get(STORAGE_KEY), legacy);
   for (const storeName of Object.values(BLACKLIST_STORE_NAMES)) {
     deepStrictEqual(await readStoreValues(harness.databaseName, storeName), []);
@@ -215,7 +221,8 @@ test("AC-093 committed IDB wins over a stale legacy key and retries cleanup with
   const harness = createHarness("cleanup", storage);
   storage.values.set(STORAGE_KEY, legacyState(5));
 
-  const first = await harness.repository.hydrate();
+  const first = await harness.repository.querySummary();
+  const firstStored = await readLogicalState(indexedDB, harness.databaseName);
   strictEqual(storage.values.has(STORAGE_KEY), true);
   storage.values.set(STORAGE_KEY, {
     ...createInitialState(),
@@ -227,8 +234,9 @@ test("AC-093 committed IDB wins over a stale legacy key and retries cleanup with
     databaseName: harness.databaseName,
     storage,
   });
-  const second = await restarted.hydrate();
+  const second = await restarted.querySummary();
   deepStrictEqual(second, first);
+  deepStrictEqual(await readLogicalState(indexedDB, harness.databaseName), firstStored);
   strictEqual(storage.values.has(STORAGE_KEY), false);
   deepStrictEqual(storage.removed, [STORAGE_KEY]);
 });
@@ -236,7 +244,7 @@ test("AC-093 committed IDB wins over a stale legacy key and retries cleanup with
 test("AC-093 revision publication failure never rolls back durable data and is repaired later", async () => {
   const harness = createHarness("revision");
   harness.storage.failRevisionSetCount = 3;
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
 
   const committed = await harness.repository.commitAuthor({
     platformId: ZHIHU_PLATFORM_ID,
@@ -250,8 +258,9 @@ test("AC-093 revision publication failure never rolls back durable data and is r
   strictEqual(committed.status, "persisted");
   strictEqual(harness.storage.values.has(BLACKLIST_REVISION_STORAGE_KEY), false);
 
-  const hydrated = await harness.repository.hydrate();
-  strictEqual(hydrated.state.authors[0]?.userId, "durable-author");
+  await harness.repository.querySummary();
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  strictEqual(stored.state.authors[0]?.userId, "durable-author");
   deepStrictEqual(harness.storage.values.get(BLACKLIST_REVISION_STORAGE_KEY), {
     version: 1,
     revision: 1,
@@ -260,7 +269,7 @@ test("AC-093 revision publication failure never rolls back durable data and is r
 
 test("STORAGE-001 creates normalized stores and unique identifier/name indexes", async () => {
   const harness = createHarness("schema");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(harness.databaseName);
     request.onerror = () => reject(request.error ?? new Error("open failed"));
@@ -328,8 +337,8 @@ function observeTargetedTransactions() {
 test("AC-094 targeted author operations never enumerate or replace the author collection", async () => {
   const harness = createHarness("targeted");
   const initial = stateWithSyntheticAuthors(250);
-  await harness.repository.hydrate();
-  await harness.repository.replaceAll(initial);
+  await harness.repository.querySummary();
+  await storeLogicalState(indexedDB, harness.databaseName, initial);
 
   const observation = observeTargetedTransactions();
 
@@ -396,7 +405,7 @@ test("AC-094 targeted author operations never enumerate or replace the author co
 
 test("AC-094 duplicate author commit ignores a tag deleted after the drawer opened", async () => {
   const harness = createHarness("duplicate-deleted-tag");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   const first = await harness.repository.commitAuthor({
     platformId: ZHIHU_PLATFORM_ID,
     userId: "existing-direct",
@@ -425,7 +434,7 @@ test("AC-094 duplicate author commit ignores a tag deleted after the drawer open
 
 test("AC-094 targeted transactions enforce same-platform cross-field uniqueness and cross-platform isolation", async () => {
   const harness = createHarness("identity");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   strictEqual(
     (
       await harness.repository.commitAuthor({
@@ -465,24 +474,29 @@ test("AC-094 targeted transactions enforce same-platform cross-field uniqueness 
     ).status,
     "invalid",
   );
-  await harness.repository.replaceAll({
-    schemaVersion: 5,
-    tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
-    authors: [
-      author("primary", { memberHashId: HASH_A }),
-      {
-        ...author(HASH_A),
-        platformId: "youtube",
-        memberHashId: null,
-      },
-    ],
-  });
-  strictEqual((await harness.repository.hydrate()).state.authors.length, 2);
+  await storeLogicalState(
+    indexedDB,
+    harness.databaseName,
+    {
+      schemaVersion: 5,
+      tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
+      authors: [
+        author("primary", { memberHashId: HASH_A }),
+        {
+          ...author(HASH_A),
+          platformId: "youtube",
+          memberHashId: null,
+        },
+      ],
+    },
+    2,
+  );
+  strictEqual((await readLogicalState(indexedDB, harness.databaseName)).state.authors.length, 2);
 });
 
 test("AC-094 repository rejects out-of-scope and oversized targeted writes", async () => {
   const harness = createHarness("targeted-validation");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   const direct = {
     platformId: ZHIHU_PLATFORM_ID,
     userId: "valid-user",
@@ -527,18 +541,18 @@ test("AC-094 repository rejects out-of-scope and oversized targeted writes", asy
     ).status,
     "invalid",
   );
-  const hydrated = await harness.repository.hydrate();
-  strictEqual(hydrated.revision, 0);
-  deepStrictEqual(hydrated.state.authors, []);
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  strictEqual(stored.revision, 0);
+  deepStrictEqual(stored.state.authors, []);
 });
 
 test("AC-096 management mutations remain atomic on normalized records", async () => {
   const harness = createHarness("management-mutations");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   const reading = { tagId: "reading", name: "Reading" };
   const first = author("first", { tagId: reading.tagId });
   const second = author("second");
-  await harness.repository.replaceAll({
+  await storeLogicalState(indexedDB, harness.databaseName, {
     schemaVersion: 5,
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }, reading],
     authors: [first, second],
@@ -561,32 +575,18 @@ test("AC-096 management mutations remain atomic on normalized records", async ()
     "persisted",
   );
 
-  const hydrated = await harness.repository.hydrate();
-  deepStrictEqual(hydrated.state.authors, []);
-  strictEqual(hydrated.state.tags[1]?.name, "Research");
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  deepStrictEqual(stored.state.authors, []);
+  strictEqual(stored.state.tags[1]?.name, "Research");
 });
 
-test("AC-095 replaceAll does not report failure from a post-commit hydration", async () => {
-  const harness = createHarness("replace-without-post-read");
-  await harness.repository.hydrate();
-  const replacement = { ...createInitialState(), authors: [author("replacement")] };
-  const originalGetAll = IDBObjectStore.prototype.getAll;
-  IDBObjectStore.prototype.getAll = function () {
-    throw new Error("post-commit hydration must not run");
-  };
-  try {
-    const result = await harness.repository.replaceAll(replacement);
-    deepStrictEqual(result.state, replacement);
-    strictEqual(result.revision, 1);
-  } finally {
-    IDBObjectStore.prototype.getAll = originalGetAll;
-  }
-  deepStrictEqual((await harness.repository.hydrate()).state, replacement);
+test("BUG-016/AC-099 physical storage uses the atomic v2 schema", () => {
+  strictEqual(BLACKLIST_DATABASE_VERSION, 2);
 });
 
 test("AC-094 tag deletion reads only authors referencing that tag", async () => {
   const harness = createHarness("delete-tag");
-  await harness.repository.hydrate();
+  await harness.repository.querySummary();
   const state: BlacklistState = {
     schemaVersion: 5,
     tags: [
@@ -595,7 +595,7 @@ test("AC-094 tag deletion reads only authors referencing that tag", async () => 
     ],
     authors: [author("default-author"), author("tagged-author", { tagId: "reading" })],
   };
-  await harness.repository.replaceAll(state);
+  await storeLogicalState(indexedDB, harness.databaseName, state);
 
   const original = IDBIndex.prototype.getAll;
   const queries: string[] = [];
@@ -610,6 +610,6 @@ test("AC-094 tag deletion reads only authors referencing that tag", async () => 
     IDBIndex.prototype.getAll = original;
   }
   deepStrictEqual(queries, ["by-tag"]);
-  const hydrated = await harness.repository.hydrate();
-  strictEqual(hydrated.state.authors[1]?.tagId, DEFAULT_TAG_ID);
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  strictEqual(stored.state.authors[1]?.tagId, DEFAULT_TAG_ID);
 });

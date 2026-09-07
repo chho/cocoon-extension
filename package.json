@@ -1,6 +1,6 @@
 {
   "name": "cocoon-extension",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "description": "Local-first Chrome extension for quiet, plugin-based control over content feeds.",
   "keywords": [
     "browser-extension",
@@ -35,6 +35,8 @@
     "format:check": "node scripts/tooling/check-format.mjs",
     "lint": "node scripts/tooling/check-eslint.mjs",
     "check": "npm run format:check && npm run lint && npm test && npm run build",
+    "benchmark:blacklist-scale": "node --expose-gc scripts/benchmark-blacklist-scale.mjs --memory-only",
+    "benchmark:blacklist-scale:idb": "node --expose-gc scripts/benchmark-blacklist-scale.mjs",
     "snapshot:zhihu": "node scripts/capture-zhihu-snapshot.mjs"
   },
   "devDependencies": {

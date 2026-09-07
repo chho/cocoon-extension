@@ -124,7 +124,9 @@ Site-specific preferences, a payload-free blacklist revision notification, and t
 
 Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to origins declared by bundled site plugins and are made only for implemented identity resolution, content-related lookup, or explicitly enabled account-level actions. The current build makes such requests only to the supported page's existing origin.
 
-Exported JSON files contain local author and tag records. Treat them as personal data: store them securely and inspect their destination before sharing.
+Cocoon does not impose an author-count limit on its IndexedDB blacklist; usable capacity depends on Chrome's dynamic storage quota and the device. Popup, management, and page filtering use bounded queries instead of loading the complete author list into one message.
+
+Exported JSON files contain local author and tag records. Import and export use revision-bound pages and persistent staging, and a single transfer file is limited to 32 MiB. This file limit is an operation safety boundary, not a blacklist capacity limit. Treat exports as personal data: store them securely and inspect their destination before sharing.
 
 Removing the extension clears extension-managed local storage through Chrome. Individual records can also be removed from the popup or management page.
 
@@ -145,6 +147,7 @@ npm test          # Run the automated test suite
 npm run typecheck # Check strict TypeScript types
 npm run build     # Type-check and create dist/
 npm run dev       # Rebuild continuously while files change
+npm run benchmark:blacklist-scale # Run synthetic 33,524/100,000 scale checks
 ```
 
 The implementation uses TypeScript, Vite, native DOM APIs, and Chrome Manifest V3. It does not use a frontend framework.

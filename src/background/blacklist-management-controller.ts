@@ -1,9 +1,5 @@
 import type * as BlacklistStateModule from "../content/blacklist-state.ts";
-import type {
-  AuthorIdentity,
-  BlacklistState,
-  BlacklistedAuthor,
-} from "../content/blacklist-state.ts";
+import type { BlacklistedAuthor, CocoonTag } from "../content/blacklist-state.ts";
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundBlacklistState from "../content/blacklist-state.ts?background-copy";
 import type * as RpcContractModule from "../core/blacklist-rpc-contract.ts";
@@ -12,29 +8,15 @@ import type {
   BlacklistRpcError,
   BlacklistRpcRequest,
   BlacklistRpcResponse,
-  BlacklistSnapshotDto,
 } from "../core/blacklist-rpc-contract.ts";
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundRpcContract from "../core/blacklist-rpc-contract.ts?background-copy";
 import type { BlacklistLockCoordinator } from "./blacklist-lock-coordinator.ts";
 import type { BlacklistRepository } from "./blacklist-repository-types.ts";
-import {
-  createBlacklistTransferEnvelope,
-  planBlacklistTransferMerge,
-  planBlacklistTransferReplace,
-} from "./blacklist-transfer-planner.ts";
 import type { CurrentPageStatusResult } from "./status-controller.ts";
 
-const {
-  DEFAULT_TAG_ID,
-  planAuthorBatchRemoval,
-  planAuthorRemoval,
-  planAuthorRestoration,
-  planTagDeletion,
-  planTagRename,
-} = backgroundBlacklistState as typeof BlacklistStateModule;
-const { createBlacklistRpcResponse, isWithinBlacklistRpcLimit, parseBlacklistTransferEnvelope } =
-  backgroundRpcContract as typeof RpcContractModule;
+const { DEFAULT_TAG_ID } = backgroundBlacklistState as typeof BlacklistStateModule;
+const { createBlacklistRpcResponse } = backgroundRpcContract as typeof RpcContractModule;
 
 interface StatusController {
   query(): Promise<CurrentPageStatusResult>;
@@ -68,310 +50,124 @@ function fromAuthorDto(author: BlacklistAuthorDto): BlacklistedAuthor {
   };
 }
 
-function toIdentity(author: {
-  readonly platformId: string;
-  readonly userId: string;
-}): AuthorIdentity {
-  return { platformId: author.platformId, userId: author.userId };
+function toTagDto(tag: CocoonTag) {
+  return { tagId: tag.tagId, name: tag.name, isDefault: tag.tagId === DEFAULT_TAG_ID };
 }
 
-function toSnapshot(state: BlacklistState): BlacklistSnapshotDto {
+type ManagementMutationRequest = Exclude<BlacklistRpcRequest, { readonly operation: "status" }>;
+
+type MutationResultSummary = {
+  readonly revision: number;
+  readonly authorCount: number;
+  readonly tagCount: number;
+};
+
+function mutationSummary(result: MutationResultSummary) {
   return {
-    authors: state.authors.map(toAuthorDto),
-    tags: state.tags.map((tag) => ({
-      tagId: tag.tagId,
-      name: tag.name,
-      isDefault: tag.tagId === DEFAULT_TAG_ID,
-    })),
+    revision: result.revision,
+    authorCount: result.authorCount,
+    tagCount: result.tagCount,
   };
 }
 
-function responseWithinLimit(response: BlacklistRpcResponse): BlacklistRpcResponse | null {
-  return isWithinBlacklistRpcLimit(response) ? response : null;
-}
+type AuthorMutationRequest = Extract<
+  ManagementMutationRequest,
+  { readonly operation: "remove-one" | "restore-one" | "remove-many" }
+>;
+type TagMutationRequest = Exclude<ManagementMutationRequest, AuthorMutationRequest>;
 
-function snapshotResponse(
-  operation: BlacklistRpcRequest["operation"],
-  state: BlacklistState,
-  removed: BlacklistedAuthor | null = null,
-): BlacklistRpcResponse {
+function isAuthorMutation(request: ManagementMutationRequest): request is AuthorMutationRequest {
   return (
-    responseWithinLimit(
-      createBlacklistRpcResponse(operation, true, {
-        snapshot: toSnapshot(state),
-        removed: removed ? toAuthorDto(removed) : null,
-      }),
-    ) ?? createBlacklistRpcResponse(operation, false, {}, "storage-unreadable")
+    request.operation === "remove-one" ||
+    request.operation === "restore-one" ||
+    request.operation === "remove-many"
   );
 }
 
-function mutationFailure(
-  operation: BlacklistRpcRequest["operation"],
-  error: BlacklistRpcError,
-  state: BlacklistState,
-) {
-  return {
-    response: createBlacklistRpcResponse(operation, false, {}, error),
-    state,
-  };
-}
-
-type ManagementMutationRequest = Exclude<
-  BlacklistRpcRequest,
-  {
-    readonly operation: "status" | "snapshot" | "export-json" | "import-merge" | "import-replace";
+async function runAuthorMutation(
+  repository: BlacklistRepository,
+  request: AuthorMutationRequest,
+): Promise<BlacklistRpcResponse> {
+  if (request.operation === "remove-one") {
+    const result = await repository.removeAuthor(request.input.identity);
+    if (result.status !== "persisted" || !result.removed) {
+      return createBlacklistRpcResponse("remove-one", false, {}, "not-found");
+    }
+    return createBlacklistRpcResponse("remove-one", true, {
+      ...mutationSummary(result),
+      removed: toAuthorDto(result.removed),
+    });
   }
->;
-
-interface ManagementMutationOutcome {
-  readonly response?: BlacklistRpcResponse;
-  readonly removed?: BlacklistedAuthor;
-  readonly state: BlacklistState;
-}
-
-function invalidCandidate(
-  operation: BlacklistRpcRequest["operation"],
-  candidate: BlacklistState,
-  before: BlacklistState,
-  removed: BlacklistedAuthor | null = null,
-): ManagementMutationOutcome | null {
-  const response = snapshotResponse(operation, candidate, removed);
-  return response.ok ? null : { response, state: before };
-}
-
-async function removeOne(
-  repository: BlacklistRepository,
-  request: Extract<BlacklistRpcRequest, { readonly operation: "remove-one" }>,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  const identity = toIdentity(request.input.identity);
-  const plan = planAuthorRemoval(before, identity);
-  if (plan.status !== "ready") return mutationFailure(request.operation, "not-found", before);
-  const invalid = invalidCandidate(request.operation, plan.state, before, plan.removed);
-  if (invalid) return invalid;
-  const result = await repository.removeAuthor(identity);
-  return result.status === "persisted" && result.removed
-    ? { removed: result.removed, state: plan.state }
-    : mutationFailure(request.operation, "not-found", before);
-}
-
-async function restoreOne(
-  repository: BlacklistRepository,
-  request: Extract<BlacklistRpcRequest, { readonly operation: "restore-one" }>,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  const author = fromAuthorDto(request.input.author);
-  const plan = planAuthorRestoration(before, author);
-  if (plan.status !== "ready") {
-    const error = plan.status === "missing-tag" ? "invalid-tag" : "conflict";
-    return mutationFailure(request.operation, error, before);
+  if (request.operation === "restore-one") {
+    const result = await repository.restoreAuthor(fromAuthorDto(request.input.author));
+    if (result.status === "persisted") {
+      return createBlacklistRpcResponse("restore-one", true, mutationSummary(result));
+    }
+    const error: BlacklistRpcError = result.status === "missing-tag" ? "invalid-tag" : "conflict";
+    return createBlacklistRpcResponse("restore-one", false, {}, error);
   }
-  const invalid = invalidCandidate(request.operation, plan.state, before);
-  if (invalid) return invalid;
-  const result = await repository.restoreAuthor(author);
-  return result.status === "persisted"
-    ? { state: plan.state }
-    : mutationFailure(request.operation, "conflict", before);
-}
-
-async function removeMany(
-  repository: BlacklistRepository,
-  request: Extract<BlacklistRpcRequest, { readonly operation: "remove-many" }>,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  const identities = request.input.identities.map(toIdentity);
-  const plan = planAuthorBatchRemoval(before, identities);
-  if (plan.status !== "ready") return mutationFailure(request.operation, "not-found", before);
-  const invalid = invalidCandidate(request.operation, plan.state, before);
-  if (invalid) return invalid;
-  const result = await repository.removeAuthors(identities);
-  return result.status === "persisted"
-    ? { state: plan.state }
-    : mutationFailure(request.operation, "not-found", before);
-}
-
-async function renameTag(
-  repository: BlacklistRepository,
-  request: Extract<BlacklistRpcRequest, { readonly operation: "rename-tag" }>,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  const plan = planTagRename(before, request.input.tagId, request.input.name);
-  if (plan.status !== "ready" && plan.status !== "unchanged") {
-    return mutationFailure(request.operation, "invalid-tag", before);
+  const result = await repository.removeAuthors(request.input.identities);
+  if (result.status !== "persisted") {
+    return createBlacklistRpcResponse("remove-many", false, {}, "not-found");
   }
-  const invalid = invalidCandidate(request.operation, plan.state, before);
-  if (invalid) return invalid;
-  const result = await repository.renameTag(request.input.tagId, request.input.name);
-  return result.status === "persisted" || result.status === "unchanged"
-    ? { state: plan.state }
-    : mutationFailure(request.operation, "invalid-tag", before);
+  return createBlacklistRpcResponse("remove-many", true, {
+    ...mutationSummary(result),
+    removedCount: result.removedCount,
+  });
 }
 
-async function deleteTag(
+async function runTagMutation(
   repository: BlacklistRepository,
-  request: Extract<BlacklistRpcRequest, { readonly operation: "delete-tag" }>,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  const plan = planTagDeletion(before, request.input.tagId);
-  if (plan.status !== "ready") return mutationFailure(request.operation, "invalid-tag", before);
-  const invalid = invalidCandidate(request.operation, plan.state, before);
-  if (invalid) return invalid;
+  request: TagMutationRequest,
+): Promise<BlacklistRpcResponse> {
+  if (request.operation === "rename-tag") {
+    const result = await repository.renameTag(request.input.tagId, request.input.name);
+    if ((result.status !== "persisted" && result.status !== "unchanged") || !result.tag) {
+      return createBlacklistRpcResponse("rename-tag", false, {}, "invalid-tag");
+    }
+    return createBlacklistRpcResponse("rename-tag", true, {
+      ...mutationSummary(result),
+      tag: toTagDto(result.tag),
+    });
+  }
   const result = await repository.deleteTag(request.input.tagId);
-  return result.status === "persisted"
-    ? { state: plan.state }
-    : mutationFailure(request.operation, "invalid-tag", before);
+  if (result.status !== "persisted" || !result.deletedTagId) {
+    return createBlacklistRpcResponse("delete-tag", false, {}, "invalid-tag");
+  }
+  return createBlacklistRpcResponse("delete-tag", true, {
+    ...mutationSummary(result),
+    deletedTagId: result.deletedTagId,
+    migratedCount: result.migratedCount,
+  });
 }
 
 function runManagementMutation(
   repository: BlacklistRepository,
   request: ManagementMutationRequest,
-  before: BlacklistState,
-): Promise<ManagementMutationOutcome> {
-  switch (request.operation) {
-    case "remove-one":
-      return removeOne(repository, request, before);
-    case "restore-one":
-      return restoreOne(repository, request, before);
-    case "remove-many":
-      return removeMany(repository, request, before);
-    case "rename-tag":
-      return renameTag(repository, request, before);
-    case "delete-tag":
-      return deleteTag(repository, request, before);
-  }
+): Promise<BlacklistRpcResponse> {
+  return isAuthorMutation(request)
+    ? runAuthorMutation(repository, request)
+    : runTagMutation(repository, request);
 }
 
 export function createBlacklistManagementController(
   repository: BlacklistRepository,
   lock: Pick<BlacklistLockCoordinator, "runExclusive">,
   statusController: StatusController,
-  now: () => Date = () => new Date(),
 ): BlacklistManagementController {
-  async function readState(): Promise<BlacklistState> {
-    return (await repository.hydrate()).state;
-  }
-
-  async function handleSnapshot(request: BlacklistRpcRequest): Promise<BlacklistRpcResponse> {
-    try {
-      return await lock.runExclusive(async () =>
-        snapshotResponse(request.operation, await readState()),
-      );
-    } catch {
-      return createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
-    }
-  }
-
-  async function handleExport(): Promise<BlacklistRpcResponse> {
+  async function handleMutation(request: ManagementMutationRequest): Promise<BlacklistRpcResponse> {
     try {
       return await lock.runExclusive(async () => {
-        const state = await readState();
-        let exportedAt: string;
         try {
-          exportedAt = now().toISOString();
+          await repository.querySummary();
         } catch {
-          return createBlacklistRpcResponse("export-json", false, {}, "storage-unreadable");
+          return createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
         }
-        const transfer = createBlacklistTransferEnvelope(state, exportedAt);
-        const validated = parseBlacklistTransferEnvelope(transfer);
-        if (validated.status !== "valid") {
-          return createBlacklistRpcResponse(
-            "export-json",
-            false,
-            {},
-            validated.status === "too-large" ? "transfer-too-large" : "storage-unreadable",
-          );
-        }
-        return (
-          responseWithinLimit(createBlacklistRpcResponse("export-json", true, { transfer })) ??
-          createBlacklistRpcResponse("export-json", false, {}, "transfer-too-large")
-        );
-      });
-    } catch {
-      return createBlacklistRpcResponse("export-json", false, {}, "storage-unreadable");
-    }
-  }
-
-  async function persistReplacement(
-    operation: "import-merge" | "import-replace",
-    candidate: BlacklistState,
-  ): Promise<BlacklistRpcResponse> {
-    const prospective = snapshotResponse(operation, candidate);
-    if (!prospective.ok) return prospective;
-    try {
-      const persisted = await repository.replaceAll(candidate);
-      return snapshotResponse(operation, persisted.state);
-    } catch {
-      return createBlacklistRpcResponse(operation, false, {}, "save-failed");
-    }
-  }
-
-  async function handleImport(
-    request: Extract<
-      BlacklistRpcRequest,
-      { readonly operation: "import-merge" | "import-replace" }
-    >,
-  ): Promise<BlacklistRpcResponse> {
-    const parsedTransfer = parseBlacklistTransferEnvelope(request.input.transfer);
-    if (parsedTransfer.status !== "valid") {
-      return createBlacklistRpcResponse(
-        request.operation,
-        false,
-        {},
-        parsedTransfer.status === "too-large" ? "transfer-too-large" : "invalid-transfer",
-      );
-    }
-    try {
-      return await lock.runExclusive(async () => {
-        const state = await readState();
-        if (request.operation === "import-replace") {
-          return persistReplacement(
-            request.operation,
-            planBlacklistTransferReplace(parsedTransfer.transfer),
-          );
-        }
-        const plan = planBlacklistTransferMerge(state, parsedTransfer.transfer);
-        if (plan.status === "conflict") {
-          return createBlacklistRpcResponse(request.operation, false, {}, "transfer-conflict");
-        }
-        return plan.status === "unchanged"
-          ? snapshotResponse(request.operation, state)
-          : persistReplacement(request.operation, plan.state);
-      });
-    } catch {
-      return createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
-    }
-  }
-
-  async function handleMutation(
-    request: Exclude<
-      BlacklistRpcRequest,
-      {
-        readonly operation:
-          "status" | "snapshot" | "export-json" | "import-merge" | "import-replace";
-      }
-    >,
-  ): Promise<BlacklistRpcResponse> {
-    try {
-      return await lock.runExclusive(async () => {
-        const before = await readState();
-        let result: ManagementMutationOutcome;
         try {
-          result = await runManagementMutation(repository, request, before);
+          return await runManagementMutation(repository, request);
         } catch {
-          return createBlacklistRpcResponse(
-            request.operation,
-            false,
-            { snapshot: toSnapshot(before) },
-            "save-failed",
-          );
+          return createBlacklistRpcResponse(request.operation, false, {}, "save-failed");
         }
-        if (result.response) {
-          return {
-            ...result.response,
-            data: { ...result.response.data, snapshot: toSnapshot(result.state) },
-          };
-        }
-        return snapshotResponse(request.operation, result.state, result.removed ?? null);
       });
     } catch {
       return createBlacklistRpcResponse(request.operation, false, {}, "storage-unreadable");
@@ -380,26 +176,19 @@ export function createBlacklistManagementController(
 
   return {
     async handle(request) {
-      if (request.operation === "status") {
-        try {
-          const result = await statusController.query();
-          return createBlacklistRpcResponse("status", true, {
-            status: result.status,
-            count: result.count,
-          });
-        } catch {
-          return createBlacklistRpcResponse("status", true, {
-            status: "connection-error",
-            count: 0,
-          });
-        }
+      if (request.operation !== "status") return handleMutation(request);
+      try {
+        const result = await statusController.query();
+        return createBlacklistRpcResponse("status", true, {
+          status: result.status,
+          count: result.count,
+        });
+      } catch {
+        return createBlacklistRpcResponse("status", true, {
+          status: "connection-error",
+          count: 0,
+        });
       }
-      if (request.operation === "snapshot") return handleSnapshot(request);
-      if (request.operation === "export-json") return handleExport();
-      if (request.operation === "import-merge" || request.operation === "import-replace") {
-        return handleImport(request);
-      }
-      return handleMutation(request);
     },
   };
 }

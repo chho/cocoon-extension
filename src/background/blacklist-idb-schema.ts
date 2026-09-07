@@ -7,7 +7,7 @@ const { DEFAULT_TAG_ID, parseBlacklistState } =
   backgroundBlacklistState as typeof BlacklistStateModule;
 
 export const BLACKLIST_DATABASE_NAME = "cocoon-blacklist";
-export const BLACKLIST_DATABASE_VERSION = 1;
+export const BLACKLIST_DATABASE_VERSION = 2;
 export const BLACKLIST_METADATA_KEY = "state";
 
 export const BLACKLIST_STORE_NAMES = Object.freeze({
@@ -15,11 +15,26 @@ export const BLACKLIST_STORE_NAMES = Object.freeze({
   identifiers: "identifiers",
   tags: "tags",
   metadata: "metadata",
+  importSessions: "import-sessions",
+  importAuthors: "import-authors",
+  importIdentifiers: "import-identifiers",
+  importTags: "import-tags",
+  importChunks: "import-chunks",
 });
+
+export const LIVE_BLACKLIST_STORE_NAMES = Object.freeze([
+  BLACKLIST_STORE_NAMES.authors,
+  BLACKLIST_STORE_NAMES.identifiers,
+  BLACKLIST_STORE_NAMES.tags,
+  BLACKLIST_STORE_NAMES.metadata,
+] as const);
 
 export interface StoredAuthor extends BlacklistedAuthor {
   readonly authorKey: string;
   readonly order: number;
+  readonly nameSearch: string;
+  readonly timeAsc: number;
+  readonly timeDesc: number;
 }
 
 export interface StoredIdentifier {
@@ -67,10 +82,24 @@ export function identifierKey(platformId: string, identifier: string): string {
   return JSON.stringify([platformId, identifier]);
 }
 
+function authorTimeKeys(blacklistedAt: string | null): {
+  readonly timeAsc: number;
+  readonly timeDesc: number;
+} {
+  if (blacklistedAt === null) {
+    return { timeAsc: Number.MAX_SAFE_INTEGER, timeDesc: Number.MAX_SAFE_INTEGER };
+  }
+  const timestamp = Date.parse(blacklistedAt);
+  if (!Number.isFinite(timestamp)) throw new Error("Blacklist author time is invalid.");
+  return { timeAsc: timestamp, timeDesc: -timestamp };
+}
+
 export function createStoredAuthor(author: BlacklistedAuthor, order: number): StoredAuthor {
   return {
     authorKey: authorKey(author.platformId, author.userId),
     order,
+    nameSearch: author.authorNameAtCapture.toLowerCase(),
+    ...authorTimeKeys(author.blacklistedAt),
     ...author,
   };
 }
@@ -104,26 +133,30 @@ export function createMetadata(state: BlacklistState, revision: number): StoredB
   };
 }
 
-export function parseStoredAuthor(value: unknown, tag: CocoonTag): StoredAuthor | null {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "authorKey",
-      "order",
-      "platformId",
-      "userId",
-      "memberHashId",
-      "authorNameAtCapture",
-      "tagId",
-      "blacklistedAt",
-      "blockSource",
-    ]) ||
-    !isNonNegativeSafeInteger(value.order) ||
-    value.tagId !== tag.tagId
-  ) {
-    return null;
-  }
-  const logical = {
+const STORED_AUTHOR_KEYS = [
+  "authorKey",
+  "order",
+  "nameSearch",
+  "timeAsc",
+  "timeDesc",
+  "platformId",
+  "userId",
+  "memberHashId",
+  "authorNameAtCapture",
+  "tagId",
+  "blacklistedAt",
+  "blockSource",
+] as const;
+
+function hasValidStoredAuthorIndexes(value: Record<string, unknown>, tag: CocoonTag): boolean {
+  if (!isNonNegativeSafeInteger(value.order) || typeof value.nameSearch !== "string") return false;
+  const times = [value.timeAsc, value.timeDesc];
+  if (!times.every((time) => typeof time === "number" && Number.isFinite(time))) return false;
+  return value.tagId === tag.tagId;
+}
+
+function logicalAuthorValue(value: Record<string, unknown>): Record<string, unknown> {
+  return {
     platformId: value.platformId,
     userId: value.userId,
     memberHashId: value.memberHashId,
@@ -132,14 +165,29 @@ export function parseStoredAuthor(value: unknown, tag: CocoonTag): StoredAuthor 
     blacklistedAt: value.blacklistedAt,
     blockSource: value.blockSource,
   };
+}
+
+function storedAuthorMatches(value: Record<string, unknown>, expected: StoredAuthor): boolean {
+  return (["authorKey", "nameSearch", "timeAsc", "timeDesc"] as const).every(
+    (key) => value[key] === expected[key],
+  );
+}
+
+export function parseStoredAuthor(value: unknown, tag: CocoonTag): StoredAuthor | null {
+  if (!isRecord(value) || !hasExactKeys(value, STORED_AUTHOR_KEYS)) return null;
+  if (!hasValidStoredAuthorIndexes(value, tag)) return null;
   const tags =
     tag.tagId === DEFAULT_TAG_ID ? [tag] : [{ tagId: DEFAULT_TAG_ID, name: "default" }, tag];
-  const parsed = parseBlacklistState({ schemaVersion: 5, tags, authors: [logical] });
-  const author = parsed.status === "valid" ? parsed.state.authors[0] : undefined;
-  if (!author || value.authorKey !== authorKey(author.platformId, author.userId)) {
-    return null;
-  }
-  return { ...author, authorKey: value.authorKey as string, order: value.order };
+  const parsed = parseBlacklistState({
+    schemaVersion: 5,
+    tags,
+    authors: [logicalAuthorValue(value)],
+  });
+  if (parsed.status !== "valid") return null;
+  const author = parsed.state.authors[0];
+  if (!author) return null;
+  const expected = createStoredAuthor(author, value.order as number);
+  return storedAuthorMatches(value, expected) ? expected : null;
 }
 
 export function parseStoredIdentifier(value: unknown): StoredIdentifier | null {
@@ -273,6 +321,117 @@ export function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
+function createQueryAuthorIndexes(authors: IDBObjectStore): void {
+  authors.createIndex("by-platform", "platformId", { unique: false });
+  for (const direction of ["asc", "desc"] as const) {
+    const time = direction === "asc" ? "timeAsc" : "timeDesc";
+    authors.createIndex(`by-time-${direction}`, [time, "authorKey"], { unique: true });
+    authors.createIndex(`by-platform-time-${direction}`, ["platformId", time, "authorKey"], {
+      unique: true,
+    });
+    authors.createIndex(`by-tag-time-${direction}`, ["tagId", time, "authorKey"], {
+      unique: true,
+    });
+    authors.createIndex(
+      `by-platform-tag-time-${direction}`,
+      ["platformId", "tagId", time, "authorKey"],
+      { unique: true },
+    );
+  }
+}
+
+function createLiveStores(database: IDBDatabase): void {
+  const authors = database.createObjectStore(BLACKLIST_STORE_NAMES.authors, {
+    keyPath: "authorKey",
+  });
+  authors.createIndex("by-platform-user", ["platformId", "userId"], { unique: true });
+  authors.createIndex("by-tag", "tagId", { unique: false });
+  authors.createIndex("by-order", "order", { unique: true });
+  createQueryAuthorIndexes(authors);
+
+  const identifiers = database.createObjectStore(BLACKLIST_STORE_NAMES.identifiers, {
+    keyPath: "identifierKey",
+  });
+  identifiers.createIndex("by-platform-identifier", ["platformId", "identifier"], {
+    unique: true,
+  });
+  identifiers.createIndex("by-author", "authorKey", { unique: false });
+
+  const tags = database.createObjectStore(BLACKLIST_STORE_NAMES.tags, { keyPath: "tagId" });
+  tags.createIndex("by-name", "nameKey", { unique: true });
+  tags.createIndex("by-order", "order", { unique: true });
+  database.createObjectStore(BLACKLIST_STORE_NAMES.metadata, { keyPath: "key" });
+}
+
+function createImportStores(database: IDBDatabase): void {
+  const sessions = database.createObjectStore(BLACKLIST_STORE_NAMES.importSessions, {
+    keyPath: "sessionId",
+  });
+  sessions.createIndex("by-expires-at", "expiresAt", { unique: false });
+
+  const authors = database.createObjectStore(BLACKLIST_STORE_NAMES.importAuthors, {
+    keyPath: ["sessionId", "index"],
+  });
+  authors.createIndex("by-session", "sessionId", { unique: false });
+  authors.createIndex("by-session-author", ["sessionId", "platformId", "userId"], {
+    unique: true,
+  });
+  authors.createIndex("by-session-tag", ["sessionId", "tagId"], { unique: false });
+
+  const identifiers = database.createObjectStore(BLACKLIST_STORE_NAMES.importIdentifiers, {
+    keyPath: ["sessionId", "platformId", "identifier"],
+  });
+  identifiers.createIndex("by-session", "sessionId", { unique: false });
+  identifiers.createIndex("by-session-author", ["sessionId", "authorIndex"], {
+    unique: false,
+  });
+
+  const tags = database.createObjectStore(BLACKLIST_STORE_NAMES.importTags, {
+    keyPath: ["sessionId", "index"],
+  });
+  tags.createIndex("by-session", "sessionId", { unique: false });
+  tags.createIndex("by-session-tag", ["sessionId", "tagId"], { unique: true });
+  tags.createIndex("by-session-name", ["sessionId", "nameKey"], { unique: true });
+
+  const chunks = database.createObjectStore(BLACKLIST_STORE_NAMES.importChunks, {
+    keyPath: ["sessionId", "kind", "chunkIndex"],
+  });
+  chunks.createIndex("by-session", "sessionId", { unique: false });
+  chunks.createIndex("by-session-kind", ["sessionId", "kind", "chunkIndex"], {
+    unique: true,
+  });
+}
+
+function upgradeV1Authors(transaction: IDBTransaction): void {
+  const authors = transaction.objectStore(BLACKLIST_STORE_NAMES.authors);
+  createQueryAuthorIndexes(authors);
+  const cursorRequest = authors.openCursor();
+  cursorRequest.onerror = () => transaction.abort();
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result;
+    if (!cursor) return;
+    const raw = cursor.value as Record<string, unknown>;
+    if (
+      !isNonNegativeSafeInteger(raw.order) ||
+      typeof raw.authorNameAtCapture !== "string" ||
+      !(typeof raw.blacklistedAt === "string" || raw.blacklistedAt === null)
+    ) {
+      transaction.abort();
+      return;
+    }
+    try {
+      cursor.update({
+        ...raw,
+        nameSearch: raw.authorNameAtCapture.toLowerCase(),
+        ...authorTimeKeys(raw.blacklistedAt as string | null),
+      });
+      cursor.continue();
+    } catch {
+      transaction.abort();
+    }
+  };
+}
+
 export function openBlacklistDatabase(
   factory: IDBFactory,
   databaseName = BLACKLIST_DATABASE_NAME,
@@ -283,29 +442,18 @@ export function openBlacklistDatabase(
     request.onblocked = () => reject(new Error("IndexedDB upgrade is blocked."));
     request.onupgradeneeded = (event) => {
       const database = request.result;
-      if (event.oldVersion !== 0) {
-        request.transaction?.abort();
+      const transaction = request.transaction;
+      if (!transaction || event.oldVersion > 1) {
+        transaction?.abort();
         return;
       }
-      const authors = database.createObjectStore(BLACKLIST_STORE_NAMES.authors, {
-        keyPath: "authorKey",
-      });
-      authors.createIndex("by-platform-user", ["platformId", "userId"], { unique: true });
-      authors.createIndex("by-tag", "tagId", { unique: false });
-      authors.createIndex("by-order", "order", { unique: true });
-
-      const identifiers = database.createObjectStore(BLACKLIST_STORE_NAMES.identifiers, {
-        keyPath: "identifierKey",
-      });
-      identifiers.createIndex("by-platform-identifier", ["platformId", "identifier"], {
-        unique: true,
-      });
-      identifiers.createIndex("by-author", "authorKey", { unique: false });
-
-      const tags = database.createObjectStore(BLACKLIST_STORE_NAMES.tags, { keyPath: "tagId" });
-      tags.createIndex("by-name", "nameKey", { unique: true });
-      tags.createIndex("by-order", "order", { unique: true });
-      database.createObjectStore(BLACKLIST_STORE_NAMES.metadata, { keyPath: "key" });
+      try {
+        if (event.oldVersion === 0) createLiveStores(database);
+        else upgradeV1Authors(transaction);
+        createImportStores(database);
+      } catch {
+        transaction.abort();
+      }
     };
     request.onsuccess = () => {
       request.result.onversionchange = () => request.result.close();

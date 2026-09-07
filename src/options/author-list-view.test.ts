@@ -3,12 +3,9 @@ import { test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
-import type { AuthorListItem } from "../ui/blacklist-view-model.ts";
+import type { AuthorListItem } from "../ui/blacklist-list-values.ts";
 import { createAuthorProfileUrl } from "../ui/zhihu-profile-url.ts";
-import {
-  renderAuthorListRows,
-  resetAuthorListViewport,
-} from "./author-list-view.ts";
+import { renderAuthorListRows, resetAuthorListViewport } from "./author-list-view.ts";
 
 function items(count: number, prefix = "Author"): readonly AuthorListItem[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -181,13 +178,8 @@ function createFocusFixture() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.setAttribute("aria-label", `选择 ${item.author.authorName}`);
-    const profileUrl = createAuthorProfileUrl(
-      item.author.platformId,
-      item.author.userId,
-    );
-    const name = profileUrl
-      ? document.createElement("a")
-      : document.createElement("span");
+    const profileUrl = createAuthorProfileUrl(item.author.platformId, item.author.userId);
+    const name = profileUrl ? document.createElement("a") : document.createElement("span");
     name.className = "author-name";
     name.textContent = item.author.authorName;
     if (name instanceof document.defaultView!.HTMLAnchorElement) {
@@ -270,7 +262,9 @@ test("MANAGE-001 necessary virtual replacements restore equivalent controls or f
   strictEqual(fixture.document.activeElement === remove, false);
 
   renderAuthorListRows({ ...base, scrollTop: 640 });
-  const profile = fixture.list.querySelectorAll<HTMLElement>(".author-row").item(4)
+  const profile = fixture.list
+    .querySelectorAll<HTMLElement>(".author-row")
+    .item(4)
     .querySelector<HTMLAnchorElement>("a.author-name");
   profile?.focus();
   renderAuthorListRows({ ...base, scrollTop: 704 });
@@ -310,10 +304,7 @@ test("PROFILE-001/AC-086 filtering reset keeps encoded author profile links", ()
   strictEqual(fixture.document.activeElement, fixture.viewport);
   const firstProfile = fixture.list.querySelector<HTMLAnchorElement>("a.author-name");
   strictEqual(firstProfile?.textContent, "Filtered 0");
-  strictEqual(
-    firstProfile?.href,
-    "https://www.zhihu.com/people/internal-Filtered-0",
-  );
+  strictEqual(firstProfile?.href, "https://www.zhihu.com/people/internal-Filtered-0");
 });
 
 test("PROFILE-002/AC-091 virtual refresh restores the same Zhihu profile link by composite identity", () => {
@@ -353,11 +344,7 @@ test("PROFILE-002/AC-091 incremental and virtual rows never make other platforms
     ...item,
     author: {
       ...item.author,
-      platformId: index % 3 === 0
-        ? "zhihu"
-        : index % 3 === 1
-        ? "youtube"
-        : "future-site",
+      platformId: index % 3 === 0 ? "zhihu" : index % 3 === 1 ? "youtube" : "future-site",
       userId: `shared/id ${index}`,
     },
   }));

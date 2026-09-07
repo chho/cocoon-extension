@@ -83,9 +83,11 @@ function createTargetedDelete(options: {
       return {
         status: plan.status,
         deletedTagId: null,
+        migratedCount: 0,
         ...base,
       };
     }
+    const migratedCount = parsed.state.authors.filter((author) => author.tagId === tagId).length;
     if (options.failWrite) throw new Error("write failed");
     options.persistState(plan.state);
     options.applyState(plan.state);
@@ -93,6 +95,7 @@ function createTargetedDelete(options: {
     return {
       status: "persisted" as const,
       deletedTagId: tagId,
+      migratedCount,
       baseRevision: base.baseRevision,
       revision,
       authorCount: plan.state.authors.length,

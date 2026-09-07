@@ -1,21 +1,12 @@
-import {
-  deepStrictEqual,
-  strictEqual,
-} from "node:assert/strict";
+import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
 import type { BlacklistAuthorDto } from "../core/blacklist-rpc-contract.ts";
-import type { AuthorListItem } from "../ui/blacklist-view-model.ts";
-import {
-  focusPopupSearch,
-  renderPopupRecordList,
-} from "./record-list-view.ts";
-import {
-  POPUP_UNDO_DURATION_MS,
-  createPopupUndoController,
-} from "./undo-controller.ts";
+import type { AuthorListItem } from "../ui/blacklist-list-values.ts";
+import { focusPopupSearch, renderPopupRecordList } from "./record-list-view.ts";
+import { POPUP_UNDO_DURATION_MS, createPopupUndoController } from "./undo-controller.ts";
 
 const INTERNAL_USER_ID = "private-user-token";
 const INTERNAL_HASH = "b".repeat(32);
@@ -60,13 +51,9 @@ class FakeScheduler {
 function createHarness() {
   const scheduler = new FakeScheduler();
   let expirations = 0;
-  const controller = createPopupUndoController(
-    scheduler.schedule,
-    scheduler.cancel,
-    () => {
-      expirations += 1;
-    },
-  );
+  const controller = createPopupUndoController(scheduler.schedule, scheduler.cancel, () => {
+    expirations += 1;
+  });
   return { scheduler, controller, expirations: () => expirations };
 }
 
@@ -184,10 +171,12 @@ test("POPUP-009 malformed/unreadable state can render records read-only", () => 
   }
   renderPopupRecordList({
     list,
-    items: [{
-      author: record(),
-      tag: { tagId: INTERNAL_TAG_ID, name: "Reading", isDefault: false },
-    }],
+    items: [
+      {
+        author: record(),
+        tag: { tagId: INTERNAL_TAG_ID, name: "Reading", isDefault: false },
+      },
+    ],
     queryActive: false,
     writesEnabled: false,
     onRemove() {

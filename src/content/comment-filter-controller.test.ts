@@ -4,14 +4,17 @@ import { JSDOM } from "jsdom";
 
 import {
   createInitialState,
+  normalizeMemberHashId,
   planMemberHashBackfill,
   type BlacklistState,
 } from "./blacklist-state.ts";
 import { createAuthorAliasPersistenceController } from "./author-alias-persistence-controller.ts";
 import {
   COMMENT_HIDDEN_CLASS,
-  createCommentFilterController,
+  createCommentFilterController as createIdentityCommentFilterController,
   resolveCommentAuthorUserId,
+  type CommentFilterController,
+  type CommentFilterControllerDependencies,
 } from "./comment-filter-controller.ts";
 import { createMemberUserIdResolver, type MemberUserIdResolver } from "./resolve-member-user-id.ts";
 import { COMMENT_MUTATION_ATTRIBUTE_FILTER } from "../plugins/zhihu/runtime.ts";
@@ -55,6 +58,39 @@ function createFrames() {
       while (frames.length > 0) {
         frames.shift()?.();
       }
+    },
+  };
+}
+
+interface SetBackedCommentFilterController extends CommentFilterController {
+  updateStableUserIds(userIds: ReadonlySet<string>): void;
+  refreshStableUserIds(userIds: ReadonlySet<string>, root: Node): void;
+}
+
+function createCommentFilterController(
+  dependencies: Omit<CommentFilterControllerDependencies, "matchStableIdentifiers">,
+): SetBackedCommentFilterController {
+  let stableUserIds = new Set<string>();
+  const controller = createIdentityCommentFilterController({
+    ...dependencies,
+    matchStableIdentifiers(identifiers) {
+      return [...identifiers].some((identifier) => stableUserIds.has(identifier))
+        ? "matched"
+        : "unmatched";
+    },
+  });
+  function updateStableUserIds(userIds: ReadonlySet<string>): void {
+    stableUserIds = new Set(
+      Array.from(userIds, (userId) => normalizeMemberHashId(userId) ?? userId),
+    );
+    controller.reevaluateAll();
+  }
+  return {
+    ...controller,
+    updateStableUserIds,
+    refreshStableUserIds(userIds, root) {
+      updateStableUserIds(userIds);
+      controller.scan(root);
     },
   };
 }

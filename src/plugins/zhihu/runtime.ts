@@ -4,20 +4,20 @@ import {
   createInitialState,
   normalizeMemberHashId,
   validateNewTagLabel,
-  type BlacklistState,
+  type CocoonTag,
 } from "../../content/blacklist-state.ts";
-import { createAuthorAliasPersistenceController } from "../../content/author-alias-persistence-controller.ts";
 import { resolveProvenAuthorIdentity } from "../../content/author-identity.ts";
 import {
   createCardFilterController,
+  type CardFilterController,
   type CardFilterFreshness,
 } from "../../content/card-filter-controller.ts";
-import { createCommentFilterController } from "../../content/comment-filter-controller.ts";
-import { createBackgroundBlacklistGateway } from "../../content/background-blacklist-gateway.ts";
 import {
-  BLACKLIST_REVISION_STORAGE_KEY,
-  createBackgroundBlacklistClient,
-} from "../../content/background-blacklist-client.ts";
+  createCommentFilterController,
+  type CommentFilterController,
+} from "../../content/comment-filter-controller.ts";
+import { createBackgroundBlacklistGateway } from "../../content/background-blacklist-gateway.ts";
+import { BLACKLIST_REVISION_STORAGE_KEY } from "../../content/background-blacklist-client.ts";
 import { createMeasuredCommitController } from "../../content/commit-performance.ts";
 import {
   createDrawerController,
@@ -32,7 +32,6 @@ import {
 import { parseAuthorMemberHashId } from "../../content/parse-zhihu-member-data.ts";
 import { parseZhihuUserId } from "../../content/parse-zhihu-user-id.ts";
 import { createMemberUserIdResolver } from "../../content/resolve-member-user-id.ts";
-import { applyBlacklistRuntimeState } from "../../content/runtime-state-application.ts";
 import { createTagDeletionController } from "../../content/tag-deletion-controller.ts";
 import { renderTagList } from "../../content/tag-list.ts";
 import {
@@ -68,6 +67,7 @@ import {
   resolveZhihuContentSource,
   type ZhihuContentSource,
 } from "../../content/zhihu-content-source.ts";
+import { createZhihuBlacklistIdentityRuntime } from "./blacklist-identity-runtime.ts";
 
 const CARD_SELECTOR = ".TopstoryItem";
 const CONTENT_SELECTOR = ".ContentItem[data-zop]";
@@ -108,9 +108,9 @@ export function applyCardHiddenState(
   card: HTMLElement,
   hidden: boolean,
   isCurrent: CardFilterFreshness,
-  rootsEverObservedHidden: WeakSet<HTMLElement>,
-  onFirstHidden: () => void,
+  ...observation: readonly [WeakSet<HTMLElement>, () => void]
 ): void {
+  const [rootsEverObservedHidden, onFirstHidden] = observation;
   if (!isCurrent() || !card.isConnected) {
     return;
   }
@@ -182,7 +182,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   const blacklistGateway = createBackgroundBlacklistGateway(chrome.runtime);
   const cardTargetIds = new WeakMap<HTMLElement, string>();
   const resolveMemberUserId = createMemberUserIdResolver(fetch);
-  let currentState: BlacklistState = createInitialState();
+  let currentTags: readonly CocoonTag[] = createInitialState().tags;
   let nextTargetId = 1;
   let blockedOutsideClickTarget: EventTarget | null = null;
   let lifecycleEnded = false;
@@ -204,30 +204,47 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     batchSize: BATCH_SIZE,
   });
 
-  const blacklistClient = createBackgroundBlacklistClient({
+  const runtimeFilters: {
+    card?: CardFilterController<HTMLElement>;
+    comment?: CommentFilterController;
+  } = {};
+
+  function reevaluateIdentityRoots(): void {
+    runtimeFilters.card?.reevaluateAll();
+    runtimeFilters.comment?.reevaluateAll();
+  }
+
+  const identityRuntime = createZhihuBlacklistIdentityRuntime({
     gateway: blacklistGateway,
-    applyState: replaceRuntimeState,
-    reportSyncFailure: reportBlacklistSyncFailure,
-  });
-  const authorAliasPersistenceController = createAuthorAliasPersistenceController({
     resolveMemberUserId,
-    backfillMemberHash(identity, memberHashId) {
-      return blacklistClient.backfillMemberHash(identity, memberHashId);
+    applyTags(tags) {
+      currentTags = tags;
+      renderTagChoices();
+    },
+    reevaluateRoots: reevaluateIdentityRoots,
+    reportSyncFailure: reportBlacklistSyncFailure,
+    schedule(callback) {
+      const frameId = requestAnimationFrame(callback);
+      return () => cancelAnimationFrame(frameId);
     },
   });
+  const { client: blacklistClient, aliasPersistence } = identityRuntime;
 
   const commentFilterController = createCommentFilterController({
     schedule(callback) {
-      requestAnimationFrame(callback);
+      const frameId = requestAnimationFrame(callback);
+      return () => cancelAnimationFrame(frameId);
     },
-    async resolveHistoricalAlias(memberHashId) {
-      await authorAliasPersistenceController.persistMemberHashAlias(memberHashId);
+    matchStableIdentifiers: identityRuntime.match,
+    resolveHistoricalAlias(memberHashId) {
+      return aliasPersistence.persistMemberHashAlias(memberHashId);
     },
     onFirstHidden() {
       context.badgeReporter.recordFirstHidden();
     },
     batchSize: BATCH_SIZE,
   });
+  runtimeFilters.comment = commentFilterController;
 
   function getAuthorName(card: HTMLElement): string {
     const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
@@ -257,9 +274,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     for (const profileLink of profileLinks) {
       const profileHref = profileLink.getAttribute("href");
       const userId = profileHref ? parseZhihuUserId(profileHref) : null;
-      if (userId) {
-        return userId;
-      }
+      if (userId) return userId;
     }
 
     return null;
@@ -283,28 +298,6 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       identifiers.add(memberHashId);
     }
     return identifiers;
-  }
-
-  async function getAuthorUserId(card: HTMLElement): Promise<string | null> {
-    const identity = await resolveProvenAuthorIdentity(
-      {
-        profileUserId: getProfileLinkUserId(card),
-        memberHashId: getAuthorMemberHashId(card),
-      },
-      resolveMemberUserId,
-    );
-    return identity?.userId ?? null;
-  }
-
-  function replaceRuntimeState(state: BlacklistState): void {
-    applyBlacklistRuntimeState(state, document.body, {
-      setCurrentState(nextState) {
-        currentState = nextState;
-      },
-      renderTagChoices,
-      cardFilter: filterController,
-      commentFilter: commentFilterController,
-    });
   }
 
   function reportBlacklistSyncFailure(): void {
@@ -357,7 +350,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       await blacklistClient.initialize();
     } catch (error) {
       console.error("[Cocoon] 无法初始化或迁移本地黑名单。", error);
-      replaceRuntimeState(createInitialState());
+      currentTags = createInitialState().tags;
+      renderTagChoices();
     } finally {
       enqueueAllCards();
     }
@@ -542,7 +536,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   }
 
   function renderTagChoices(): void {
-    renderTagList(tagList, currentState.tags, {
+    renderTagList(tagList, currentTags, {
       selectTag(tag) {
         void submitDrawerSelection({ tag, isNewTag: false });
       },
@@ -551,6 +545,14 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       },
     });
   }
+
+  async function submitDrawerSelection(selection: TagSelection): Promise<void> {
+    await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
+      drawerController.submit(selection);
+    });
+  }
+
+  window.addEventListener("resize", positionDrawer);
 
   function getVoterSource(card: HTMLElement): ZhihuContentSource | null {
     const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
@@ -617,12 +619,6 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     newTagInput.reportValidity();
   }
 
-  async function submitDrawerSelection(selection: TagSelection): Promise<void> {
-    await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
-      drawerController.submit(selection);
-    });
-  }
-
   newTagInput.addEventListener("input", () => {
     drawerController.setDraft(newTagInput.value);
     newTagInput.setCustomValidity("");
@@ -631,7 +627,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   newTagForm.addEventListener("submit", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const validation = validateNewTagLabel(newTagInput.value, currentState.tags);
+    const validation = validateNewTagLabel(newTagInput.value, currentTags);
     if (validation.error) {
       showTagValidationError(validation.error);
       return;
@@ -728,7 +724,6 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     true,
   );
 
-  window.addEventListener("resize", positionDrawer);
   window.addEventListener("scroll", positionDrawer, true);
 
   function enhanceCard(card: HTMLElement): void {
@@ -758,19 +753,25 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
 
   const filterController = createCardFilterController<HTMLElement>({
     prepareCard: enhanceCard,
-    resolveDirectStableUserIds: getDirectCardAuthorIds,
-    resolveStableUserId: getAuthorUserId,
+    resolveStableIdentifiers: getDirectCardAuthorIds,
+    matchStableIdentifiers: identityRuntime.match,
+    resolveHistoricalAlias(memberHashId) {
+      return aliasPersistence.persistMemberHashAlias(memberHashId);
+    },
     setHidden(card, hidden, isCurrent) {
       cardVisibilityController.queue(card, hidden, isCurrent);
     },
+    isConnected: (card) => card.isConnected,
     reportFailure(error) {
       console.warn("[Cocoon] 无法判断卡片作者。", error);
     },
     schedule(callback) {
-      requestAnimationFrame(callback);
+      const frameId = requestAnimationFrame(callback);
+      return () => cancelAnimationFrame(frameId);
     },
     batchSize: BATCH_SIZE,
   });
+  runtimeFilters.card = filterController;
 
   function enqueueCard(card: HTMLElement): void {
     filterController.enqueue(card);
