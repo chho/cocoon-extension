@@ -63,18 +63,14 @@ import {
   fetchCurrentZhihuUser,
   fetchZhihuVoters,
 } from "../../content/zhihu-remote-api.ts";
-import {
-  resolveZhihuContentSource,
-  type ZhihuContentSource,
-} from "../../content/zhihu-content-source.ts";
 import { createZhihuBlacklistIdentityRuntime } from "./blacklist-identity-runtime.ts";
+import { getCardContentSource } from "./card-content-source.ts";
 
 const CARD_SELECTOR = ".TopstoryItem";
 const CONTENT_SELECTOR = ".ContentItem[data-zop]";
 const AUTHOR_SELECTOR = ".AuthorInfo-name, .UserLink-link";
 const AUTHOR_PROFILE_LINK_SELECTOR =
   "a.AuthorInfo-name[href], a.UserLink-link[href], .AuthorInfo-name a[href]";
-const CONTENT_LINK_SELECTOR = "a[href]";
 const ENHANCED_CARD_CLASS = "cocoon-zhihu-card";
 export const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
 const CLOSE_BUTTON_CLASS = "cocoon-zhihu-card-close";
@@ -554,19 +550,6 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
 
   window.addEventListener("resize", positionDrawer);
 
-  function getVoterSource(card: HTMLElement): ZhihuContentSource | null {
-    const content = card.querySelector<HTMLElement>(CONTENT_SELECTOR);
-    if (!content) {
-      return null;
-    }
-
-    const hrefs = Array.from(
-      content.querySelectorAll<HTMLAnchorElement>(CONTENT_LINK_SELECTOR),
-      (link) => link.getAttribute("href") ?? "",
-    );
-    return resolveZhihuContentSource(hrefs);
-  }
-
   async function openDrawer(card: HTMLElement, button: HTMLButtonElement): Promise<void> {
     const target: HtmlDrawerTarget = {
       targetId: getCardTargetId(card),
@@ -576,7 +559,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       profileUserIdAtClick: getProfileLinkUserId(card),
       memberHashIdAtClick: getAuthorMemberHashId(card),
       anchorBounds: null,
-      voterSource: getVoterSource(card),
+      voterSource: getCardContentSource(card),
     };
     await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
       drawerController.open(target);

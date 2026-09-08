@@ -613,7 +613,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (700). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (689). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -621,8 +621,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (864). Maximum allowed is 500.",
-      "sourceLine": "const hrefs = Array.from(",
+      "message": "File has too many lines (849). Maximum allowed is 500.",
+      "sourceLine": "voterSource: getCardContentSource(card),",
       "count": 1
     },
     {

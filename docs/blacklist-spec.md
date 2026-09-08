@@ -5,7 +5,7 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | `ACTIVE` |
-| 规格版本 | `0.79.0` |
+| 规格版本 | `0.81.0` |
 | 最后更新 | `2026-09-07` |
 | 当前交付阶段 | `DELIVERED` |
 | 适用页面 | `https://www.zhihu.com/` |
@@ -640,6 +640,8 @@ Cocoon 不再具有截图产品需求。实现 `CAP-007` 时删除 DOM 转 Canva
 
 | `BUG-017` | `DELIVERED` | 用户报告卡片屏蔽提交失败；CDP 9223 在用户操作时段捕获新增 `[Cocoon] 屏蔽作者失败，未保留会话内黑名单。 TypeError: this.mutate is not a function`，未读取具体作者身份。源码确认 client class 方法依赖 this，而 runtime 将 commitAuthor、commitUpvoter、deleteTag 直接作为其他对象回调，接收者丢失。修复必须保持这些生产回调的 client 接收者，成功时恰好一次网关调用并应用同步 delta；失败继续传播且释放本地 mutation 状态，后续 revision 同步与重试可用。回归必须覆盖与生产相同的取出方法再交给其他对象调用方式，不得仅测试 client.method()。不改变 schema、权限、RPC 限制、远程 POST 授权或点赞者仅本地入库边界；保留 BUG-016 的交付历史。 |
 
+| `BUG-018` | `DELIVERED` | 用户反馈卡片折叠时点赞者选项可用、展开后被禁用。现有 Chrome 9223 只读检查确认展开回答正文引用另一个回答，标题与时间链接仍指向当前回答；runtime 全域扫描 a[href] 导致两个候选，唯一来源解析返回 null。只允许从当前 ContentItem 自身且正文之外的 .ContentItem-title 语义区域提取内容链接，排除正文引用和嵌套 ContentItem；回答/文章展开与折叠必须保持相同来源。缺失可信标题、非法来源或自身标题含多个不同合法来源时继续禁用，不任取第一条、不以正文回退。保持悬浮入口始终禁用、偏好不被改写及点赞者仅本地入库边界。最新本地快照缺少内容链接/展开样本；现场观察 16 个回答与 2 个文章均有一个自身标题链接，未记录真实标识。未自动切换同一卡片前后状态，用户浏览器交互复验仍待进行。 |
+
 `BUG-001`～`BUG-006` 均保留历史交付与用户反馈记录；其中 `BUG-002` 已被 `CAP-007` 取代，`BUG-004`～`BUG-006` 的复杂身份生命周期方案现由用户明确通过 `BUG-007` 取代。
 
 `BUG-007` 的验收条件（不是独立需求）：
@@ -767,6 +769,7 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 | `AC-096` | `SUPERSEDED` | 历史第一阶段检查 Popup、管理页、JSON transfer、Badge、知乎直接作者与点赞者操作以及 Manifest | 其 RPC v2、format v1/schema v5、2,000 标签、远程和权限边界继续有效；固定 20,000 作者、8 MiB transfer 以及完整 snapshot 由 `BUG-016` / `AC-099` 取代 | 历史验收记录 |
 | `AC-097` | `SUPERSEDED` | 历史第一阶段使用超过旧 transfer 上限或百万级合成数据评估声明与实现 | 第一阶段延期结论由 `BUG-016` 对 33,524/100,000 的明确支持范围取代；百万级仍按 `SCALE-002` 延期 | 历史验收记录 |
 | `AC-098` | `DELIVERED` | 通过生产 `createBackgroundBlacklistClient` 调用初始化，并使用有效后台有界初始化响应 | 初始化不抛出 receiver 相关 `TypeError`，恰好调用一次并把权威 revision、计数和标签状态应用到知乎运行时；不得返回完整作者集合，失败路径仍由既有安全回退处理 | 公开 client 回归测试 + 完整自动化回归 + 用户浏览器复验 |
+| `AC-101` | `DELIVERED` | 使用合成回答/文章卡片，折叠后展开并加入其他内容正文引用与嵌套内容；验证自身标题缺失、非法或歧义边界 | 可信自身标题来源不变，点赞者选项展开后仍可用；正文和嵌套内容不能授权或干扰当前卡片；无可信唯一来源时仍禁用且不改变偏好，悬浮入口始终禁用；不新增网络补查、权限或改变持久数据 | jsdom 站点 adapter/选项接线回归 + 严格 URL 解析回归 + 独立审查 + 用户浏览器复验 |
 | `AC-100` | `DELIVERED` | 将 client.commitAuthor、commitUpvoter、deleteTag 分别作为其他对象回调调用，验证成功、失败、revision 同步及重试 | 不再抛 this.mutate 错误；网关接收正确参数且每次操作只调用一次；成功 delta 正确应用，失败不产生虚假成功或残留 pending 状态，后续同步及操作可用；schema、权限与知乎网络边界不变 | 合成 client/gateway/sync 接线回归 + 定向审查 + 用户重新加载扩展后验收 |
 | `AC-099` | `DELIVERED` | 用 33,524 和 100,000 条真实字段形态、仅合成 ID/名称的记录执行数据库、普通 RPC、Popup/options、content 和 transfer 流程，并检查 v1→v2 upgrade、quota/abort、worker 重建与 revision 竞态 | 作者总数不受 Cocoon 人工上限；Popup/options/content/普通 mutation 均不传完整集合，authors/identifiers 热路径无 `getAll()`；keyset 对 stale cursor、null/equal time、asc/desc、substring、标签/平台组合无重漏；content batch/cache/revision/alias/DOM freshness/Badge fail-open 保持；mutation 仅返回 revision/count/必要 delta，undo 使用 removed DTO；format-v1 大数据 revision-pinned 导出及 merge/replace staging 导入 round-trip 成功，chunk 乱序/重复/断连/重建、sender/额外字段/字节限制、冲突/quota/原子失败均 fail closed，finalize 只增一次 revision；benchmark 记录 JSON size、parse-validation、query、upgrade 和 finalize 的可复现结果；权限、页面范围、schema v5 与知乎网络边界不变 | fake IndexedDB 集成测试 + RPC/UI/content/DOM/网络回归 + 合成 benchmark + Manifest/构建审查 + 用户浏览器验收 |
 
@@ -1005,6 +1008,8 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 | `0.74.0` | `2026-09-06` | 大规模黑名单完整修复进入审查 | Developer 完成 IDB v2 查询/staging 升级、Popup/options keyset 分页、content 可见身份批查与有限缓存、management delta、revision-pinned 导出和持久分块导入，删除旧 snapshot/hydrate 与单消息 transfer，并将扩展版本升级为 `0.4.0`。合成内存 benchmark 覆盖 33,524/100,000 条并据此采用 32 MiB 文件边界；Node fake IndexedDB 33,524 upgrade 在 600 秒超时，项目约定 `127.0.0.1:9223` 当前不可连接，因此 Chrome 原生 upgrade/query/finalize 指标和用户浏览器验收明确待进行。完整 `531` 项测试、格式、lint、类型检查、构建、diff、MV3 Manifest/资源和 content/background 自包含检查通过；`BUG-016`、`AC-099` 标为 `IN_REVIEW`，等待 Reviewer 对代码及证据局限作独立结论。 |
 | `0.75.0` | `2026-09-06` | 代码审查通过但原生规模证据阻塞交付 | 首轮 Reviewer 发现 options 可选择超过单次 500 人 mutation 边界；Developer 增加有界 selection controller、拒绝并回退第 501 个 checkbox、可访问错误焦点及 501 条分页/虚拟列表/dialog/RPC 回归。复审确认唯一代码 finding 已关闭，代码 verdict 为 `PASS`；主代理最终运行 `532` 项测试、格式、lint、类型检查、构建、diff 和合成内存 benchmark 全部通过。由于项目约定 CDP `9223` 仍不可连接，Chrome 原生 v1→v2 upgrade/query/production transfer finalize 与 round-trip 证据无法取得，Reviewer 对 `BUG-016`/`AC-099` 给出 `MISSING_EVIDENCE`，总体 `BLOCKED`；不得标为 `DELIVERED`，也不得把 fake-indexeddb 超时描述为 Chrome 性能失败。 |
 | `0.76.0` | `2026-09-06` | 补齐 Chrome 原生 production repository 规模证据并重新送审 | `DevToolsActivePort` 恢复且指向 `9222` 后，主代理按机器级约定直连用户现有 Chrome，未启动浏览器；使用临时 origin、唯一合成数据库和当前 production repository/schema/query/transfer/validator 完成 33,524 与 100,000 条 v1→v2 upgrade、有界页面/身份查询、revision-pinned 导出、strict format-v1 parse、500 项持久 staging、replace/merge 单事务 finalize 和最终计数核对。两种规模均完成；具体指标及自动清理边界记入 `AC-099` 与本地忽略证据文件。状态恢复为 `IN_REVIEW`；真实加载扩展和真实数据仍只由用户验收。 |
+| `0.81.0` | `2026-09-07` | 展开卡片点赞者来源修复审查通过 | Reviewer 对 `BUG-018` / `AC-101` 给出 `PASS`，无阻塞 finding，独立定向14/14及diff检查通过；核对自身标题边界、悬浮入口、严格解析、版本0.4.2与规模改善基线。最新快照缺少展开样本，现场CDP证据引用开发记录而非Reviewer重新操作。需求标为 `DELIVERED`，仅代表开发与审查完成；用户重新加载扩展、刷新知乎后的真实交互验收仍待进行。 |
+| `0.80.0` | `2026-09-07` | 展开卡片点赞者来源修复进入开发 | 用户批准修复 TODO，新增 `BUG-018` / `AC-101` 为 `READY_FOR_DEV`；站点 adapter 已将当前卡片来源限制为自身非正文标题链接，不改变严格唯一来源判定、悬浮入口及远程授权边界；patch 0.4.2。8项回归 Red 2/8→Green 8/8，定向15/15、最终546/546、格式/lint/typecheck/build/diff与Manifest资源核对通过；runtime规模减少并仅同步改善后的两项基线。状态进入 `IN_REVIEW`。现场仅记录结构和数量，修复后真实浏览器验收待进行。 |
 | `0.79.0` | `2026-09-07` | 内容端 mutation 回调修复审查通过 | Reviewer 对 `BUG-017` / `AC-100` 给出 `PASS`，无阻塞或非阻塞 finding，独立执行六项回归通过。主代理已完成 538/538 测试、格式、lint、类型检查、构建、Manifest 资源及 diff 验证。扩展版本 0.4.1；需求标为 `DELIVERED` 仅表示开发与独立审查完成，用户重新加载扩展、刷新知乎后的真实操作验收仍待进行。 |
 | `0.78.0` | `2026-09-07` | 用户反馈内容端 mutation 接收者回归 | 新增 `BUG-017` / `AC-100`，用户批准仅修复 client 回调接收者、补生产调用方式回归及 patch 版本。三个直接传出方法改 readonly 箭头属性，六项回归 Red 全部复现 this.mutate、Green 全部通过；定向 14/14、全量 538/538、格式、lint、typecheck、build、diff 和 Manifest 资源核对通过，版本 0.4.1，进入 `IN_REVIEW`。CDP 只证明修复前用户操作时段新增提交异常，不声称观察到具体作者、点击过程或数据库写入结果；修复后用户浏览器验收待进行。 |
 | `0.77.0` | `2026-09-06` | `BUG-016` / `AC-099` 审查通过并交付 | 最终 Reviewer 独立核对代码、自动化、Manifest、严格 validator 与本地 Chrome 原生合成证据，确认 Options 500 项 finding 和原生规模 `MISSING_EVIDENCE` 均已关闭；代码、`AC-099` evidence 与 `BUG-016` 总 verdict 均为 `PASS`，无 blocking 或 non-blocking finding。`BUG-016` / `AC-099` 标为 `DELIVERED`；真实加载扩展后的 Popup/options/content 与真实数据行为继续由用户验收，不作为 Reviewer PASS 前置条件。 |
