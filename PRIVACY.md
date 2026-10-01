@@ -58,7 +58,13 @@ Imports temporarily stage records on your device for validation and atomic commi
 
 导入会在本机暂存记录，以完成校验和原子提交；成功完成或显式取消时清理相应暂存。中断的会话在 24 小时后失效，但过期暂存在下次开始导入时才清理，不保证定时物理删除。移除当前作者记录不会单独清除中断导入的暂存副本。
 
-## 5. Changes and contact / 变更与联系
+## 5. Limited Use / 限定用途
+
+Cocoon's use of information received from Chrome APIs adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements. Data is used only to provide the disclosed author-filtering and local blocklist-management features. It is not sold or used for advertising, unrelated profiling, creditworthiness, or lending decisions. Transfers are limited to the necessary Zhihu requests described above and exports you initiate. The developer does not receive your local blocklist or provide humans with access to it. If you voluntarily contact support, share only the information needed to resolve your request and never post sensitive records publicly.
+
+Cocoon 对通过 Chrome API 获得的信息的使用遵守 Chrome Web Store 用户数据政策，包括 Limited Use（限定用途）要求。数据仅用于已披露的作者过滤和本地屏蔽列表管理功能，不出售，也不用于广告、无关画像、信用评估或贷款判断。传输仅限上述功能必需的知乎请求及你主动发起的导出。开发者不接收你的本地屏蔽列表，也不向人员提供对该列表的访问权限。如果你主动联系支持，请只提供解决问题所需的信息，不要公开敏感记录。
+
+## 6. Changes and contact / 变更与联系
 
 We will update this policy when data practices change. For product or privacy questions, contact the maintainer through [Cocoon GitHub Issues](https://github.com/chho/cocoon-extension/issues). Please describe privacy concerns without posting sensitive data publicly.
 
