@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .pi/
+/release-archives/
 docs/*
 !docs/blacklist-spec.md
 .DS_Store
