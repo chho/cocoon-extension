@@ -1,0 +1,6 @@
+{
+  "extensionName": { "message": "Cocoon" },
+  "extensionDescription": {
+    "message": "按作者屏蔽不想看到的内容，用标签管理你的本地屏蔽列表。当前支持知乎首页。"
+  }
+}

@@ -16,7 +16,13 @@ export default defineConfig({
     createEntryCopyPlugin(),
     createStaticAssetsPlugin({
       projectRoot: import.meta.dirname,
-      assets: iconAssets,
+      assets: [
+        ...iconAssets,
+        ...["en", "zh_CN"].map((locale) => ({
+          sourcePath: `public/_locales/${locale}/messages.json`,
+          outputPath: `_locales/${locale}/messages.json`,
+        })),
+      ],
     }),
     createExtensionBuildPlugin({ projectRoot: import.meta.dirname }),
   ],

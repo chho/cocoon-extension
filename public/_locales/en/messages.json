@@ -1,0 +1,6 @@
+{
+  "extensionName": { "message": "Cocoon" },
+  "extensionDescription": {
+    "message": "Filter unwanted authors and organize your local blocklist with tags. Currently supports the Zhihu home feed."
+  }
+}
