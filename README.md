@@ -97,7 +97,7 @@ npm ci
 npm run build
 ```
 
-The production extension is generated in `dist/`.
+The production extension is generated in `dist/`. Its name and summary have English and Simplified Chinese metadata; the extension UI currently remains in Chinese.
 
 ### Load in Chrome
 
@@ -110,6 +110,8 @@ The production extension is generated in `dist/`.
 After changing the Manifest or a content script, rebuild the project, reload the extension, and refresh the supported page.
 
 ## Data & privacy
+
+Read the [Privacy Policy](PRIVACY.md) for data handling, Zhihu session usage, and deletion details.
 
 Cocoon stores blacklist authors and tags in extension-owned IndexedDB. Each record may include:
 
