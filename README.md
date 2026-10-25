@@ -58,7 +58,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 - Searches, filters, sorts, and removes locally blocked authors.
 - Filters records by tag and platform source.
-- Renames and deletes custom tags.
+- Renames and deletes custom tags in a full-width maintenance list.
 - Imports or exports a strictly validated JSON backup.
 - Supports atomic merge and confirmed replace-all imports.
 

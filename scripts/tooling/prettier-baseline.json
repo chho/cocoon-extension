@@ -242,10 +242,6 @@
       "sha256": "cc85f46f5413311f16031b4543b02d10c84be6c9466685d05fa86e5a846059d4"
     },
     {
-      "path": "src/options/options.css",
-      "sha256": "30c4047bb36a4758e846fcccb4bb15bc007b5a3bc95be742250dc235a42403ae"
-    },
-    {
       "path": "src/plugins/zhihu/plugin.css",
       "sha256": "1a437b5e5bbec5e28aed0f17b6d7cf715d123e8cb391b18aba07233e56df1cec"
     },

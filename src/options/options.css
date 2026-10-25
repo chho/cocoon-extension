@@ -1,6 +1,11 @@
 :root {
   color-scheme: light;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   color: #202622;
   background: #fbfcfa;
   font-synthesis: none;
@@ -284,7 +289,9 @@ select {
 .table-header,
 .author-row {
   display: grid;
-  grid-template-columns: 28px minmax(140px, 1.25fr) minmax(90px, 0.7fr) minmax(82px, 0.55fr) minmax(96px, 0.65fr) minmax(140px, 0.9fr) 82px;
+  grid-template-columns:
+    28px minmax(140px, 1.25fr) minmax(90px, 0.7fr) minmax(82px, 0.55fr) minmax(96px, 0.65fr)
+    minmax(140px, 0.9fr) 82px;
   align-items: center;
   gap: 12px;
 }
@@ -410,7 +417,7 @@ a.author-name {
 }
 
 .tag-workbench {
-  width: min(860px, 100%);
+  width: 100%;
   overflow: hidden;
   border: 1px solid #d9ded9;
   border-radius: 8px;
@@ -662,14 +669,27 @@ dialog p {
     padding-block: 10px;
   }
 
-  .author-list:not(.virtual-list) .author-row input { grid-area: check; }
-  .author-list:not(.virtual-list) .author-name { grid-area: name; }
-  .author-list:not(.virtual-list) .tag-name { grid-area: tag; }
-  .author-list:not(.virtual-list) .platform-name { grid-area: platform; }
-  .author-list:not(.virtual-list) .source-name { grid-area: source; }
-  .author-list:not(.virtual-list) .author-row time { grid-area: time; }
-  .author-list:not(.virtual-list) .author-row button { grid-area: remove; }
-
+  .author-list:not(.virtual-list) .author-row input {
+    grid-area: check;
+  }
+  .author-list:not(.virtual-list) .author-name {
+    grid-area: name;
+  }
+  .author-list:not(.virtual-list) .tag-name {
+    grid-area: tag;
+  }
+  .author-list:not(.virtual-list) .platform-name {
+    grid-area: platform;
+  }
+  .author-list:not(.virtual-list) .source-name {
+    grid-area: source;
+  }
+  .author-list:not(.virtual-list) .author-row time {
+    grid-area: time;
+  }
+  .author-list:not(.virtual-list) .author-row button {
+    grid-area: remove;
+  }
 }
 
 @media (max-width: 460px) {

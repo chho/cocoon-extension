@@ -5,8 +5,8 @@
 | 字段 | 值 |
 | --- | --- |
 | 文档状态 | `ACTIVE` |
-| 规格版本 | `0.81.0` |
-| 最后更新 | `2026-09-07` |
+| 规格版本 | `0.82.0` |
+| 最后更新 | `2026-10-09` |
 | 当前交付阶段 | `DELIVERED` |
 | 适用页面 | `https://www.zhihu.com/` |
 | 事实来源 | 本文档、当前源码、测试和本地知乎快照 |
@@ -112,6 +112,12 @@ Cocoon 在 Chrome 扩展 Action 图标的 Badge 中显示当前标签页本次�
 `STORAGE-001`～`STORAGE-005` 只改变持久化权威、事务边界和同步方式，不改变用户可见功能。`BUG-016` 在该基础上替代跨 context 的完整 snapshot 和旧固定 transfer 总量上限；外部 JSON 继续使用 schema v5 和 format v1，IndexedDB 物理版本升级为 v2。旧 `BL-006`、`COMMENT-003`、`ERR-001` 等历史条目中的 `chrome.storage.local` 字样保留当时交付记录，其当前持久化介质含义由本节取代，原有失败安全和跨页面更新行为继续有效。
 
 `BUG-016` 的协议安全边界确定为：普通 RPC 256 KiB、作者页 50、标签/平台页 100、content 身份 batch 200、管理 mutation batch 500、cursor 2 KiB、transfer chunk 最多 500 位作者且不超过 256 KiB、单个 transfer 文件 32 MiB、标签最多 2,000 个。IndexedDB 作者总数没有 Cocoon 人工上限，这些数字只约束单次操作。确定性合成 benchmark 中，33,524/100,000 条 format-v1 记录分别为 7,670,490/22,880,066 bytes；两种规模的生成、`Blob.text()`、`JSON.parse()` 和严格校验均远低于 1 秒，峰值 RSS 分别约 206.8/368.7 MiB，支持当前 32 MiB 文件边界但不构成百万级承诺。Node `fake-indexeddb` 的 33,524 条 v1→v2 upgrade 在 600 秒工具边界内未完成，因此不能用它代表 Chrome 原生 IndexedDB 性能。随后通过 `DevToolsActivePort` 直连用户现有 Chrome（本次活动端口 `9222`，未启动替代浏览器），在临时 origin/database 中直接 bundle 并运行当前 production repository/schema/query/transfer/strict validator：33,524 条 v1→v2 upgrade、首个 50 项页面、200 项身份批查、完整导出、replace finalize、merge finalize 分别约 `10.292s`、`540.1ms`、`1.9ms`、`1.872s`、`21.934s`、`10.451s`；100,000 条对应约 `35.143s`、`1.568s`、`4.1ms`、`7.367s`、`71.362s`、`38.581s`。两种规模均完成 strict format-v1 round-trip、最终作者计数核对及 revision `0→1→2`，临时数据库、target、server 和 harness 已清理；本地合成记录位于 `.pi/browser-benchmarks-local/bug016-native-2026-09-06.json`。实际加载扩展的 Popup/options/content 与真实数据浏览器验收仍由用户完成，不得表述为已执行。
+
+### 标签维护宽度对齐修复
+
+| ID | 状态 | 需求与验收 |
+| --- | --- | --- |
+| `BUG-019` | `DELIVERED` | 用户要求管理页标签维护清单与上方作者列表、下方导入导出区域左右对齐。移除 `.tag-workbench` 的 860px 独立宽度上限，使用父容器全宽；保留现有页面宽度、border-box、窄屏布局、重命名/删除及空态行为，不改变业务逻辑。自动化验证生产 HTML/CSS 的全宽契约；宽屏及窄屏实际视觉效果由用户验收。 |
 
 ### 卡片评论过滤
 
@@ -932,6 +938,7 @@ Reviewer 按对应开发与审查范围检查需求，并对相关已交付流�
 
 | 版本 | 日期 | 状态变化 | 说明 |
 | --- | --- | --- | --- |
+| `0.82.0` | `2026-10-09` | 标签维护宽度修复审查通过 | `BUG-019`：将标签工作台改为父容器全宽，保留原有操作与响应式断点。生产 HTML/CSS 契约回归先 Red 后 Green；548 项测试、格式、lint、类型检查、构建及 diff 检查通过。CSS 依项目规则完成既有格式债务迁移，移除对应基线条目；扩展 patch 版本为 0.4.4。独立 Reviewer 对 BUG-019 给出 PASS，无阻塞；定向测试与 diff 检查通过，核对产物 MV3 权限范围、资源和版本一致性。jsdom 不证明像素布局，宽屏及窄屏真实视觉效果仍由用户验收。 |
 | `0.1.0` | `2026-08-12` | 建立基线 | 记录已有卡片按钮和作者解析能力；确认作者黑名单、CSS 隐藏、本地持久化及动态过滤为 `READY_FOR_DEV`；管理、撤销和提示交互保持待确认或延期。 |
 | `0.2.0` | `2026-08-13` | 新增需求并阻塞整体开发 | 确认点击时需本地保存作者名称、稳定 ID 和被点击卡片图像；记录截图技术路线、权限、失败语义、截图范围和容量策略的待决策项，完整点击流程转为 `DECISION_PENDING`。 |
 | `0.3.0` | `2026-08-13` | 部分截图决策完成 | 选择 DOM 转 Canvas；截图失败仍屏蔽；按短卡片保存完整区域且不做滚动拼接；每名作者只保留首张成功图像。图像编码、容量、按钮是否入图及第三方依赖仍待确认。 |
