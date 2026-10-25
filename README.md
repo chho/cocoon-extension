@@ -82,6 +82,8 @@ https://www.zhihu.com/
 
 A platform label in imported data does not mean that platform is supported. Each additional site requires its own reviewed plugin and acceptance criteria.
 
+On supported Zhihu author hover cards, Cocoon also saves the member ID from the matching answer, article, and follower statistics links. If an older blocked author's comments remain visible because that ID is missing, open their Cocoon drawer again and choose a tag to fill it in without removing the record or repeating the account-level block. This requires an unambiguous supported hover card; it does not automatically repair all older records or resolve member API access failures.
+
 ## Install from source
 
 ### Requirements

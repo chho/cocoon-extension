@@ -1,6 +1,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
+import { HOVER_MEMBER_HASH, memberHoverMarkup } from "./hover-card.test-support.ts";
 
 import {
   HOVER_BLOCK_BUTTON_CLASS,
@@ -32,11 +33,7 @@ function createFrames() {
   };
 }
 
-function popupMarkup(
-  userId: string,
-  authorName: string,
-  extra = "",
-): string {
+function popupMarkup(userId: string, authorName: string, extra = ""): string {
   return `<div class="hover-shell">
     <div class="hover-root">
       <div class="HoverCard-item">
@@ -51,10 +48,7 @@ function popupMarkup(
   </div>`;
 }
 
-function createController(
-  _dom: JSDOM,
-  activations: HoverAuthorActivation[] = [],
-) {
+function createController(_dom: JSDOM, activations: HoverAuthorActivation[] = []) {
   const frames = createFrames();
   const controller = createHoverCardController({
     schedule: frames.schedule,
@@ -65,10 +59,7 @@ function createController(
   return { controller, frames };
 }
 
-function requiredElement<T extends Element>(
-  dom: JSDOM,
-  selector: string,
-): T {
+function requiredElement<T extends Element>(dom: JSDOM, selector: string): T {
   const element = dom.window.document.querySelector<T>(selector);
   if (!element) {
     throw new Error(`Missing element: ${selector}`);
@@ -91,11 +82,92 @@ function requiredButton(dom: JSDOM, rootSelector = ".hover-root") {
   return buttons[0]!;
 }
 
+test("BUG-020 captures a token and the matching complete statistics hash at click time", () => {
+  const dom = new JSDOM(memberHoverMarkup());
+  const activations: HoverAuthorActivation[] = [];
+  const { controller, frames } = createController(dom, activations);
+  controller.scan(dom.window.document.body);
+  frames.flush();
+  strictEqual(activations.length, 0);
+  const button = requiredButton(dom);
+  button.click();
+  strictEqual(activations[0]?.userId, "synthetic-author");
+  strictEqual(activations[0]?.memberHashId, HOVER_MEMBER_HASH);
+
+  const links = dom.window.document.querySelectorAll(".NumberBoard-item");
+  for (const link of links) {
+    link.setAttribute(
+      "href",
+      link.getAttribute("href")!.replace(HOVER_MEMBER_HASH, "B".repeat(32)),
+    );
+  }
+  button.click();
+  strictEqual(activations[1]?.memberHashId, "b".repeat(32));
+  links[0]!.setAttribute("href", `/people/${HOVER_MEMBER_HASH}/answers`);
+  button.click();
+  strictEqual(activations[2]?.memberHashId, null);
+  dom.window.close();
+});
+
+test("BUG-020 leaves incomplete or ambiguous statistics unassociated without losing the token entry", () => {
+  const changes: Record<string, (root: HTMLElement) => void> = {
+    missingBoard: (root) => root.querySelector(".NumberBoard")!.remove(),
+    missingSection: (root) => root.querySelector(".NumberBoard-item")!.remove(),
+    missingPrimary: (root) => root.querySelector(".UserLink-link")!.removeAttribute("class"),
+    multipleItems: (root) =>
+      root.insertAdjacentHTML("beforeend", '<div class="HoverCard-item"></div>'),
+    nestedBoardRoot: (root) => root.classList.add("NumberBoard"),
+    nestedItemRoot: (root) => root.classList.add("HoverCard-item"),
+    multipleBoards: (root) =>
+      root
+        .querySelector(".NumberBoard")!
+        .after(root.querySelector(".NumberBoard")!.cloneNode(true)),
+    outsideItem: (root) => root.append(root.querySelector(".NumberBoard")!),
+    relatedUser: (root) =>
+      root.insertAdjacentHTML("beforeend", '<a href="/people/another-author">Related Author</a>'),
+  };
+  for (const [scenario, change] of Object.entries(changes)) {
+    const dom = new JSDOM(memberHoverMarkup());
+    const activations: HoverAuthorActivation[] = [];
+    const { controller, frames } = createController(dom, activations);
+    change(requiredElement(dom, ".hover-root"));
+    controller.scan(dom.window.document.body);
+    frames.flush();
+    requiredButton(dom).click();
+    strictEqual(activations[0]?.userId, "synthetic-author", scenario);
+    strictEqual(activations[0]?.memberHashId, null, scenario);
+    dom.window.close();
+  }
+});
+
+test("BUG-020 rejects invalid statistics links instead of selecting a convenient hash", () => {
+  for (const href of [
+    `https://example.com/people/${HOVER_MEMBER_HASH}/answers`,
+    `https://user@www.zhihu.com/people/${HOVER_MEMBER_HASH}/answers`,
+    `/people/${HOVER_MEMBER_HASH}/answers?other=1`,
+    `/people/${HOVER_MEMBER_HASH}/answers#other`,
+    `/people/not-a-hash/answers`,
+    `/people/${"b".repeat(32)}/answers`,
+    `/people/${HOVER_MEMBER_HASH}/posts`,
+    `/people/${HOVER_MEMBER_HASH}/unknown`,
+    "",
+  ]) {
+    const dom = new JSDOM(memberHoverMarkup());
+    const activations: HoverAuthorActivation[] = [];
+    const { controller, frames } = createController(dom, activations);
+    requiredElement(dom, ".NumberBoard-item").setAttribute("href", href);
+    controller.scan(dom.window.document.body);
+    frames.flush();
+    requiredButton(dom).click();
+    strictEqual(activations[0]?.memberHashId, null, href);
+    dom.window.close();
+  }
+});
+
 test("BUG-007 activates the current unique internal profile identity and name", () => {
-  const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-    "internal-author",
-    "Initial Name",
-  )}</body>`);
+  const dom = new JSDOM(
+    `<!doctype html><body>${popupMarkup("internal-author", "Initial Name")}</body>`,
+  );
   const activations: HoverAuthorActivation[] = [];
   const { controller, frames } = createController(dom, activations);
 
@@ -134,13 +206,15 @@ test("BUG-007 activates the current unique internal profile identity and name", 
 });
 
 test("BUG-007 accepts duplicate links for one ID and ignores invalid or off-origin links", () => {
-  const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-    "same-author",
-    "",
-    `<a href="https://www.zhihu.com/people/same-author" aria-label="Popup Author"></a>
+  const dom = new JSDOM(
+    `<!doctype html><body>${popupMarkup(
+      "same-author",
+      "",
+      `<a href="https://www.zhihu.com/people/same-author" aria-label="Popup Author"></a>
      <a href="https://example.com/people/other-author">Off origin</a>
      <a href="/people/same-author/answers">Nested path</a>`,
-  )}</body>`);
+    )}</body>`,
+  );
   const activations: HoverAuthorActivation[] = [];
   const { controller, frames } = createController(dom, activations);
 
@@ -201,11 +275,7 @@ test("BUG-007/009 fails closed when internal profile IDs are missing or ambiguou
     controller.scan(dom.window.document.body);
     frames.flush();
 
-    strictEqual(
-      dom.window.document.querySelector(`.${HOVER_BLOCK_BUTTON_CLASS}`),
-      null,
-      links,
-    );
+    strictEqual(dom.window.document.querySelector(`.${HOVER_BLOCK_BUTTON_CLASS}`), null, links);
   }
 });
 
@@ -240,9 +310,7 @@ test("BUG-007 gives every distinct valid popup root its own button", () => {
 
   controller.scan(dom.window.document.body);
   frames.flush();
-  const roots = Array.from(
-    dom.window.document.querySelectorAll<HTMLElement>(".hover-root"),
-  );
+  const roots = Array.from(dom.window.document.querySelectorAll<HTMLElement>(".hover-root"));
   strictEqual(roots.length, 2);
   strictEqual(directButtons(roots[0]!).length, 1);
   strictEqual(directButtons(roots[1]!).length, 1);
@@ -256,10 +324,7 @@ test("BUG-007 gives every distinct valid popup root its own button", () => {
 });
 
 test("BUG-007 repeated scans remain idempotent and remove duplicate direct buttons", () => {
-  const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-    "stable-author",
-    "Stable",
-  )}</body>`);
+  const dom = new JSDOM(`<!doctype html><body>${popupMarkup("stable-author", "Stable")}</body>`);
   const { controller, frames } = createController(dom);
 
   controller.scan(dom.window.document.body);
@@ -298,8 +363,7 @@ test("BUG-007 discovers delayed button groups and fully added popup roots", () =
   strictEqual(dom.window.document.querySelector(`.${HOVER_BLOCK_BUTTON_CLASS}`), null);
 
   const buttonGroup = dom.window.document.createElement("div");
-  buttonGroup.className =
-    "MemberButtonGroup ProfileButtonGroup HoverCard-buttons";
+  buttonGroup.className = "MemberButtonGroup ProfileButtonGroup HoverCard-buttons";
   delayedRoot.append(buttonGroup);
   controller.handleChildListMutation(delayedRoot, [buttonGroup], []);
   controller.scan(buttonGroup);
@@ -313,17 +377,11 @@ test("BUG-007 discovers delayed button groups and fully added popup roots", () =
   controller.handleChildListMutation(dom.window.document.body, [wrapper], []);
   controller.scan(wrapper);
   frames.flush();
-  strictEqual(
-    directButtons(requiredElement(dom, "#added-popup .hover-root")).length,
-    1,
-  );
+  strictEqual(directButtons(requiredElement(dom, "#added-popup .hover-root")).length, 1);
 });
 
 test("BUG-007 restores a button removed during a native child-list update and settles its own addition", () => {
-  const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-    "repair-author",
-    "Repair",
-  )}</body>`);
+  const dom = new JSDOM(`<!doctype html><body>${popupMarkup("repair-author", "Repair")}</body>`);
   const activations: HoverAuthorActivation[] = [];
   const { controller, frames } = createController(dom, activations);
   controller.scan(dom.window.document.body);
@@ -335,11 +393,7 @@ test("BUG-007 restores a button removed during a native child-list update and se
   nativeUpdate.textContent = "Native update";
   root.append(nativeUpdate);
   originalButton.remove();
-  controller.handleChildListMutation(
-    root,
-    [nativeUpdate],
-    [originalButton],
-  );
+  controller.handleChildListMutation(root, [nativeUpdate], [originalButton]);
   controller.scan(nativeUpdate);
   frames.flush();
 
@@ -357,10 +411,9 @@ test("BUG-007 restores a button removed during a native child-list update and se
 
 test("BUG-007 click-time resolution rejects changed hrefs and disconnected roots", () => {
   for (const scenario of ["ambiguous", "invalid", "disconnected"] as const) {
-    const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-      "original-author",
-      "Original",
-    )}</body>`);
+    const dom = new JSDOM(
+      `<!doctype html><body>${popupMarkup("original-author", "Original")}</body>`,
+    );
     const activations: HoverAuthorActivation[] = [];
     const { controller, frames } = createController(dom, activations);
     controller.scan(dom.window.document.body);
@@ -385,10 +438,7 @@ test("BUG-007 click-time resolution rejects changed hrefs and disconnected roots
 });
 
 test("BUG-007 button is accessible, isolated, singular, and uses a safe name fallback", () => {
-  const dom = new JSDOM(`<!doctype html><body>${popupMarkup(
-    "nameless-author",
-    "   ",
-  )}</body>`);
+  const dom = new JSDOM(`<!doctype html><body>${popupMarkup("nameless-author", "   ")}</body>`);
   const activations: HoverAuthorActivation[] = [];
   const { controller, frames } = createController(dom, activations);
   let bubbledClicks = 0;
@@ -400,19 +450,18 @@ test("BUG-007 button is accessible, isolated, singular, and uses a safe name fal
   frames.flush();
   const root = requiredElement<HTMLElement>(dom, ".hover-root");
   const button = requiredButton(dom);
-  const notCancelled = button.dispatchEvent(new dom.window.MouseEvent("click", {
-    bubbles: true,
-    cancelable: true,
-  }));
+  const notCancelled = button.dispatchEvent(
+    new dom.window.MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 
   strictEqual(directButtons(root).length, 1);
   strictEqual(button.type, "button");
   strictEqual(button.textContent, "屏蔽");
   strictEqual(button.title, "为该作者选择标签并屏蔽");
-  strictEqual(
-    button.getAttribute("aria-label"),
-    "为悬浮卡片中的作者选择标签并屏蔽",
-  );
+  strictEqual(button.getAttribute("aria-label"), "为悬浮卡片中的作者选择标签并屏蔽");
   strictEqual(notCancelled, false);
   strictEqual(bubbledClicks, 0);
   strictEqual(activations.length, 1);

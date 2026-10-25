@@ -98,14 +98,6 @@
       "sha256": "99b21892887e3181f5a3a04b9572b0982bb850de92db61b21d2b06e02908a084"
     },
     {
-      "path": "src/content/hover-card-controller.test.ts",
-      "sha256": "b41181d523f1a0277d8679ed2aa951e4e50a10ff92483f30f8376d323d112ab2"
-    },
-    {
-      "path": "src/content/hover-card-controller.ts",
-      "sha256": "d83ba4ead6c72bc65e6794e366b5184de5a9c15615533fa1daa31414f65298ef"
-    },
-    {
       "path": "src/content/initialize-blacklist-state.test.ts",
       "sha256": "93aab48fbd4705488eaffcb5aa8ffa57d8b81c41d6a36719cfd74ed6ffca6f5c"
     },

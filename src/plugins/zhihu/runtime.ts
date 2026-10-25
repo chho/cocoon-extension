@@ -573,7 +573,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       button: activation.button,
       authorNameAtClick: activation.authorName,
       profileUserIdAtClick: activation.userId,
-      memberHashIdAtClick: null,
+      memberHashIdAtClick: activation.memberHashId,
       anchorBounds: activation.anchorBounds,
       voterSource: null,
     };

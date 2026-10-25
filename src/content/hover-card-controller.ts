@@ -3,8 +3,7 @@ import type { DrawerAnchorBounds } from "./drawer-controller.ts";
 import { parseZhihuUserId } from "./parse-zhihu-user-id.ts";
 
 const HOVER_ITEM_SELECTOR = ".HoverCard-item";
-const HOVER_BUTTON_GROUP_SELECTOR =
-  ".MemberButtonGroup.ProfileButtonGroup.HoverCard-buttons";
+const HOVER_BUTTON_GROUP_SELECTOR = ".MemberButtonGroup.ProfileButtonGroup.HoverCard-buttons";
 const PROFILE_LINK_SELECTOR = "a[href]";
 const PRIMARY_PROFILE_LINK_SELECTOR = "a.UserLink-link[href]";
 const MAX_HOVER_ROOT_ASCENT = 6;
@@ -18,6 +17,7 @@ export interface HoverAuthorActivation {
   readonly root: HTMLElement;
   readonly button: HTMLButtonElement;
   readonly userId: string;
+  readonly memberHashId: string | null;
   readonly authorName: string;
   readonly anchorBounds: DrawerAnchorBounds;
 }
@@ -38,6 +38,7 @@ export interface HoverCardController {
 
 interface PopupIdentity {
   readonly userId: string;
+  readonly memberHashId: string | null;
   readonly authorName: string;
 }
 
@@ -45,9 +46,7 @@ interface ResolvedHoverCard extends PopupIdentity {
   readonly root: HTMLElement;
 }
 
-function authorNameFromLinks(
-  links: readonly HTMLAnchorElement[],
-): string | null {
+function authorNameFromLinks(links: readonly HTMLAnchorElement[]): string | null {
   const textName = links
     .map((link) => link.textContent?.trim())
     .find((name): name is string => Boolean(name));
@@ -84,10 +83,48 @@ function groupProfileLinksByUserId(
   return linksByUserId;
 }
 
+function parseStatisticsLink(link: Element): readonly [string, string] | null {
+  if (!link.matches("a[href]")) return null;
+  try {
+    const url = new URL(link.getAttribute("href")!, "https://www.zhihu.com/");
+    if (
+      url.origin !== "https://www.zhihu.com" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    const match = /^\/people\/([0-9a-fA-F]{32})\/(answers|posts|followers)$/.exec(url.pathname);
+    return match ? [match[1]!.toLowerCase(), match[2]!] : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveStatisticsMemberHash(root: HTMLElement): string | null {
+  const candidates = [root, ...root.querySelectorAll(`${HOVER_ITEM_SELECTOR}, .NumberBoard`)];
+  const items = candidates.filter((element) => element.matches(HOVER_ITEM_SELECTOR));
+  const boards = candidates.filter((element) => element.matches(".NumberBoard"));
+  if (items.length !== 1 || boards.length !== 1) return null;
+  const board = boards[0]!;
+  if (board.closest(HOVER_ITEM_SELECTOR) !== items[0]) return null;
+  if (board.querySelector(PRIMARY_PROFILE_LINK_SELECTOR)) return null;
+  // Related members' statistics must never become the main author's alias.
+  const profileIds = groupProfileLinksByUserId(root.querySelectorAll(PROFILE_LINK_SELECTOR));
+  if (profileIds.size !== 1) return null;
+  const links = Array.from(board.querySelectorAll(".NumberBoard-item"));
+  if (links.length !== 3) return null;
+  const parsed = links.map(parseStatisticsLink);
+  if (parsed.some((link) => link === null)) return null;
+  const hashes = new Set(parsed.map((link) => link![0]));
+  const sections = new Set(parsed.map((link) => link![1]));
+  return hashes.size === 1 && sections.size === 3 ? parsed[0]![0] : null;
+}
+
 function resolvePopupIdentity(root: HTMLElement): PopupIdentity | null {
-  const primaryLinks = root.querySelectorAll<HTMLAnchorElement>(
-    PRIMARY_PROFILE_LINK_SELECTOR,
-  );
+  const primaryLinks = root.querySelectorAll<HTMLAnchorElement>(PRIMARY_PROFILE_LINK_SELECTOR);
   const linksByUserId = groupProfileLinksByUserId(
     primaryLinks.length > 0
       ? primaryLinks
@@ -105,6 +142,10 @@ function resolvePopupIdentity(root: HTMLElement): PopupIdentity | null {
   const [userId, profileLinks] = entry;
   return {
     userId,
+    memberHashId:
+      primaryLinks.length > 0 && normalizeMemberHashId(userId) === null
+        ? resolveStatisticsMemberHash(root)
+        : null,
     authorName: authorNameFromLinks(profileLinks) ?? UNKNOWN_AUTHOR_NAME,
   };
 }
@@ -116,15 +157,8 @@ function resolveHoverCardFromItem(item: HTMLElement): ResolvedHoverCard | null {
 
   const document = item.ownerDocument;
   let candidate: HTMLElement | null = item;
-  for (
-    let depth = 0;
-    candidate && depth <= MAX_HOVER_ROOT_ASCENT;
-    depth += 1
-  ) {
-    if (
-      candidate === document.body ||
-      candidate === document.documentElement
-    ) {
+  for (let depth = 0; candidate && depth <= MAX_HOVER_ROOT_ASCENT; depth += 1) {
+    if (candidate === document.body || candidate === document.documentElement) {
       return null;
     }
 
@@ -142,15 +176,11 @@ function resolveHoverCardFromItem(item: HTMLElement): ResolvedHoverCard | null {
 
 function hoverItemsWithin(root: Node): readonly HTMLElement[] {
   const items = new Set<HTMLElement>();
-  const document = root.nodeType === 9
-    ? root as Document
-    : root.ownerDocument;
+  const document = root.nodeType === 9 ? (root as Document) : root.ownerDocument;
   const ElementConstructor = document?.defaultView?.Element;
 
   if (root.nodeType === 9) {
-    for (const item of (root as Document).querySelectorAll<HTMLElement>(
-      HOVER_ITEM_SELECTOR,
-    )) {
+    for (const item of (root as Document).querySelectorAll<HTMLElement>(HOVER_ITEM_SELECTOR)) {
       items.add(item);
     }
     return Array.from(items);
@@ -165,9 +195,10 @@ function hoverItemsWithin(root: Node): readonly HTMLElement[] {
     return Array.from(items);
   }
 
-  const start = ElementConstructor && root instanceof ElementConstructor
-    ? root as Element
-    : root.parentElement;
+  const start =
+    ElementConstructor && root instanceof ElementConstructor
+      ? (root as Element)
+      : root.parentElement;
   if (!start) {
     return [];
   }
@@ -176,9 +207,7 @@ function hoverItemsWithin(root: Node): readonly HTMLElement[] {
     if (element.matches(HOVER_ITEM_SELECTOR)) {
       items.add(element as HTMLElement);
     }
-    for (const item of element.querySelectorAll<HTMLElement>(
-      HOVER_ITEM_SELECTOR,
-    )) {
+    for (const item of element.querySelectorAll<HTMLElement>(HOVER_ITEM_SELECTOR)) {
       items.add(item);
     }
   }
@@ -189,11 +218,7 @@ function hoverItemsWithin(root: Node): readonly HTMLElement[] {
   }
 
   let ancestor = start.parentElement;
-  for (
-    let depth = 0;
-    ancestor && depth < MAX_HOVER_ROOT_ASCENT;
-    depth += 1
-  ) {
+  for (let depth = 0; ancestor && depth < MAX_HOVER_ROOT_ASCENT; depth += 1) {
     if (ancestor === document?.body || ancestor === document?.documentElement) {
       break;
     }
@@ -205,16 +230,14 @@ function hoverItemsWithin(root: Node): readonly HTMLElement[] {
 }
 
 function directButtons(root: HTMLElement): readonly HTMLButtonElement[] {
-  const ButtonConstructor =
-    root.ownerDocument.defaultView?.HTMLButtonElement;
+  const ButtonConstructor = root.ownerDocument.defaultView?.HTMLButtonElement;
   if (!ButtonConstructor) {
     return [];
   }
 
   return Array.from(root.children).filter(
     (child): child is HTMLButtonElement =>
-      child instanceof ButtonConstructor &&
-      child.classList.contains(HOVER_BLOCK_BUTTON_CLASS),
+      child instanceof ButtonConstructor && child.classList.contains(HOVER_BLOCK_BUTTON_CLASS),
   );
 }
 
@@ -229,17 +252,13 @@ function snapshotBounds(bounds: DOMRect): DrawerAnchorBounds {
   };
 }
 
-function resolveCurrentHoverCard(
-  button: HTMLButtonElement,
-): ResolvedHoverCard | null {
+function resolveCurrentHoverCard(button: HTMLButtonElement): ResolvedHoverCard | null {
   const root = button.parentElement;
   if (!button.isConnected || !root?.isConnected) {
     return null;
   }
 
-  const items = Array.from(
-    root.querySelectorAll<HTMLElement>(HOVER_ITEM_SELECTOR),
-  );
+  const items = Array.from(root.querySelectorAll<HTMLElement>(HOVER_ITEM_SELECTOR));
   if (root.matches(HOVER_ITEM_SELECTOR)) {
     items.unshift(root);
   }
@@ -254,8 +273,7 @@ function resolveCurrentHoverCard(
 }
 
 function isButtonNode(node: Node): boolean {
-  return node.nodeType === 1 &&
-    (node as Element).classList.contains(HOVER_BLOCK_BUTTON_CLASS);
+  return node.nodeType === 1 && (node as Element).classList.contains(HOVER_BLOCK_BUTTON_CLASS);
 }
 
 export function createHoverCardController(
@@ -295,15 +313,13 @@ export function createHoverCardController(
 
   function ensureSingleButton(root: HTMLElement): void {
     root.classList.add(HOVER_CARD_ROOT_CLASS);
-    const position = root.ownerDocument.defaultView
-      ?.getComputedStyle(root).position;
+    const position = root.ownerDocument.defaultView?.getComputedStyle(root).position;
     if (!position || position === "static") {
       root.classList.add(HOVER_POSITION_ANCHOR_CLASS);
     }
 
     const buttons = directButtons(root);
-    const button = buttons.find((candidate) => ownedButtons.has(candidate)) ??
-      createButton(root);
+    const button = buttons.find((candidate) => ownedButtons.has(candidate)) ?? createButton(root);
     for (const candidate of directButtons(root)) {
       if (candidate !== button) {
         candidate.remove();
@@ -356,11 +372,7 @@ export function createHoverCardController(
     const isOwnButtonAddition =
       removedNodes.length === 0 &&
       addedNodes.length > 0 &&
-      addedNodes.every(
-        (node) =>
-          isButtonNode(node) &&
-          ownedButtons.has(node as HTMLButtonElement),
-      );
+      addedNodes.every((node) => isButtonNode(node) && ownedButtons.has(node as HTMLButtonElement));
     if (isOwnButtonAddition) {
       return;
     }
