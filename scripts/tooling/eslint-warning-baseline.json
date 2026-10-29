@@ -330,14 +330,6 @@
       "count": 4
     },
     {
-      "path": "src/content/drawer-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createDrawerController' has too many lines (60). Maximum allowed is 50.",
-      "sourceLine": "export function createDrawerController<TCard, TButton>(",
-      "count": 1
-    },
-    {
       "path": "src/content/drawer-visibility.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
@@ -605,7 +597,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (689). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (674). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -613,8 +605,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (849). Maximum allowed is 500.",
-      "sourceLine": "voterSource: getCardContentSource(card),",
+      "message": "File has too many lines (836). Maximum allowed is 500.",
+      "sourceLine": "const hoverCardController = createHoverCardController({",
       "count": 1
     },
     {

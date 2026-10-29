@@ -2,16 +2,22 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import { createInitialState } from "./blacklist-state.ts";
-import {
-  createDrawerController,
-  type CommitTask,
-  type DrawerTarget,
-} from "./drawer-controller.ts";
+import { createDrawerController, type CommitTask, type DrawerTarget } from "./drawer-controller.ts";
 import { runAuthorizedRemoteOperations } from "./remote-operation-orchestrator.ts";
 import { createRemotePreferenceController } from "./remote-preference-controller.ts";
 import { createDefaultRemotePreferences } from "./remote-preferences.ts";
 
 const source = { kind: "answer", questionId: "1", contentId: "2" } as const;
+const target: DrawerTarget<string, string> = {
+  targetId: "card",
+  card: "card",
+  button: "button",
+  authorNameAtClick: "Author",
+  profileUserIdAtClick: null,
+  memberHashIdAtClick: null,
+  anchorBounds: null,
+  voterSource: source,
+};
 
 test("AC-037 both disabled options issue no voter-list GET or remote POST", () => {
   let voterListGets = 0;
@@ -60,6 +66,11 @@ test("VOTER-014 both enabled options allow only the directly selected author to 
   let posts = 0;
   const commits: CommitTask<string, string>[] = [];
   const drawer = createDrawerController<string, string>({
+    setSubmitting() {},
+    scheduleDeadline() {
+      return () => {};
+    },
+    reportIncomplete() {},
     show() {},
     hide() {},
     clearDraft() {},
@@ -72,32 +83,19 @@ test("VOTER-014 both enabled options allow only the directly selected author to 
         blockContentVoters: visible.blockContentVoters,
       };
     },
-    commit(task) {
+    async commit(task) {
       commits.push(task);
-      runAuthorizedRemoteOperations(
-        task.remoteAuthorization,
-        task.target.voterSource,
-        {
-          blockAuthor() {
-            posts += 1;
-          },
-          blockVoters() {
-            voterListGets += 1;
-          },
+      runAuthorizedRemoteOperations(task.remoteAuthorization, task.target.voterSource, {
+        blockAuthor() {
+          posts += 1;
         },
-      );
+        blockVoters() {
+          voterListGets += 1;
+        },
+      });
+      return "completed";
     },
   });
-  const target: DrawerTarget<string, string> = {
-    targetId: "card",
-    card: "card",
-    button: "button",
-    authorNameAtClick: "Author",
-    profileUserIdAtClick: null,
-    memberHashIdAtClick: null,
-    anchorBounds: null,
-    voterSource: source,
-  };
 
   drawer.open(target);
   strictEqual(voterListGets, 0);

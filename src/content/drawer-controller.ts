@@ -1,8 +1,4 @@
-import {
-  CLOSED_DRAWER_STATE,
-  reduceDrawerState,
-  type DrawerState,
-} from "./drawer-state.ts";
+import { CLOSED_DRAWER_STATE, reduceDrawerState, type DrawerState } from "./drawer-state.ts";
 import type { CocoonTag } from "./blacklist-state";
 import type { ZhihuContentSource } from "./zhihu-content-source.ts";
 
@@ -47,16 +43,22 @@ export interface CancelInteraction {
   stopImmediatePropagation(): void;
 }
 
+export type DrawerCommitOutcome = "completed" | "failed" | "incomplete";
+
 export interface DrawerControllerDependencies<TCard, TButton> {
+  readonly setSubmitting: (submitting: boolean) => void;
+  readonly scheduleDeadline: (callback: () => void) => () => void;
+  readonly reportIncomplete: () => void;
   readonly show: (target: DrawerTarget<TCard, TButton>) => void;
   readonly hide: () => void;
   readonly clearDraft: () => void;
   readonly focusInput: () => void;
   readonly restoreFocus: (button: TButton) => void;
-  readonly getRemoteAuthorization: (
-    target: DrawerTarget<TCard, TButton>,
-  ) => RemoteAuthorization;
-  readonly commit: (task: CommitTask<TCard, TButton>) => void;
+  readonly getRemoteAuthorization: (target: DrawerTarget<TCard, TButton>) => RemoteAuthorization;
+  readonly commit: (
+    task: CommitTask<TCard, TButton>,
+    signal: AbortSignal,
+  ) => Promise<DrawerCommitOutcome>;
 }
 
 export interface DrawerController<TCard, TButton> {
@@ -64,74 +66,109 @@ export interface DrawerController<TCard, TButton> {
   setDraft(value: string): void;
   cancel(interaction?: CancelInteraction): void;
   submit(selection: TagSelection): void;
+  dismiss(): void;
   getState(): DrawerState;
   getTarget(): DrawerTarget<TCard, TButton> | null;
+}
+
+class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TButton> {
+  private state: DrawerState = CLOSED_DRAWER_STATE;
+  private target: DrawerTarget<TCard, TButton> | null = null;
+  private pending: AbortController | null = null;
+
+  private readonly dependencies: DrawerControllerDependencies<TCard, TButton>;
+
+  constructor(dependencies: DrawerControllerDependencies<TCard, TButton>) {
+    this.dependencies = dependencies;
+  }
+
+  private releaseSubmission(): void {
+    this.pending?.abort("superseded");
+    this.pending = null;
+    this.dependencies.setSubmitting(false);
+  }
+
+  private close(restoreFocus: boolean): void {
+    const closingTarget = this.target;
+    this.releaseSubmission();
+    this.target = null;
+    this.state = CLOSED_DRAWER_STATE;
+    this.dependencies.hide();
+    this.dependencies.clearDraft();
+    if (restoreFocus && closingTarget) this.dependencies.restoreFocus(closingTarget.button);
+  }
+
+  open(nextTarget: DrawerTarget<TCard, TButton>): void {
+    this.releaseSubmission();
+    this.target = nextTarget;
+    this.state = reduceDrawerState(this.state, { type: "open", targetId: nextTarget.targetId });
+    this.dependencies.clearDraft();
+    this.dependencies.show(nextTarget);
+    this.dependencies.focusInput();
+  }
+
+  setDraft(value: string): void {
+    this.state = reduceDrawerState(this.state, { type: "draft", value });
+  }
+
+  cancel(interaction?: CancelInteraction): void {
+    if (this.state.status !== "open") return;
+    interaction?.preventDefault();
+    interaction?.stopImmediatePropagation();
+    this.close(true);
+  }
+
+  submit(selection: TagSelection): void {
+    if (this.state.status !== "open" || !this.target) return;
+    const task = {
+      target: this.target,
+      selection,
+      remoteAuthorization: this.dependencies.getRemoteAuthorization(this.target),
+    };
+    this.state = reduceDrawerState(this.state, { type: "submit" });
+    this.pending = new AbortController();
+    this.dependencies.setSubmitting(true);
+    void this.finishSubmission(task, this.pending);
+  }
+
+  private async finishSubmission(
+    task: CommitTask<TCard, TButton>,
+    run: AbortController,
+  ): Promise<void> {
+    let interrupt: () => void = () => {};
+    const interrupted = new Promise<DrawerCommitOutcome>((resolve) => {
+      interrupt = () => resolve("incomplete");
+      run.signal.addEventListener("abort", interrupt, { once: true });
+    });
+    const cancelDeadline = this.dependencies.scheduleDeadline(() => run.abort("timeout"));
+    let outcome: DrawerCommitOutcome;
+    try {
+      // Cancelling UI ownership never cancels an already-dispatched database transaction.
+      outcome = await Promise.race([this.dependencies.commit(task, run.signal), interrupted]);
+    } catch {
+      outcome = "incomplete";
+    } finally {
+      cancelDeadline();
+      run.signal.removeEventListener("abort", interrupt);
+    }
+    if (this.pending !== run) return;
+    this.close(outcome === "failed");
+    if (outcome === "incomplete") this.dependencies.reportIncomplete();
+  }
+
+  dismiss(): void {
+    this.close(false);
+  }
+  getState(): DrawerState {
+    return this.state;
+  }
+  getTarget(): DrawerTarget<TCard, TButton> | null {
+    return this.target;
+  }
 }
 
 export function createDrawerController<TCard, TButton>(
   dependencies: DrawerControllerDependencies<TCard, TButton>,
 ): DrawerController<TCard, TButton> {
-  let state: DrawerState = CLOSED_DRAWER_STATE;
-  let target: DrawerTarget<TCard, TButton> | null = null;
-
-  function close(restoreFocus: boolean): DrawerTarget<TCard, TButton> | null {
-    const closingTarget = target;
-    target = null;
-    state = reduceDrawerState(state, { type: "close" });
-    dependencies.hide();
-    dependencies.clearDraft();
-    if (restoreFocus && closingTarget) {
-      dependencies.restoreFocus(closingTarget.button);
-    }
-    return closingTarget;
-  }
-
-  return {
-    open(nextTarget) {
-      target = nextTarget;
-      state = reduceDrawerState(state, {
-        type: "open",
-        targetId: nextTarget.targetId,
-      });
-      dependencies.clearDraft();
-      dependencies.show(nextTarget);
-      dependencies.focusInput();
-    },
-
-    setDraft(value) {
-      state = reduceDrawerState(state, { type: "draft", value });
-    },
-
-    cancel(interaction) {
-      if (state.status !== "open") {
-        return;
-      }
-      interaction?.preventDefault();
-      interaction?.stopImmediatePropagation();
-      close(true);
-    },
-
-    submit(selection) {
-      if (state.status !== "open" || !target) {
-        return;
-      }
-      const submittedTarget = close(false);
-      if (submittedTarget) {
-        dependencies.commit({
-          target: submittedTarget,
-          selection,
-          remoteAuthorization:
-            dependencies.getRemoteAuthorization(submittedTarget),
-        });
-      }
-    },
-
-    getState() {
-      return state;
-    },
-
-    getTarget() {
-      return target;
-    },
-  };
+  return new DrawerControllerImpl(dependencies);
 }

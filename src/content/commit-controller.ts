@@ -4,6 +4,7 @@ import {
   createBlacklistTimestamp,
   normalizeMemberHashId,
   type CommitInput,
+  type BlacklistedAuthor,
 } from "./blacklist-state.ts";
 import type { ProvenAuthorIdentity } from "./author-identity.ts";
 import type { CommitTask, DrawerTarget } from "./drawer-controller.ts";
@@ -11,10 +12,11 @@ import type { CommitTask, DrawerTarget } from "./drawer-controller.ts";
 export type CommitResult =
   | {
       readonly status: "persisted";
+      readonly author: BlacklistedAuthor;
       readonly userId: string;
       readonly blacklistedAt: string;
     }
-  | { readonly status: "duplicate" }
+  | { readonly status: "duplicate"; readonly author: BlacklistedAuthor }
   | {
       readonly status: "failed";
       readonly error: unknown;
@@ -56,12 +58,13 @@ export function createCommitController<TCard, TButton>(
         if (result.status === "invalid") {
           throw new Error("Unable to create a valid blacklist record.");
         }
-        if (result.status === "duplicate") return { status: "duplicate" };
+        if (result.status === "duplicate") return { status: "duplicate", author: result.author };
         if (result.author.blacklistedAt === null) {
           throw new Error("The persisted direct author timestamp is missing.");
         }
         return {
           status: "persisted",
+          author: result.author,
           userId: result.author.userId,
           blacklistedAt: result.author.blacklistedAt,
         };

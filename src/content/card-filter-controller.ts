@@ -23,6 +23,7 @@ export interface CardFilterControllerDependencies<TCard extends object> {
 export interface CardFilterController<TCard extends object> {
   enqueue(card: TCard): void;
   reevaluateAll(): void;
+  getMatchingRoots(identifiers: ReadonlySet<string>): readonly TCard[];
   destroy(): void;
 }
 
@@ -79,6 +80,16 @@ class CardFilterControllerImpl<TCard extends object> implements CardFilterContro
       hasReadyEvaluation ||= !this.filtering.has(card);
     }
     if (hasReadyEvaluation) this.requestFrame();
+  }
+
+  getMatchingRoots(identifiers: ReadonlySet<string>): readonly TCard[] {
+    return [...this.encountered].filter(
+      (card) =>
+        this.isConnected(card) &&
+        [...canonicalIdentifiers(this.dependencies.resolveStableIdentifiers(card))].some((id) =>
+          identifiers.has(id),
+        ),
+    );
   }
 
   destroy(): void {

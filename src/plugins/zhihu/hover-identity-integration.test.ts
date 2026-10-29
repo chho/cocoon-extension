@@ -99,6 +99,9 @@ function installGlobals(t: TestContext, values: Record<string, unknown>): void {
 function createDom(t: TestContext) {
   const dom = new JSDOM(
     `<!doctype html><body>${memberHoverMarkup()}
+    <div class="TopstoryItem" id="same-author-card"><div class="ContentItem" data-zop='{"authorName":"Synthetic"}'>
+      <a class="AuthorInfo-name" href="/people/synthetic-author">Synthetic Author</a>
+    </div></div>
     <div class="Comments-container">
       <div data-id="hash-comment" id="hash-comment"><a href="/people/${HOVER_MEMBER_HASH}">Hash author</a></div>
       <div data-id="token-comment" id="token-comment"><a href="/people/synthetic-author">Token author</a></div>
@@ -213,15 +216,40 @@ async function mountHarness(t: TestContext, scenario: Scenario) {
     ok(node, `Missing ${selector}`);
     return node;
   };
+  async function flushBackend() {
+    for (let turn = 0; turn < 200; turn += 1) {
+      await setImmediate();
+      if (transport.active === 0) return;
+    }
+    throw new Error("Backend did not settle without DOM frames");
+  }
+  let hiddenCount = 0;
   mountZhihuPlugin({
     url: new URL(dom.window.location.href),
-    badgeReporter: { recordFirstHidden() {} },
+    badgeReporter: {
+      recordFirstHidden() {
+        hiddenCount++;
+      },
+    },
   });
   await flush();
-  return { ...backend, ...transport, dom, flush, element, requests, errors };
+  return {
+    ...backend,
+    ...transport,
+    dom,
+    flush,
+    flushBackend,
+    element,
+    requests,
+    errors,
+    hiddenCount: () => hiddenCount,
+  };
 }
 
-async function submitFromHover(h: Awaited<ReturnType<typeof mountHarness>>) {
+async function submitFromHover(
+  h: Awaited<ReturnType<typeof mountHarness>>,
+  expectVisibilityWait = false,
+) {
   const before = await h.read();
   h.element<HTMLButtonElement>(".cocoon-hover-block-button").click();
   await h.flush();
@@ -233,7 +261,19 @@ async function submitFromHover(h: Awaited<ReturnType<typeof mountHarness>>) {
   h.element<HTMLButtonElement>(
     '.cocoon-tag-choice[aria-label="使用标签 default 并屏蔽作者"]',
   ).click();
+  await Promise.resolve();
+  const drawer = h.element(".cocoon-tag-drawer");
+  strictEqual(drawer.getAttribute("aria-busy"), "true", "BUG-021 keeps the drawer pending");
+  strictEqual(drawer.inert, false, "pending must not expose underlying profiles");
+  strictEqual(drawer.dataset.phase === "closing", false);
+  if (expectVisibilityWait) {
+    await h.flushBackend();
+    strictEqual((await h.read()).state.authors[0]?.memberHashId, HOVER_MEMBER_HASH);
+    strictEqual(h.element("#hash-comment").classList.contains(COMMENT_HIDDEN_CLASS), false);
+    strictEqual(drawer.getAttribute("aria-busy"), "true", "RPC completion is not DOM completion");
+  }
   await h.flush();
+  strictEqual(drawer.getAttribute("aria-busy"), "false");
 }
 
 for (const scenario of ["new", "existing", "conflict"] as const) {
@@ -242,7 +282,7 @@ for (const scenario of ["new", "existing", "conflict"] as const) {
     const before = await h.read();
     strictEqual(h.element("#hash-comment").classList.contains(COMMENT_HIDDEN_CLASS), false);
     strictEqual(h.commits.length, 0);
-    await submitFromHover(h);
+    await submitFromHover(h, scenario !== "conflict");
     const after = await h.read();
     const succeeds = scenario !== "conflict";
     strictEqual(h.element("#hash-comment").classList.contains(COMMENT_HIDDEN_CLASS), succeeds);
@@ -264,12 +304,15 @@ for (const scenario of ["new", "existing", "conflict"] as const) {
           blockSource: "direct",
         };
     deepStrictEqual(after.state.authors, [expected]);
+    strictEqual(h.element("#same-author-card").classList.contains("cocoon-blacklisted"), true);
+    strictEqual(h.hiddenCount(), 3);
     strictEqual(h.element("#token-comment").classList.contains(COMMENT_HIDDEN_CLASS), true);
     strictEqual(after.revision, before.revision + 1);
     h.dom.window.document.body.insertAdjacentHTML("beforeend", memberHoverMarkup());
     await h.flush();
     await submitFromHover(h);
     deepStrictEqual(await h.read(), after);
+    strictEqual(h.hiddenCount(), 3, "duplicate commits must not recount hidden roots");
     deepStrictEqual(
       h.requests.filter((r) => r.method === "POST"),
       scenario === "new"

@@ -23,7 +23,9 @@
   border-radius: 0;
   color: #8590a6;
   background: transparent;
-  font: 300 24px/1 Arial, sans-serif;
+  font:
+    300 24px/1 Arial,
+    sans-serif;
   cursor: pointer;
   appearance: none;
 }
@@ -49,7 +51,11 @@
   color: #20242a;
   background: #fbfbfc;
   box-shadow: 0 3px 10px rgb(18 18 18 / 10%);
-  font: 11px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font:
+    11px/1.35 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   opacity: 0;
   transform: translateX(var(--cocoon-drawer-offset));
   transition:
@@ -67,6 +73,13 @@
   pointer-events: none;
 }
 
+.cocoon-tag-controls {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .cocoon-tag-drawer-header {
   display: flex;
   align-items: center;
@@ -76,7 +89,11 @@
 }
 
 .cocoon-tag-drawer-title {
-  font: 600 11px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font:
+    600 11px/1.35 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 .cocoon-tag-drawer-close {
@@ -87,7 +104,9 @@
   border-radius: 3px;
   color: #59616d;
   background: transparent;
-  font: 17px/1 Arial, sans-serif;
+  font:
+    17px/1 Arial,
+    sans-serif;
   cursor: pointer;
 }
 
@@ -155,7 +174,9 @@
   border-left: 1px solid #d8dce2;
   border-radius: 0 3px 3px 0;
   color: #59616d;
-  font: 15px/1 Arial, sans-serif;
+  font:
+    15px/1 Arial,
+    sans-serif;
 }
 
 .cocoon-tag-choice:hover,
@@ -261,7 +282,11 @@
   border-radius: 4px;
   color: #353b43;
   background: #fff;
-  font: 11px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font:
+    11px/1.4 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   cursor: pointer;
 }
 

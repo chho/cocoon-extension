@@ -2,11 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import { createInitialState } from "./blacklist-state.ts";
-import {
-  createDrawerController,
-  type CommitTask,
-  type DrawerTarget,
-} from "./drawer-controller.ts";
+import { createDrawerController, type CommitTask, type DrawerTarget } from "./drawer-controller.ts";
 
 interface TestCard {
   readonly id: string;
@@ -37,6 +33,11 @@ function createHarness(onCommit?: () => void) {
   let drawerHides = 0;
   let inputFocuses = 0;
   const controller = createDrawerController<TestCard, TestButton>({
+    setSubmitting() {},
+    scheduleDeadline() {
+      return () => {};
+    },
+    reportIncomplete() {},
     show() {
       shows += 1;
     },
@@ -58,9 +59,10 @@ function createHarness(onCommit?: () => void) {
         blockContentVoters: false,
       };
     },
-    commit(task) {
+    async commit(task) {
       commits.push(task);
       onCommit?.();
+      return "completed";
     },
   });
   return {

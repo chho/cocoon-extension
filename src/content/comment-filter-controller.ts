@@ -68,6 +68,7 @@ export interface CommentFilterControllerDependencies {
 export interface CommentFilterController {
   scan(root: Node): void;
   reevaluateAll(): void;
+  getMatchingRoots(identifiers: ReadonlySet<string>): readonly HTMLElement[];
   destroy(): void;
 }
 
@@ -119,6 +120,12 @@ class CommentFilterControllerImpl implements CommentFilterController {
       hasReadyEvaluation ||= !this.filtering.has(commentRoot);
     }
     if (hasReadyEvaluation) this.requestFrame();
+  }
+
+  getMatchingRoots(identifiers: ReadonlySet<string>): readonly HTMLElement[] {
+    return [...this.encountered].filter(
+      (root) => root.isConnected && identifiers.has(resolveCommentAuthorUserId(root) ?? ""),
+    );
   }
 
   destroy(): void {
@@ -321,5 +328,6 @@ export function createCommentFilterController(
     scan: (root) => controller.scan(root),
     reevaluateAll: () => controller.reevaluateAll(),
     destroy: () => controller.destroy(),
+    getMatchingRoots: (identifiers) => controller.getMatchingRoots(identifiers),
   };
 }

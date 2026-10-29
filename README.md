@@ -84,6 +84,8 @@ A platform label in imported data does not mean that platform is supported. Each
 
 On supported Zhihu author hover cards, Cocoon also saves the member ID from the matching answer, article, and follower statistics links. If an older blocked author's comments remain visible because that ID is missing, open their Cocoon drawer again and choose a tag to fill it in without removing the record or repeating the account-level block. This requires an unambiguous supported hover card; it does not automatically repair all older records or resolve member API access failures.
 
+After choosing a tag, the drawer briefly stays in place and shows “处理中…” while local saving and filtering finish. Its controls are temporarily disabled to prevent accidental underlying author hovers. Remote account blocking and voter processing do not delay dismissal. If local processing or the page update cannot be confirmed within 10 seconds, the drawer is released without cancelling an already-submitted operation; check the result before submitting again.
+
 ## Install from source
 
 ### Requirements

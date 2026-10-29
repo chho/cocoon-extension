@@ -18,10 +18,13 @@ import {
 } from "../../content/comment-filter-controller.ts";
 import { createBackgroundBlacklistGateway } from "../../content/background-blacklist-gateway.ts";
 import { BLACKLIST_REVISION_STORAGE_KEY } from "../../content/background-blacklist-client.ts";
+import { createDrawerView } from "../../content/drawer-view.ts";
+import { waitForAuthorVisibility } from "./author-visibility.ts";
 import { createMeasuredCommitController } from "../../content/commit-performance.ts";
 import {
   createDrawerController,
   type CommitTask,
+  type DrawerCommitOutcome,
   type DrawerTarget,
   type TagSelection,
 } from "../../content/drawer-controller.ts";
@@ -74,7 +77,6 @@ const AUTHOR_PROFILE_LINK_SELECTOR =
 const ENHANCED_CARD_CLASS = "cocoon-zhihu-card";
 export const BLACKLISTED_CARD_CLASS = "cocoon-blacklisted";
 const CLOSE_BUTTON_CLASS = "cocoon-zhihu-card-close";
-const DRAWER_CLASS = "cocoon-tag-drawer";
 const PREFERENCES_LOCK_NAME = "cocoon-remote-preferences-storage";
 const BATCH_SIZE = 20;
 export const COMMENT_MUTATION_ATTRIBUTE_FILTER = Object.freeze(["href", "data-id"]);
@@ -185,6 +187,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
 
   window.addEventListener("pagehide", () => {
     lifecycleEnded = true;
+    drawerController.dismiss();
   });
   window.addEventListener("pageshow", () => {
     lifecycleEnded = false;
@@ -378,46 +381,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     return targetId;
   }
 
-  const drawer = document.createElement("aside");
-  drawer.className = DRAWER_CLASS;
-  drawer.hidden = true;
-  drawer.inert = true;
-  drawer.dataset.phase = "hidden";
-  drawer.setAttribute("role", "dialog");
-  drawer.setAttribute("aria-hidden", "true");
-  drawer.setAttribute("aria-label", "选择作者标签并屏蔽");
   const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-  const drawerHeader = document.createElement("div");
-  drawerHeader.className = "cocoon-tag-drawer-header";
-  const drawerTitle = document.createElement("span");
-  drawerTitle.className = "cocoon-tag-drawer-title";
-  drawerTitle.textContent = "标签";
-  const drawerCloseButton = document.createElement("button");
-  drawerCloseButton.type = "button";
-  drawerCloseButton.className = "cocoon-tag-drawer-close";
-  drawerCloseButton.textContent = "×";
-  drawerCloseButton.setAttribute("aria-label", "取消并关闭标签选择");
-  drawerHeader.append(drawerTitle, drawerCloseButton);
-
-  const tagList = document.createElement("div");
-  tagList.className = "cocoon-tag-list";
-  tagList.setAttribute("aria-label", "已有标签");
-
-  const newTagForm = document.createElement("form");
-  newTagForm.className = "cocoon-tag-form";
-  const newTagLabel = document.createElement("label");
-  newTagLabel.className = "cocoon-visually-hidden";
-  newTagLabel.htmlFor = "cocoon-new-tag-input";
-  newTagLabel.textContent = "新标签名称";
-  const newTagInput = document.createElement("input");
-  newTagInput.id = "cocoon-new-tag-input";
-  newTagInput.className = "cocoon-tag-input";
-  newTagInput.type = "text";
-  newTagInput.autocomplete = "off";
-  newTagInput.placeholder = "新标签，按 Enter";
-  newTagInput.setAttribute("aria-label", "新标签名称，按 Enter 创建并屏蔽作者");
-  newTagForm.append(newTagLabel, newTagInput);
 
   function saveRemotePreference(
     key: "blockAuthorOnZhihu" | "blockContentVoters",
@@ -428,8 +392,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
 
   const remoteOptionsView = createRemoteOptionsView(document, saveRemotePreference);
 
-  drawer.append(drawerHeader, tagList, newTagForm, remoteOptionsView.element);
-  document.body.append(drawer);
+  const { drawer, drawerCloseButton, tagList, newTagForm, newTagInput, setSubmitting } =
+    createDrawerView(document, remoteOptionsView.element);
 
   const drawerVisibility = createDrawerVisibilityController({
     setHidden(hidden) {
@@ -482,6 +446,14 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   }
 
   const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>({
+    setSubmitting,
+    scheduleDeadline(callback) {
+      const id = window.setTimeout(callback, 10_000);
+      return () => window.clearTimeout(id);
+    },
+    reportIncomplete() {
+      console.warn("[Cocoon] 本地处理或页面更新尚未确认；未撤销已提交操作，请检查结果后再操作。");
+    },
     show(target) {
       renderTagChoices();
       setVoterOptionAvailability(target);
@@ -506,14 +478,16 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     getRemoteAuthorization(target) {
       return remoteOptionsView.getAuthorization(target.voterSource !== null);
     },
-    commit(task) {
-      void handleDrawerCommit(task);
-    },
+    commit: (task, signal) => handleDrawerCommit(task, signal),
   });
 
   function positionDrawer(): void {
     const target = drawerController.getTarget();
-    if (!target || drawerVisibility.getPhase() === "hidden") {
+    if (
+      !target ||
+      drawerController.getState().status !== "open" ||
+      drawerVisibility.getPhase() === "hidden"
+    ) {
       return;
     }
 
@@ -532,6 +506,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   }
 
   function renderTagChoices(): void {
+    if (drawerController.getState().status === "submitting") return;
     renderTagList(tagList, currentTags, {
       selectTag(tag) {
         void submitDrawerSelection({ tag, isNewTag: false });
@@ -794,11 +769,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       },
       now: () => new Date(),
       commitAuthor: blacklistClient.commitAuthor,
-      requestFailureFocus(button) {
-        if (drawerController.getState().status === "closed" && button.isConnected) {
-          button.focus({ preventScroll: true });
-        }
-      },
+      // The owning drawer submission restores focus; late failures must not steal it.
+      requestFailureFocus() {},
       reportFailure(error) {
         console.error("[Cocoon] 屏蔽作者失败，未保留会话内黑名单。", error);
       },
@@ -873,11 +845,24 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
 
   async function handleDrawerCommit(
     task: CommitTask<HTMLElement, HTMLButtonElement>,
-  ): Promise<void> {
+    signal: AbortSignal,
+  ): Promise<DrawerCommitOutcome> {
     const result = await commitController.commit(task);
     if (result.status === "persisted") {
       void remoteBackgroundRunner.run(task, result).completion;
     }
+    if (result.status === "failed") return "failed";
+    if (signal.aborted) return "incomplete";
+    const visible = await waitForAuthorVisibility(
+      result.author,
+      {
+        cardRoots: (identifiers) => filterController.getMatchingRoots(identifiers),
+        commentRoots: (identifiers) => commentFilterController.getMatchingRoots(identifiers),
+        readCardIdentifiers: getDirectCardAuthorIds,
+      },
+      signal,
+    );
+    return visible ? "completed" : "incomplete";
   }
 
   const tagDeletionController = createTagDeletionController({

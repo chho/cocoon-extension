@@ -233,6 +233,8 @@ test("BUG-008 exact duplicate backfills a proven hash in one atomic write withou
     }),
   );
   strictEqual(result.status, "duplicate");
+  if (result.status !== "duplicate") throw new Error("Expected duplicate receipt");
+  deepStrictEqual(result.author, { ...existing.authors[0], memberHashId: HASH_A });
   deepStrictEqual(harness.storedState().authors[0], {
     ...existing.authors[0],
     memberHashId: HASH_A,

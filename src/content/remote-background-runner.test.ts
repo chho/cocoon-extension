@@ -33,6 +33,15 @@ function task(): CommitTask<string, string> {
 
 const committed = {
   status: "persisted",
+  author: {
+    platformId: "zhihu",
+    userId: "stable-author",
+    memberHashId: null,
+    authorNameAtCapture: "Author",
+    tagId: "default",
+    blacklistedAt: "2026-08-14T00:00:00.000Z",
+    blockSource: "direct",
+  },
   state: createInitialState(),
   userId: "stable-author",
   blacklistedAt: "2026-08-14T00:00:00.000Z",

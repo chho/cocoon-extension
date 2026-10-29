@@ -78,20 +78,8 @@
       "sha256": "91fb1887dd4dcb05f02c355674cd3bd1e8eb378f16a2b4ad4c463802ca574695"
     },
     {
-      "path": "src/content/drawer-controller.test.ts",
-      "sha256": "937dcc502cb98f5ae621e675f1f1955adfb5b6c57f83343b55719613f602ba1a"
-    },
-    {
-      "path": "src/content/drawer-controller.ts",
-      "sha256": "81dfa30fb0d2fea605ba06673e25deec6e8e216bfd24daa7a958b6bc88e891fc"
-    },
-    {
       "path": "src/content/drawer-state.test.ts",
       "sha256": "58e9607bd532c423d0885b00e8193794f4395ca9cdd2df83d1f46bbd3bb9aefd"
-    },
-    {
-      "path": "src/content/drawer-state.ts",
-      "sha256": "d403c5083acad3146a1300e030bbe5321c87661ef83051b5a6d28075de3c70ef"
     },
     {
       "path": "src/content/drawer-visibility.ts",
@@ -124,10 +112,6 @@
     {
       "path": "src/content/remote-background-runner.ts",
       "sha256": "e6bfbc8014577b6730cc94f800155463ded5d2252c8529bcfa8cf13fefa4f16a"
-    },
-    {
-      "path": "src/content/remote-operation-orchestrator.test.ts",
-      "sha256": "d1befcce68ca69d4690315ad06feff81ac9449ea663ca05de94e539b8769cf23"
     },
     {
       "path": "src/content/remote-operation-orchestrator.ts",
@@ -232,10 +216,6 @@
     {
       "path": "src/options/dialog-controller.ts",
       "sha256": "cc85f46f5413311f16031b4543b02d10c84be6c9466685d05fa86e5a846059d4"
-    },
-    {
-      "path": "src/plugins/zhihu/plugin.css",
-      "sha256": "1a437b5e5bbec5e28aed0f17b6d7cf715d123e8cb391b18aba07233e56df1cec"
     },
     {
       "path": "src/popup/main.ts",
