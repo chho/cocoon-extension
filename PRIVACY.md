@@ -1,10 +1,10 @@
 # Cocoon Privacy Policy / 隐私政策
 
-Last updated / 最后更新：2026-10-29
+Last updated / 最后更新：2026-10-30
 
-This policy describes Cocoon 0.5.0 and the separately built Cocoon Dev variant. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
+This policy describes Cocoon 0.6.2 and the separately built Cocoon Dev variant. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
 
-本政策适用于 Cocoon 0.5.0 及独立构建的 Cocoon Dev 版本。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
+本政策适用于 Cocoon 0.6.2 及独立构建的 Cocoon Dev 版本。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
 
 ## 1. Data processed / 处理的数据
 
@@ -32,13 +32,13 @@ Cocoon 可能自动查询知乎成员信息以解析作者身份，包括使用�
 
 ## 3. Storage, sharing, and diagnostics / 存储、分享与诊断
 
-Author and tag records are stored in extension-owned IndexedDB on your device. Preferences use Chrome's local extension storage. Legacy local blacklist data is validated and migrated into IndexedDB; successful migration removes the legacy copy.
+Author and tag records are stored in extension-owned IndexedDB on your device. Preferences, including the drawer’s custom-tag ID order, use Chrome’s local extension storage. The display order is not included in blacklist backups. Legacy local blacklist data is validated and migrated into IndexedDB; successful migration removes the legacy copy.
 
 The current version has no developer-operated data server, cloud synchronization, advertising, analytics, or telemetry. It does not upload your full local blocklist to the developer. Data is not sold, used for unrelated purposes, or used for creditworthiness or lending decisions. Necessary Zhihu requests described above are not an upload to a Cocoon server.
 
 Cocoon may write local diagnostic errors, counts, and timing information to the developer console; these logs are not automatically uploaded. If you choose to contact us through GitHub, GitHub processes that submission under its own privacy policy. Public issues can be read by others: do not include personal records, cookies, credentials, or unredacted exports, screenshots, or logs.
 
-作者与标签记录保存在本机扩展自有 IndexedDB，偏好保存在 Chrome 本地扩展存储。旧版本地黑名单经过校验后迁移到 IndexedDB，成功迁移后删除旧副本。
+作者与标签记录保存在本机扩展自有 IndexedDB，偏好（包括抽屉自定义标签 ID 顺序）保存在 Chrome 本地扩展存储；显示顺序不包含在黑名单备份中。旧版本地黑名单经过校验后迁移到 IndexedDB，成功迁移后删除旧副本。
 
 当前版本没有开发者运营的数据服务器、云同步、广告、分析追踪或遥测，不会向开发者上传完整本地列表。数据不出售，不用于无关用途，也不用于信用或贷款判断。上述必要的知乎请求不属于向 Cocoon 服务器上传数据。
 

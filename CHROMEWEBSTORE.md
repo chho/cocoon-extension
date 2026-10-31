@@ -1,13 +1,13 @@
 # Chrome Web Store preparation — Cocoon
 
-Last updated: 2026-10-29. **Draft; this task does not submit or publish an extension.**
+Last updated: 2026-10-30. **Draft; this task does not submit or publish an extension.**
 
 ## Distribution boundary
 
 - Store candidate: production `npm run build` output in `dist/` only.
 - Local testing: `npm run build:dev` output in `dist-dev/`, named **Cocoon Dev**, same icon.
 - Production build guards reject included diagnostic modules and protocol/storage markers. Never upload `dist-dev/`, local diagnostics, browser data, `.git/`, dependencies, source docs or credentials as the store package.
-- Use the same numeric version, currently 0.5.0. Dev has a separate version label and installation/data; it is not a second store listing in this task.
+- Use the same numeric version, currently 0.6.2. Dev has a separate version label and installation/data; it is not a second store listing in this task.
 
 ## Listing draft
 
@@ -17,7 +17,7 @@ Last updated: 2026-10-29. **Draft; this task does not submit or publish an exten
 
 **Detailed description:**
 
-Cocoon helps you hide unwanted authors from the Zhihu home feed and organize your local blocklist with tags. Choose a tag to hide matching feed cards and supported comments. Search and manage saved authors, remove blocks, and import or export a local backup.
+Cocoon helps you hide unwanted authors from the Zhihu home feed and organize your local blocklist with tags. Choose a tag to hide matching feed cards and supported comments. Search and manage saved authors, remove blocks, and import or export a local backup. Drag custom tags within the blocking drawer to arrange them, or use Alt+Left/Right; your drawer order is remembered locally and the built-in default remains first.
 
 Optional Zhihu actions use your existing signed-in account. Account-level blocking applies only to the directly selected author; content voters are added only to Cocoon's local blocklist. These actions remain off unless enabled by you.
 
@@ -65,6 +65,9 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 
 | Version | Status | Change |
 | --- | --- | --- |
+| 0.6.2 | Draft, not submitted | Restore continuous tag rows with full-width wrapping and protected default drag boundaries. |
+| 0.6.1 | Draft, not submitted | Restore the default tag’s compact height beside wrapped custom tags. |
+| 0.6.0 | Draft, not submitted | Custom-tag drawer sorting with locally remembered order; default remains fixed. |
 | 0.5.0 | Draft, not submitted | Separate production and local Dev builds; bounded local diagnostics only in Dev. |
 
 Known issue: intermittent native Zhihu hover-card recurrence is still under investigation (BUG-022). Diagnostic delivery does not establish that it is fixed. Real-browser acceptance and store submission review remain separate steps.

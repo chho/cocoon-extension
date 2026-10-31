@@ -150,14 +150,6 @@
       "sha256": "4d323e72715b8511c408f7b87faff2ac9fc3488356c20e226732baa49fba7645"
     },
     {
-      "path": "src/content/tag-list.test.ts",
-      "sha256": "51719d2243630053dff9781e1f6ba95b57619eb0471ca906847f14c76f21f92f"
-    },
-    {
-      "path": "src/content/tag-list.ts",
-      "sha256": "74f0fb25d000bb078bbfcb128fd762cce0207c95ecd2a37fed5afcb6d3a3dd65"
-    },
-    {
       "path": "src/content/zhihu-content-source.test.ts",
       "sha256": "2f9dc622fa02106d367f7f8d1f5c128847812380b3cc47488fdeef4e618f534e"
     },

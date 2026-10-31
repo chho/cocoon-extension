@@ -86,6 +86,8 @@ On supported Zhihu author hover cards, Cocoon also saves the member ID from the 
 
 After choosing a tag, the drawer briefly stays in place and shows “处理中…” while local saving and filtering finish. Its controls are temporarily disabled to prevent accidental underlying author hovers. Remote account blocking and voter processing do not delay dismissal. If local processing or the page update cannot be confirmed within 10 seconds, the drawer is released without cancelling an already-submitted operation; check the result before submitting again.
 
+All drawer tags share one continuous row layout and wrap from the left edge when space runs out. Custom tags can be reordered within the visible tag list. The built-in `default` stays first; dropping on it or outside the visible list cancels. A normal click still blocks the author, while a drag never selects or deletes a tag. With a custom tag focused, use **Alt+Left/Right** to reorder by keyboard. The drawer order is saved locally and restored after refresh; new tags append, renames keep their position, and deleted tags are ignored. This display preference does not reorder the management page or change backup files, and production/Dev installations keep separate preferences. Unconfirmed saves restore the last known order and show a warning; a later successful storage notification can still update it.
+
 ## Install from source
 
 ### Requirements
@@ -142,7 +144,7 @@ Cocoon stores blacklist authors and tags in extension-owned IndexedDB. Each reco
 - block source;
 - first-blocked timestamp.
 
-Site-specific preferences, a payload-free blacklist revision notification, and temporary per-tab badge state remain in Chrome extension storage. Existing schema v1–v5 blacklist data is automatically and fail-safely migrated from `chrome.storage.local` on first access.
+Site-specific preferences, the drawer’s custom-tag display order, a payload-free blacklist revision notification, and temporary per-tab badge state remain in Chrome extension storage. Existing schema v1–v5 blacklist data is automatically and fail-safely migrated from `chrome.storage.local` on first access.
 
 Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to origins declared by bundled site plugins and are made only for implemented identity resolution, content-related lookup, or explicitly enabled account-level actions. The current build makes such requests only to the supported page's existing origin.
 

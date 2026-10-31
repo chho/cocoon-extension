@@ -119,12 +119,46 @@
 }
 
 .cocoon-tag-list {
+  position: relative;
   display: flex;
   flex-flow: row wrap;
+  align-items: flex-start;
   gap: 4px;
   max-height: 116px;
   margin-bottom: 5px;
   overflow-y: auto;
+}
+
+.cocoon-tag-item:not([data-tag-id="default"]) .cocoon-tag-choice {
+  touch-action: none;
+  user-select: none;
+}
+
+.cocoon-tag-drag-preview {
+  z-index: 1;
+  display: inline-flex;
+  border: 1px solid #8590a6;
+  border-radius: 4px;
+  background: #fff;
+  opacity: 0.9;
+}
+
+.cocoon-tag-dragging {
+  opacity: 0.45;
+}
+
+.cocoon-tag-drop-before {
+  box-shadow: inset 2px 0 #315f8c;
+}
+
+.cocoon-tag-drop-after {
+  box-shadow: inset -2px 0 #315f8c;
+}
+
+.cocoon-tag-order-error {
+  margin-bottom: 5px;
+  font: inherit;
+  overflow-wrap: anywhere;
 }
 
 .cocoon-tag-item {

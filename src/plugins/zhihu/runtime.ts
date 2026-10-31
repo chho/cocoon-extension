@@ -35,7 +35,7 @@ import { parseAuthorMemberHashId } from "../../content/parse-zhihu-member-data.t
 import { parseZhihuUserId } from "../../content/parse-zhihu-user-id.ts";
 import { createMemberUserIdResolver } from "../../content/resolve-member-user-id.ts";
 import { createTagDeletionController } from "../../content/tag-deletion-controller.ts";
-import { renderTagList } from "../../content/tag-list.ts";
+import { createDrawerTagList } from "../../content/drawer-tag-list.ts";
 import {
   REMOTE_PREFERENCES_STORAGE_KEY,
   createDefaultRemotePreferences,
@@ -508,16 +508,15 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     drawer.style.top = `${top}px`;
   }
 
+  const tagListController = createDrawerTagList(tagList, {
+    getTags: () => currentTags,
+    getStatus: () => drawerController.getState().status,
+    onLayoutChange: positionDrawer,
+    selectTag: (tag) => void submitDrawerSelection({ tag, isNewTag: false }),
+    deleteTag: (tagId, event) => void tagDeletionController.deleteTag(tagId, event),
+  });
   function renderTagChoices(): void {
-    if (drawerController.getState().status === "submitting") return;
-    renderTagList(tagList, currentTags, {
-      selectTag(tag) {
-        void submitDrawerSelection({ tag, isNewTag: false });
-      },
-      deleteTag(tagId, event) {
-        void tagDeletionController.deleteTag(tagId, event);
-      },
-    });
+    tagListController.render();
   }
 
   async function submitDrawerSelection(selection: TagSelection): Promise<void> {
