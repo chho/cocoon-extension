@@ -21,7 +21,7 @@ function asWarnings(rules) {
 
 export default tseslint.config(
   {
-    ignores: ["docs/**", "dist/**", "node_modules/**", ".pi/**"],
+    ignores: ["docs/**", "dist/**", "dist-dev/**", "node_modules/**", ".pi/**"],
   },
   {
     ...eslint.configs.recommended,

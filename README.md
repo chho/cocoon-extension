@@ -103,6 +103,22 @@ npm run build
 
 The production extension is generated in `dist/`. Its name and summary have English and Simplified Chinese metadata; the extension UI currently remains in Chinese.
 
+### Dev diagnostic build
+
+`npm run build:dev` creates **Cocoon Dev** in `dist-dev/`; `npm run build:all` builds both directories without overwriting the other. Dev uses the same icon and numeric version, with a different extension name. Production builds exclude the additional diagnostic implementation, listeners and storage protocol; build guards check the actual output.
+
+Load `dist-dev/` instead of `dist/` for daily testing. Keep its install path unchanged and update by rebuilding/reloading, not uninstalling. Different extension IDs have independent blacklist/preferences storage: use existing import/export if needed; there is no automatic sharing. **Enable only one version, then refresh existing Zhihu pages** to remove the disabled version's injected code. Dev still operates on your real signed-in Zhihu account.
+
+Dev automatically keeps a five-minute/1,000-event in-memory history of drawer submissions, local filtering and related native hover activity. It can include real author names, IDs, member aliases and profile links, but not cookies, credentials, input text, unrelated content, HTML or network payloads. Suspected hover incidents save an immediate fragment and a best-effort five-second follow-up locally; each fragment is at most 128 KiB and only the newest three incidents are retained. Seven-day expiry is cleaned on diagnostic startup or requests, not by a guaranteed timer while Chrome is closed. Nothing is automatically uploaded.
+
+There is no diagnostic management UI. Through the existing Chrome CDP connection, select **Cocoon Dev's isolated-world execution context** on the supported page (not the website's MAIN world):
+
+- `globalThis.__cocoonDevDiagnostics.snapshot()`: current in-memory history and active/save status.
+- `await globalThis.__cocoonDevDiagnostics.save()`: explicitly retain a bounded local fragment; `false` means no confirmation, not guaranteed rollback.
+- `await globalThis.__cocoonDevDiagnostics.clear()`: clear saved diagnostic fragments and, on success, this page's memory history.
+
+To read saved fragments after a page refresh, evaluate `await chrome.storage.local.get("cocoonDevDiagnostics")` in the Dev service worker. Records have `savedAt`; discard expired records when inspecting storage directly. Diagnostic expiry is otherwise pruned when the worker starts or a diagnostic request runs. A page's memory history disappears on navigation; already saved fragments survive worker restarts. Other open Dev pages may later save new incidents after a clear. Do not commit or publicly share real diagnostic dumps. Missing/changed Zhihu structures or scan limits can prevent detection, and diagnostics are not proof that the intermittent hover issue is fixed.
+
 ### Load in Chrome
 
 1. Open `chrome://extensions`.
@@ -142,7 +158,7 @@ Cocoon requests one Chrome extension permission:
 
 | Permission | Why it is needed |
 | --- | --- |
-| `storage` | Saves site preferences, the temporary per-tab badge state, a payload-free blacklist revision notification, and supports one-time migration of legacy blacklist data into IndexedDB. |
+| `storage` | Saves site preferences, the temporary per-tab badge state, a payload-free blacklist revision notification, and supports one-time migration of legacy blacklist data into IndexedDB. Dev additionally stores bounded local diagnostic fragments. |
 
 Content script scope is generated from bundled site plugin descriptors. The current build is limited to the exact page listed under [Supported sites](#supported-sites). Cocoon does not request `<all_urls>`, `tabs`, `scripting`, `downloads`, or `unlimitedStorage`.
 
@@ -152,7 +168,10 @@ Content script scope is generated from bundled site plugin descriptors. The curr
 npm test          # Run the automated test suite
 npm run typecheck # Check strict TypeScript types
 npm run build     # Type-check and create dist/
-npm run dev       # Rebuild continuously while files change
+npm run dev       # Rebuild production continuously while files change
+npm run build:dev # Type-check and create dist-dev/
+npm run build:all # Build production and Dev
+npm run dev:diagnostic # Rebuild Dev continuously while files change
 npm run benchmark:blacklist-scale # Run synthetic 33,524/100,000 scale checks
 ```
 
@@ -166,6 +185,7 @@ options/                    Management-page HTML entry
 src/background/             Service worker, IndexedDB repository, and serialized transactions
 src/content/                Shared filtering and blacklist logic
 src/core/plugin/            Strict plugin contracts, discovery, and registry
+src/diagnostics/            Dev-only local diagnostics; excluded from production
 src/plugins/<id>/           Site descriptors, runtime wiring, and styles
 src/options/                Management-page behavior and views
 src/popup/                  Popup behavior and views
@@ -196,7 +216,7 @@ Before proposing a change:
 2. Do not widen permissions or page scope without a documented product requirement.
 3. Add regression tests for non-trivial logic and reproduced defects.
 4. Run `npm test`, `npm run typecheck`, and `npm run build`.
-5. Never commit real browser snapshots, credentials, exported blacklist data, or personal identifiers.
+5. Never commit real browser snapshots, diagnostic dumps, credentials, exported blacklist data, or personal identifiers.
 
 For behavior changes, consult `docs/blacklist-spec.md` before implementation.
 

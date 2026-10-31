@@ -68,6 +68,9 @@ npm run lint
 npm run check
 npm run build
 npm run dev
+npm run build:dev
+npm run build:all
+npm run dev:diagnostic
 npm run snapshot:zhihu
 ```
 
@@ -79,7 +82,10 @@ npm run snapshot:zhihu
 - `npm run lint`：仅扫描根配置、`src/**` 和 `scripts/**` 中维护的 JS/MJS/TS；错误必须清零，warning 必须逐条匹配内容敏感基线。
 - `npm run check`：依次运行格式检查、lint、测试和完整构建。
 - `npm run build`：先进行类型检查，再扫描插件 descriptor、构建四个入口并生成最终 `dist/manifest.json`。
-- `npm run dev`：监听源码变化并持续重新构建。
+- `npm run dev`：监听源码变化并持续重新构建正式版 `dist/`。
+- `npm run build:dev` / `npm run dev:diagnostic`：构建 / 监听构建 `dist-dev/` 中的 Cocoon Dev；沿用图标，名称区分，只有 Dev 含本地诊断。
+- `npm run build:all`：依次构建正式版与 Dev，输出互不覆盖。涉及共享源码或构建配置时，交付前还须验证 Dev 构建；正式 bundle 必须通过诊断模块/标记排除守卫。
+- 两版独立安装/数据，使用时只启用其一并刷新既有知乎页；不要自动切换、重载、迁移或发布。Dev 真实诊断日志不提交，读取方式见 README。
 - `npm run snapshot:zhihu`：显式连接现有 Chrome，生成包含真实作者标识的本地最小知乎快照。
 
 每次修改代码、测试、Manifest 或构建配置后，至少运行：
@@ -142,7 +148,7 @@ git diff --check
 ## 构建约束
 
 - `public/manifest.json` 只提供 Manifest 基础字段（名称、版本、Action、权限等），不得手写 `content_scripts`；`dist/manifest.json` 由构建扫描 `src/plugins/*/plugin.json` 后组合生成，不是基础文件的直接副本。
-- 不要直接修改 `dist/` 中的任何文件。
+- 不要直接修改 `dist/` 或 `dist-dev/` 中的任何文件。两者均为忽略的构建产物；新增诊断模块位于 `src/diagnostics/`，仅由 diagnostic 模式静态编入，正式构建必须完全排除其有效代码和诊断标记。
 - 最终 Manifest 固定引用稳定的 `assets/content.js`、`assets/content.css` 和模块 `assets/background.js`；content 与 background 两个入口都必须自包含，不得依赖 shared/dynamic ESM chunk。
 - Popup 与 options 必须保持为独立扩展页面入口，可以共享构建生成的本地普通 ESM chunk，但不得成为 content/background 的外部依赖；不得引入远程脚本。
 - 基础 Manifest 必须继续声明 Action Popup、模块 Service Worker 和 tabbed options 页面；新增入口时同步更新 `vite.config.ts`，新增站点插件不应新增内容入口，而应由 eager registry 编入同一个 content bundle。
@@ -216,7 +222,7 @@ git diff --check
 - 复杂分支使用表驱动或按行为分组的测试，明确成功、边界、超时/取消、并发重复和失败收敛；测试名称说明条件与结果。
 - 新依赖必须解决现有平台能力不能合理解决的问题，并报告用途、维护/供应链成本、bundle/runtime 影响和许可证；优先 devDependency，禁止为方便而扩大 MV3 权限、host scope 或引入远程运行时代码。
 - 注释解释约束、风险和“为什么”，尤其是锁、迁移、浏览器缺陷和安全边界；不要复述代码，也不要保留与实现不一致的注释。可由名称和类型表达的规则应优先写进结构与测试。
-- ESLint 明确排除 `docs/**`、`dist/**`、`node_modules/**` 和 `.pi/**`。TS 与维护中的 `scripts/**/*.mjs` 都执行 type-aware Promise 和 misused Promise error 规则；`node:test` 的 `test(...)` 注册是唯一 safe-call 例外。type import 与 switch 穷尽性规则仅用于 TS。既有 recommended、复杂度和规模债务暂为 warning，`scripts/tooling/eslint-warning-baseline.json` 按相对路径、rule/message identity、完整消息、规范化源码行和重复次数锁定；新增、替换、恶化或已解决但未清理的 warning 都会失败。
+- ESLint 明确排除 `docs/**`、`dist/**`、`dist-dev/**`、`node_modules/**` 和 `.pi/**`。TS 与维护中的 `scripts/**/*.mjs` 都执行 type-aware Promise 和 misused Promise error 规则；`node:test` 的 `test(...)` 注册是唯一 safe-call 例外。type import 与 switch 穷尽性规则仅用于 TS。既有 recommended、复杂度和规模债务暂为 warning，`scripts/tooling/eslint-warning-baseline.json` 按相对路径、rule/message identity、完整消息、规范化源码行和重复次数锁定；新增、替换、恶化或已解决但未清理的 warning 都会失败。
 - Prettier 会扫描全部维护中的代码/配置目标；`scripts/tooling/prettier-baseline.json` 只记录引入工具时已经存在的未格式化文件及其内容哈希。新增违规、内容已变化的债务、文件缺失、已清除但未移除或越界条目都会使 `format:check` 失败。默认 `npm run format` 跳过哈希完全未变的债务，格式化其余违规并清理对应条目，避免无关全仓重排；不得把新文件加入基线来绕过格式化。
 
 ## Chrome Extension 规则

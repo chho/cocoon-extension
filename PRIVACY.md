@@ -1,10 +1,10 @@
 # Cocoon Privacy Policy / 隐私政策
 
-Last updated / 最后更新：2026-10-01
+Last updated / 最后更新：2026-10-29
 
-This policy describes Cocoon 0.4.3. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
+This policy describes Cocoon 0.5.0 and the separately built Cocoon Dev variant. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
 
-本政策适用于 Cocoon 0.4.3。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
+本政策适用于 Cocoon 0.5.0 及独立构建的 Cocoon Dev 版本。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
 
 ## 1. Data processed / 处理的数据
 
@@ -44,6 +44,12 @@ Cocoon may write local diagnostic errors, counts, and timing information to the 
 
 扩展可能在本机开发者 Console 输出诊断错误、数量和耗时信息，不自动上传日志。如果你通过 GitHub 联系我们，GitHub 会根据其隐私政策处理提交内容。公开 Issue 可被他人查看，请勿提交个人记录、Cookie、凭据或未脱敏的导出文件、截图及日志。
 
+### Dev-only local diagnostic history / 仅 Dev 版的本地诊断历史
+
+Cocoon Dev additionally records local submission/filtering/hover timing and geometry, including relevant real author names, identifiers, aliases and profile links. It does not record credentials, cookies, unrelated content or input text, HTML dumps, or network payloads. In-memory history is bounded to five minutes and 1,000 events. Suspected incidents or explicit developer-console saves retain at most three fragments of up to 128 KiB each in Dev's local extension storage. They expire after seven days and are pruned on diagnostic startup or requests, not by a guaranteed deletion timer. An isolated-world debugging handle can inspect current history, save a fragment or clear diagnostics; see the README. Production builds exclude this additional recorder. No automatic diagnostic upload or cross-version data sharing is provided; real diagnostic records must not be posted publicly.
+
+Cocoon Dev 额外记录本机的提交、过滤、名片时序与几何状态，可以包含相关真实作者名、标识、别名和资料链接。不记录凭据、Cookie、无关正文或输入、HTML dump、网络载荷。内存保留最近 5 分钟、最多 1,000 条事件；疑似异常或通过开发者控制台显式保存时，Dev 本地存储保留最多 3 份、每份最多 128 KiB 的片段。片段 7 天后失效，在诊断启动或请求时清理，不保证定时删除。隔离世界调试句柄支持查看当前历史、保留片段及清除诊断，具体方法见 README。正式构建不含这套额外记录器；无自动上传或两版本数据共享，不应公开真实诊断记录。
+
 ## 4. Retention, deletion, and backups / 保留、删除与备份
 
 You can remove local author records and manage tags through the popup or management page. Uninstalling clears extension-managed local data. Neither local removal nor uninstalling reverses completed Zhihu account-level blocks; manage those on Zhihu.
@@ -60,9 +66,9 @@ Imports temporarily stage records on your device for validation and atomic commi
 
 ## 5. Limited Use / 限定用途
 
-Cocoon's use of information received from Chrome APIs adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements. Data is used only to provide the disclosed author-filtering and local blocklist-management features. It is not sold or used for advertising, unrelated profiling, creditworthiness, or lending decisions. Transfers are limited to the necessary Zhihu requests described above and exports you initiate. The developer does not receive your local blocklist or provide humans with access to it. If you voluntarily contact support, share only the information needed to resolve your request and never post sensitive records publicly.
+Cocoon's use of information received from Chrome APIs adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements. Data is used only to provide the disclosed author-filtering, local blocklist-management and Dev-only diagnostic features. It is not sold or used for advertising, unrelated profiling, creditworthiness, or lending decisions. Transfers are limited to the necessary Zhihu requests described above and exports you initiate. The developer does not receive your local blocklist or provide humans with access to it. If you voluntarily contact support, share only the information needed to resolve your request and never post sensitive records publicly.
 
-Cocoon 对通过 Chrome API 获得的信息的使用遵守 Chrome Web Store 用户数据政策，包括 Limited Use（限定用途）要求。数据仅用于已披露的作者过滤和本地屏蔽列表管理功能，不出售，也不用于广告、无关画像、信用评估或贷款判断。传输仅限上述功能必需的知乎请求及你主动发起的导出。开发者不接收你的本地屏蔽列表，也不向人员提供对该列表的访问权限。如果你主动联系支持，请只提供解决问题所需的信息，不要公开敏感记录。
+Cocoon 对通过 Chrome API 获得的信息的使用遵守 Chrome Web Store 用户数据政策，包括 Limited Use（限定用途）要求。数据仅用于已披露的作者过滤、本地屏蔽列表管理和 Dev-only 诊断功能，不出售，也不用于广告、无关画像、信用评估或贷款判断。传输仅限上述功能必需的知乎请求及你主动发起的导出。开发者不接收你的本地屏蔽列表，也不向人员提供对该列表的访问权限。如果你主动联系支持，请只提供解决问题所需的信息，不要公开敏感记录。
 
 ## 6. Changes and contact / 变更与联系
 

@@ -2,7 +2,11 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
 import { compareFormatBaseline, hashContent, planDefaultFormat } from "./format-baseline.mjs";
-import { isMaintainedFormatPath, isMaintainedLintPath } from "./project-scope.mjs";
+import {
+  isIgnoredProjectPath,
+  isMaintainedFormatPath,
+  isMaintainedLintPath,
+} from "./project-scope.mjs";
 
 const legacySource = "const legacy={value:true}\n";
 
@@ -64,10 +68,13 @@ test("ignored roots are outside the maintained formatting scope", () => {
   for (const path of [
     "docs/local.ts",
     "dist/assets/content.js",
+    "dist-dev/assets/content.js",
     "node_modules/package/index.js",
     ".pi/private.ts",
   ]) {
+    strictEqual(isIgnoredProjectPath(path), true, path);
     strictEqual(isMaintainedFormatPath(path), false, path);
+    strictEqual(isMaintainedLintPath(path), false, path);
   }
   strictEqual(isMaintainedFormatPath("scripts/tooling/format.mjs"), true);
   strictEqual(isMaintainedLintPath("docs/local.js"), false);

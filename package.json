@@ -1,6 +1,6 @@
 {
   "name": "cocoon-extension",
-  "version": "0.4.6",
+  "version": "0.5.0",
   "description": "Local-first Chrome extension for quiet, plugin-based control over content feeds.",
   "keywords": [
     "browser-extension",
@@ -29,8 +29,11 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
+    "build:dev": "tsc --noEmit && vite build --mode diagnostic",
+    "build:all": "npm run build && npm run build:dev",
+    "dev:diagnostic": "vite build --watch --mode diagnostic",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/background/*.test.ts src/content/*.test.ts src/core/*.test.ts src/core/plugin/*.test.ts src/options/*.test.ts src/popup/*.test.ts src/ui/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs scripts/tooling/*.test.mjs",
+    "test": "node --test src/background/*.test.ts src/content/*.test.ts src/core/*.test.ts src/core/plugin/*.test.ts src/diagnostics/*.test.ts src/options/*.test.ts src/popup/*.test.ts src/ui/*.test.ts src/plugins/zhihu/*.test.ts scripts/build/*.test.ts scripts/lib/*.test.mjs scripts/tooling/*.test.mjs",
     "format": "node scripts/tooling/format.mjs",
     "format:check": "node scripts/tooling/check-format.mjs",
     "lint": "node scripts/tooling/check-eslint.mjs",

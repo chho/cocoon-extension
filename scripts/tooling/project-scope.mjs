@@ -6,7 +6,7 @@ export const ESLINT_TARGET_PATTERNS = [
   "scripts/**/*.{js,mjs,ts}",
 ];
 
-const ignoredRoots = new Set(["docs", "dist", "node_modules", ".pi"]);
+const ignoredRoots = new Set(["docs", "dist", "dist-dev", "node_modules", ".pi"]);
 const lintDirectories = new Set(["src", "scripts"]);
 const lintExtensions = new Set([".js", ".mjs", ".ts"]);
 const maintainedDirectories = new Set(["src", "scripts", "popup", "options", "public"]);

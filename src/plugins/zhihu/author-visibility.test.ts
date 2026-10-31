@@ -3,6 +3,49 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 import { waitForHiddenTargets } from "./author-visibility.ts";
 
+test("Dev visibility observations distinguish empty, hidden, detached and repurposed roots and contain failures", async () => {
+  const dom = new JSDOM('<body><div id="a"></div><div id="b"></div><div id="c"></div></body>');
+  try {
+    const [a, b, c] = ["a", "b", "c"].map((id) => dom.window.document.getElementById(id)!);
+    const events: unknown[] = [];
+    const signal = new AbortController().signal;
+    const promise = waitForHiddenTargets(
+      [
+        { root: a!, isRelevant: () => true },
+        { root: b!, isRelevant: () => true },
+        { root: c!, isRelevant: () => false },
+      ],
+      signal,
+      (event) => {
+        events.push(event);
+      },
+    );
+    a!.classList.add("cocoon-blacklisted");
+    b!.remove();
+    strictEqual(await promise, true);
+    strictEqual(
+      JSON.stringify(events.at(-1)),
+      JSON.stringify({
+        phase: "end",
+        reason: "completed",
+        total: 3,
+        hidden: 1,
+        detached: 1,
+        changed: 1,
+        pending: 0,
+      }),
+    );
+    strictEqual(
+      await waitForHiddenTargets([], signal, () => {
+        throw new Error("diagnostic failure");
+      }),
+      true,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("BUG-021 completion waits for every selected DOM root, not unrelated work", async () => {
   const dom = new JSDOM('<body><div id="a"></div><div id="b"></div><div id="other"></div></body>');
   try {

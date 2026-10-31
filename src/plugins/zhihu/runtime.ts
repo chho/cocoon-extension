@@ -19,12 +19,11 @@ import {
 import { createBackgroundBlacklistGateway } from "../../content/background-blacklist-gateway.ts";
 import { BLACKLIST_REVISION_STORAGE_KEY } from "../../content/background-blacklist-client.ts";
 import { createDrawerView } from "../../content/drawer-view.ts";
-import { waitForAuthorVisibility } from "./author-visibility.ts";
+import { createDrawerCommitHandler } from "./drawer-commit.ts";
+import { installDevDiagnostics, recordDrawerObservation } from "../../diagnostics/content.ts";
 import { createMeasuredCommitController } from "../../content/commit-performance.ts";
 import {
   createDrawerController,
-  type CommitTask,
-  type DrawerCommitOutcome,
   type DrawerTarget,
   type TagSelection,
 } from "../../content/drawer-controller.ts";
@@ -446,6 +445,10 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   }
 
   const drawerController = createDrawerController<HTMLElement, HTMLButtonElement>({
+    observeSubmission:
+      import.meta.env?.MODE === "diagnostic"
+        ? (event) => recordDrawerObservation(document, event)
+        : undefined,
     setSubmitting,
     scheduleDeadline(callback) {
       const id = window.setTimeout(callback, 10_000);
@@ -843,27 +846,14 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     },
   });
 
-  async function handleDrawerCommit(
-    task: CommitTask<HTMLElement, HTMLButtonElement>,
-    signal: AbortSignal,
-  ): Promise<DrawerCommitOutcome> {
-    const result = await commitController.commit(task);
-    if (result.status === "persisted") {
-      void remoteBackgroundRunner.run(task, result).completion;
-    }
-    if (result.status === "failed") return "failed";
-    if (signal.aborted) return "incomplete";
-    const visible = await waitForAuthorVisibility(
-      result.author,
-      {
-        cardRoots: (identifiers) => filterController.getMatchingRoots(identifiers),
-        commentRoots: (identifiers) => commentFilterController.getMatchingRoots(identifiers),
-        readCardIdentifiers: getDirectCardAuthorIds,
-      },
-      signal,
-    );
-    return visible ? "completed" : "incomplete";
-  }
+  const handleDrawerCommit = createDrawerCommitHandler({
+    document,
+    commitController,
+    remoteBackgroundRunner,
+    cardRoots: (identifiers) => filterController.getMatchingRoots(identifiers),
+    commentRoots: (identifiers) => commentFilterController.getMatchingRoots(identifiers),
+    readCardIdentifiers: getDirectCardAuthorIds,
+  });
 
   const tagDeletionController = createTagDeletionController({
     deleteTag: blacklistClient.deleteTag,
@@ -928,6 +918,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       }
     }
   });
+
+  if (import.meta.env?.MODE === "diagnostic") installDevDiagnostics(document);
 
   observer.observe(document.body, {
     childList: true,

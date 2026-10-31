@@ -45,7 +45,24 @@ export interface CancelInteraction {
 
 export type DrawerCommitOutcome = "completed" | "failed" | "incomplete";
 
+export type SubmissionEndReason = DrawerCommitOutcome | "timeout" | "superseded" | "pagehide";
+export type SubmissionObservation<TCard, TButton> =
+  | { phase: "start"; signal: AbortSignal; task: CommitTask<TCard, TButton> }
+  | { phase: "end"; signal: AbortSignal; reason: SubmissionEndReason };
+
+function observeSubmission<TCard, TButton>(
+  dependencies: DrawerControllerDependencies<TCard, TButton>,
+  event: SubmissionObservation<TCard, TButton>,
+): void {
+  try {
+    dependencies.observeSubmission?.(event);
+  } catch {
+    /* Observers cannot own submission success. */
+  }
+}
+
 export interface DrawerControllerDependencies<TCard, TButton> {
+  readonly observeSubmission?: (event: SubmissionObservation<TCard, TButton>) => void;
   readonly setSubmitting: (submitting: boolean) => void;
   readonly scheduleDeadline: (callback: () => void) => () => void;
   readonly reportIncomplete: () => void;
@@ -82,15 +99,18 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
     this.dependencies = dependencies;
   }
 
-  private releaseSubmission(): void {
+  private releaseSubmission(reason: SubmissionEndReason = "superseded"): void {
+    if (import.meta.env?.MODE !== "production" && this.pending) {
+      observeSubmission(this.dependencies, { phase: "end", signal: this.pending.signal, reason });
+    }
     this.pending?.abort("superseded");
     this.pending = null;
     this.dependencies.setSubmitting(false);
   }
 
-  private close(restoreFocus: boolean): void {
+  private close(restoreFocus: boolean, reason: SubmissionEndReason = "completed"): void {
     const closingTarget = this.target;
-    this.releaseSubmission();
+    this.releaseSubmission(reason);
     this.target = null;
     this.state = CLOSED_DRAWER_STATE;
     this.dependencies.hide();
@@ -128,6 +148,9 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
     this.state = reduceDrawerState(this.state, { type: "submit" });
     this.pending = new AbortController();
     this.dependencies.setSubmitting(true);
+    if (import.meta.env?.MODE !== "production") {
+      observeSubmission(this.dependencies, { phase: "start", signal: this.pending.signal, task });
+    }
     void this.finishSubmission(task, this.pending);
   }
 
@@ -152,12 +175,12 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
       run.signal.removeEventListener("abort", interrupt);
     }
     if (this.pending !== run) return;
-    this.close(outcome === "failed");
+    this.close(outcome === "failed", run.signal.reason === "timeout" ? "timeout" : outcome);
     if (outcome === "incomplete") this.dependencies.reportIncomplete();
   }
 
   dismiss(): void {
-    this.close(false);
+    this.close(false, "pagehide");
   }
   getState(): DrawerState {
     return this.state;

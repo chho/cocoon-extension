@@ -1,6 +1,10 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
-import { createDrawerController, type DrawerTarget } from "./drawer-controller.ts";
+import {
+  createDrawerController,
+  type DrawerTarget,
+  type SubmissionObservation,
+} from "./drawer-controller.ts";
 
 const selection = { tag: { tagId: "default", name: "default" }, isNewTag: false };
 const target = (id: string): DrawerTarget<string, string> => ({
@@ -13,7 +17,7 @@ const target = (id: string): DrawerTarget<string, string> => ({
   anchorBounds: null,
   voterSource: null,
 });
-function harness() {
+function harness(observeSubmission?: (event: SubmissionObservation<string, string>) => void) {
   const pending: Array<{
     finish: (result: "completed" | "failed" | "incomplete") => void;
     signal: AbortSignal;
@@ -25,6 +29,7 @@ function harness() {
     warnings = 0,
     timers = 0;
   const controller = createDrawerController<string, string>({
+    observeSubmission,
     show() {},
     hide() {
       hides++;
@@ -63,6 +68,34 @@ function harness() {
 async function settle() {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
+
+test("Dev submission observation distinguishes completion, timeout, replacement and page exit without affecting commits", async () => {
+  const events: SubmissionObservation<string, string>[] = [];
+  const h = harness((event) => {
+    events.push(event);
+  });
+  for (const reason of ["completed", "timeout", "superseded", "pagehide"] as const) {
+    h.controller.open(target("a"));
+    h.controller.submit(selection);
+    if (reason === "completed") h.pending.at(-1)!.finish("completed");
+    if (reason === "timeout") h.deadlines.at(-1)!();
+    if (reason === "superseded") h.controller.open(target("b"));
+    if (reason === "pagehide") h.controller.dismiss();
+    await settle();
+  }
+  deepStrictEqual(
+    events.filter((e) => e.phase === "end").map((e) => e.reason),
+    ["completed", "timeout", "superseded", "pagehide"],
+  );
+  const throwing = harness(() => {
+    throw new Error("diagnostic failure");
+  });
+  throwing.controller.open(target("a"));
+  throwing.controller.submit(selection);
+  throwing.pending[0]!.finish("completed");
+  await settle();
+  strictEqual(throwing.controller.getState().status, "closed");
+});
 
 test("BUG-021 retains pending drawer until actual completion; duplicate submit and cancel cannot revoke it", async () => {
   const h = harness();

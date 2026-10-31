@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, doesNotMatch, match, ok, rejects, strictEqual } from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { runInNewContext } from "node:vm";
 import { build, type InlineConfig, type Rollup } from "vite";
 
 import { createExtensionBuildPlugin } from "./extension-build-plugin.ts";
+import { createEntryCopyPlugin } from "./entry-copy-plugin.ts";
+import { createBuildModePlugin } from "./build-mode-plugin.ts";
 
 interface FixtureRuntimeState {
   readonly descriptorMatches: readonly string[];
@@ -287,6 +289,8 @@ function createFixtureBuildConfig(
     clearScreen: false,
     logLevel: "silent",
     plugins: [
+      createBuildModePlugin(),
+      createEntryCopyPlugin(),
       createExtensionBuildPlugin({
         projectRoot: fixture.projectRoot,
         pluginsRoot: fixture.pluginsRoot,
@@ -683,3 +687,201 @@ test("ARCH-001/004 Vite watch rejects a symlinked plugin and recovers atomically
     await rm(projectRoot, { recursive: true, force: true });
   }
 });
+
+const DIAGNOSTIC_MARKERS = /__cocoonDevDiagnostics|cocoonDevDiagnostics|cocoon-dev-diagnostics/;
+
+async function writeDiagnosticFixture(projectRoot: string): Promise<FixtureProjectPaths> {
+  const fixture = await writeFixtureProject(projectRoot);
+  await writeFixturePlugin(
+    join(fixture.pluginsRoot, "alpha"),
+    "alpha",
+    "https://alpha.example.com/*",
+    "alpha-runtime-v1",
+  );
+  const manifest = JSON.parse(await readFile(fixture.baseManifestPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  manifest.key = "synthetic-fixture-key";
+  await writeFile(fixture.baseManifestPath, JSON.stringify(manifest));
+  await mkdir(join(projectRoot, "src/diagnostics"));
+  await writeFile(
+    join(projectRoot, "src/diagnostics/install.ts"),
+    `import { marker } from "./shared.ts";\n` +
+      `export function install() { globalThis.__cocoonDevDiagnostics = marker; }\n`,
+  );
+  await writeFile(
+    join(projectRoot, "src/diagnostics/shared.ts"),
+    `export const marker = "cocoonDevDiagnostics:cocoon-dev-diagnostics";\n`,
+  );
+  for (const [entry, suffix] of [
+    [fixture.contentEntryPath, ""],
+    [fixture.backgroundEntryPath, "?background-copy"],
+  ]) {
+    const original = await readFile(entry, "utf8");
+    await writeFile(
+      entry,
+      `import { install } from "../diagnostics/install.ts${suffix}";\n` +
+        `if (import.meta.env?.MODE === "diagnostic") install();\n` +
+        original,
+    );
+  }
+  return fixture;
+}
+
+function modeFixtureConfig(
+  fixture: FixtureProjectPaths,
+  mode: string,
+  watch = false,
+): InlineConfig {
+  const config = createFixtureBuildConfig(fixture, watch);
+  return { ...config, mode, build: { ...config.build, outDir: undefined } };
+}
+
+async function assertDiagnosticOutput(outDir: string, enabled: boolean): Promise<void> {
+  for (const entry of ["content", "background"]) {
+    const code = await readFile(join(outDir, `assets/${entry}.js`), "utf8");
+    if (enabled) match(code, DIAGNOSTIC_MARKERS);
+    else doesNotMatch(code, DIAGNOSTIC_MARKERS);
+    doesNotMatch(code, /import\.meta|\bimport\s*(?:\(|["'{*])/);
+    const sandbox: Record<string, unknown> = {};
+    runInNewContext(code, sandbox);
+    strictEqual(Boolean(sandbox.__cocoonDevDiagnostics), enabled);
+  }
+}
+
+test("BUILD-001 clean modes isolate outputs, brand only Dev, and tree-shake static diagnostic imports", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-modes-"));
+  try {
+    const fixture = await writeDiagnosticFixture(projectRoot);
+    await build(modeFixtureConfig(fixture, "production"));
+    await assertDiagnosticOutput(fixture.outDir, false);
+    const production = await readBuildOutputSnapshot(fixture.outDir);
+    const devDir = join(projectRoot, "dist-dev");
+    await build(modeFixtureConfig(fixture, "diagnostic"));
+    await assertDiagnosticOutput(devDir, true);
+    deepStrictEqual(await readBuildOutputSnapshot(fixture.outDir), production);
+    const dev = await readBuildOutputSnapshot(devDir);
+    const manifest = JSON.parse(dev.manifest) as Record<string, unknown>;
+    const prodManifest = JSON.parse(production.manifest) as Record<string, unknown>;
+    const expected: Record<string, unknown> = {
+      ...prodManifest,
+      name: "Cocoon Dev",
+      version_name: `${String(prodManifest.version)} Dev`,
+      action: { ...(prodManifest.action as object), default_title: "Cocoon Dev" },
+    };
+    delete expected.key;
+    deepStrictEqual(manifest, expected);
+    strictEqual(prodManifest.key, "synthetic-fixture-key");
+    await build(modeFixtureConfig(fixture, "production"));
+    deepStrictEqual(await readBuildOutputSnapshot(devDir), dev);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("BUILD-001 unknown modes and cross-mode output overrides fail before overwriting files", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-mode-errors-"));
+  try {
+    const fixture = await writeDiagnosticFixture(projectRoot);
+    await build(modeFixtureConfig(fixture, "production"));
+    const before = await readBuildOutputSnapshot(fixture.outDir);
+    await rejects(build(modeFixtureConfig(fixture, "development")), /unsupported build mode/);
+    const diagnostic = modeFixtureConfig(fixture, "diagnostic");
+    await rejects(
+      build({ ...diagnostic, build: { ...diagnostic.build, outDir: fixture.outDir } }),
+      /output directory must be/,
+    );
+    if (
+      await createDirectorySymlinkOrSkip(context, fixture.outDir, join(projectRoot, "dist-dev"))
+    ) {
+      await rejects(build(modeFixtureConfig(fixture, "diagnostic")), /output directory must be/);
+    }
+    deepStrictEqual(await readBuildOutputSnapshot(fixture.outDir), before);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+for (const leak of [
+  "module",
+  "__cocoonDevDiagnostics",
+  "cocoonDevDiagnostics",
+  "cocoon-dev-diagnostics",
+]) {
+  test(`BUILD-001 production rejects rendered diagnostic ${leak} leaks before Manifest emission`, async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-build-leak-"));
+    try {
+      const fixture = await writeDiagnosticFixture(projectRoot);
+      let source = `globalThis.leaked = ${JSON.stringify(leak)};\n`;
+      if (leak === "module") {
+        await writeFile(
+          join(projectRoot, "src/diagnostics/leak.ts"),
+          `export const value = Date.now();\n`,
+        );
+        source = `import { value } from "../diagnostics/leak.ts"; globalThis.leaked = value;\n`;
+      }
+      await writeFile(
+        fixture.contentEntryPath,
+        (await readFile(fixture.contentEntryPath, "utf8")) + source,
+      );
+      await rejects(build(modeFixtureConfig(fixture, "production")), /production diagnostic leak/);
+      await rejects(readFile(join(fixture.outDir, "manifest.json")), { code: "ENOENT" });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const mode of ["production", "diagnostic"]) {
+  test(`BUILD-001 ${mode} watch rebuilds retain mode isolation`, async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "cocoon-watch-mode-"));
+    let watcher: Rollup.RollupWatcher | null = null;
+    let builds: WatchBuildQueue | null = null;
+    try {
+      const fixture = await writeDiagnosticFixture(projectRoot);
+      const otherMode = mode === "production" ? "diagnostic" : "production";
+      const otherConfig = modeFixtureConfig(fixture, otherMode);
+      const config = modeFixtureConfig(fixture, mode, true);
+      const otherDir = join(projectRoot, otherMode === "diagnostic" ? "dist-dev" : "dist");
+      const outDir = join(projectRoot, mode === "diagnostic" ? "dist-dev" : "dist");
+      await build(otherConfig);
+      const otherOutput = await readBuildOutputSnapshot(otherDir);
+      const result = await build(config);
+      ok(isRollupWatcher(result));
+      watcher = result;
+      builds = new WatchBuildQueue(watcher);
+      await builds.waitForSuccessfulBuild("initial mode build");
+      await assertDiagnosticOutput(outDir, mode === "diagnostic");
+      const rebuilt = builds.waitForSuccessfulBuild("mode rebuild");
+      await writeFile(
+        fixture.contentEntryPath,
+        (await readFile(fixture.contentEntryPath, "utf8")) + `globalThis.rebuilt = true;\n`,
+      );
+      await rebuilt;
+      match(await readFile(join(outDir, "assets/content.js"), "utf8"), /rebuilt/);
+      await assertDiagnosticOutput(outDir, mode === "diagnostic");
+      deepStrictEqual(await readBuildOutputSnapshot(otherDir), otherOutput);
+      if (mode === "production") {
+        const previous = await readBuildOutputSnapshot(outDir);
+        const validSource = await readFile(fixture.contentEntryPath, "utf8");
+        const failed = builds.waitForFailedBuild("diagnostic leak rebuild");
+        await writeFile(
+          fixture.contentEntryPath,
+          validSource + `globalThis.leaked = "cocoon-dev-diagnostics";\n`,
+        );
+        match((await failed).message, /production diagnostic leak/);
+        await rejects(readFile(join(outDir, "manifest.json")), { code: "ENOENT" });
+        deepStrictEqual(await readBuildOutputSnapshot(otherDir), otherOutput);
+        const recovered = builds.waitForSuccessfulBuild("diagnostic leak recovery");
+        await writeFile(fixture.contentEntryPath, validSource);
+        await recovered;
+        deepStrictEqual(await readBuildOutputSnapshot(outDir), previous);
+      }
+    } finally {
+      builds?.cancel();
+      await watcher?.close();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+}

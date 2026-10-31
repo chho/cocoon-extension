@@ -597,7 +597,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (674). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (666). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -605,8 +605,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (836). Maximum allowed is 500.",
-      "sourceLine": "const hoverCardController = createHoverCardController({",
+      "message": "File has too many lines (827). Maximum allowed is 500.",
+      "sourceLine": "drawerController.open(target);",
       "count": 1
     },
     {

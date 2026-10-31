@@ -1,3 +1,4 @@
+import { installDiagnosticBackground } from "../diagnostics/background.ts";
 import { createBadgeController } from "./badge-controller.ts";
 import {
   createBadgeRuntimeMessageListener,
@@ -12,6 +13,10 @@ import { createBlacklistQueryController } from "./blacklist-query-controller.ts"
 import { createBlacklistRepository } from "./blacklist-repository.ts";
 import { createBlacklistTransferController } from "./blacklist-transfer-controller.ts";
 import { createStatusController } from "./status-controller.ts";
+
+if (import.meta.env?.MODE === "diagnostic") {
+  installDiagnosticBackground();
+}
 
 function reportBadgeFailure(): void {
   console.error("[Cocoon] 无法更新当前标签页的拦截计数。");

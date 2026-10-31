@@ -9,7 +9,41 @@ interface VisibilityTarget {
   readonly root: HTMLElement;
   readonly isRelevant: () => boolean;
 }
+export interface VisibilityObservation {
+  phase: "start" | "end";
+  reason: "completed" | "aborted" | "error" | "initial";
+  total: number;
+  hidden: number;
+  detached: number;
+  changed: number;
+  pending: number;
+}
+
+type VisibilityObserver = (event: VisibilityObservation) => void;
+
+function observeVisibility(
+  targets: readonly VisibilityTarget[],
+  observe: VisibilityObserver | undefined,
+  phase: VisibilityObservation["phase"],
+  reason: VisibilityObservation["reason"],
+): void {
+  if (!observe) return;
+  try {
+    const counts = { total: targets.length, hidden: 0, detached: 0, changed: 0, pending: 0 };
+    for (const { root, isRelevant } of targets) {
+      if (!root.isConnected) counts.detached++;
+      else if (!isRelevant()) counts.changed++;
+      else if (root.closest(HIDDEN_SELECTOR)) counts.hidden++;
+      else counts.pending++;
+    }
+    observe({ phase, reason, ...counts });
+  } catch {
+    /* Diagnostics cannot change visibility acknowledgement. */
+  }
+}
+
 interface AuthorVisibilityDependencies {
+  readonly observe?: VisibilityObserver;
   readonly cardRoots: (identifiers: ReadonlySet<string>) => readonly HTMLElement[];
   readonly commentRoots: (identifiers: ReadonlySet<string>) => readonly HTMLElement[];
   readonly readCardIdentifiers: (root: HTMLElement) => ReadonlySet<string>;
@@ -20,19 +54,27 @@ const HIDDEN_SELECTOR = ".cocoon-blacklisted, .cocoon-comment-blacklisted";
 export function waitForHiddenTargets(
   targets: readonly VisibilityTarget[],
   signal: AbortSignal,
+  observe?: VisibilityObserver,
 ): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
-  if (targets.length === 0) return Promise.resolve(true);
+  if (import.meta.env?.MODE !== "production")
+    observeVisibility(targets, observe, "start", "initial");
+  if (signal.aborted || targets.length === 0) {
+    if (import.meta.env?.MODE !== "production")
+      observeVisibility(targets, observe, "end", signal.aborted ? "aborted" : "completed");
+    return Promise.resolve(!signal.aborted);
+  }
   return new Promise((resolve) => {
     const document = targets[0]!.root.ownerDocument;
     const observer = new document.defaultView!.MutationObserver(check);
-    function finish(completed: boolean): void {
+    function finish(completed: boolean, reason: VisibilityObservation["reason"]): void {
+      if (import.meta.env?.MODE !== "production")
+        observeVisibility(targets, observe, "end", reason);
       observer.disconnect();
       signal.removeEventListener("abort", abort);
       resolve(completed);
     }
     function abort(): void {
-      finish(false);
+      finish(false, "aborted");
     }
     function check(): void {
       try {
@@ -42,9 +84,9 @@ export function waitForHiddenTargets(
               !root.isConnected || !isRelevant() || root.closest(HIDDEN_SELECTOR),
           )
         )
-          finish(true);
+          finish(true, "completed");
       } catch {
-        finish(false);
+        finish(false, "error");
       }
     }
     signal.addEventListener("abort", abort, { once: true });
@@ -81,5 +123,5 @@ export function waitForAuthorVisibility(
     root,
     isRelevant: () => identifiers.has(resolveCommentAuthorUserId(root) ?? ""),
   }));
-  return waitForHiddenTargets([...cards, ...comments], signal);
+  return waitForHiddenTargets([...cards, ...comments], signal, dependencies.observe);
 }
