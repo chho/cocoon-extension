@@ -11,6 +11,22 @@ test("entry copies propagate only exact build-time namespaces", () => {
   strictEqual(entryCopyNamespace("/src/core/contract.ts?raw&background-copy"), null);
 });
 
+test("entry copies replace another entry namespace without changing asset queries", () => {
+  const source = [
+    'import source from "./source-post.ts?content-copy";',
+    'export { parse } from "./parser.ts?background-copy";',
+    'import raw from "./source.ts?raw";',
+  ].join("\n");
+  strictEqual(
+    rewriteEntryCopyImports(source, "background-copy"),
+    [
+      'import source from "./source-post.ts?background-copy";',
+      'export { parse } from "./parser.ts?background-copy";',
+      'import raw from "./source.ts?raw";',
+    ].join("\n"),
+  );
+});
+
 test("entry copies recursively namespace relative static imports", () => {
   const source = [
     'import value from "./value.ts";',

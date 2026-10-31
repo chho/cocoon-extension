@@ -15,11 +15,18 @@ export function entryCopyNamespace(importer: string): CopyNamespace | null {
 export function rewriteEntryCopyImports(code: string, namespace: CopyNamespace): string {
   const imports = ts
     .preProcessFile(code, true, true)
-    .importedFiles.filter(({ fileName }) => fileName.startsWith(".") && !fileName.includes("?"));
+    .importedFiles.filter(
+      ({ fileName }) =>
+        fileName.startsWith(".") &&
+        (!fileName.includes("?") || entryCopyNamespace(fileName) !== null),
+    );
   let rewritten = code;
   for (const imported of imports.reverse()) {
-    const insertAt = imported.end + 1;
-    rewritten = `${rewritten.slice(0, insertAt)}?${namespace}${rewritten.slice(insertAt)}`;
+    const end = imported.end + 1;
+    const priorNamespace = entryCopyNamespace(imported.fileName);
+    const start = priorNamespace ? end - priorNamespace.length - 1 : end;
+    // A copied dependency belongs to its caller's entry, never to another bundle.
+    rewritten = `${rewritten.slice(0, start)}?${namespace}${rewritten.slice(end)}`;
   }
   return rewritten;
 }
