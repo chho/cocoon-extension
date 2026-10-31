@@ -16,6 +16,7 @@ import {
   blacklistTransferJsonBytes,
   blacklistTransferTextBytes,
   canonicalTransferBytes,
+  isWithinBlacklistTransferSourceLimit,
   hasExactBlacklistTransferKeys,
   isBlacklistTransferRecord,
   isValidBlacklistTransferTimestamp,
@@ -24,6 +25,13 @@ import {
   type BlacklistTransferAuthorDto,
   type BlacklistTransferFileMetadataDto,
   type BlacklistTransferTagDto,
+} from "./blacklist-transfer-values.ts";
+
+import type { SourcePost } from "./source-post.ts";
+import {
+  BLACKLIST_TRANSFER_POST_CHUNK_SIZE,
+  parseTransferPosts,
+  validateTransferPostReferences,
 } from "./blacklist-transfer-values.ts";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{32}$/;
@@ -46,6 +54,7 @@ export interface BlacklistImportSessionDto {
   readonly received: {
     readonly authors: BlacklistTransferProgressDto;
     readonly tags: BlacklistTransferProgressDto;
+    readonly posts: BlacklistTransferProgressDto;
   };
 }
 
@@ -54,6 +63,13 @@ export interface BlacklistImportAuthorsChunkInput {
   readonly chunkIndex: number;
   readonly startIndex: number;
   readonly authors: readonly BlacklistTransferAuthorDto[];
+}
+
+export interface BlacklistImportPostsChunkInput {
+  readonly sessionId: string;
+  readonly chunkIndex: number;
+  readonly startIndex: number;
+  readonly posts: readonly SourcePost[];
 }
 
 export interface BlacklistImportTagsChunkInput {
@@ -82,6 +98,7 @@ export interface BlacklistExportPageInput {
 export interface BlacklistExportAuthorsPageDto {
   readonly revision: number;
   readonly items: readonly BlacklistTransferAuthorDto[];
+  readonly posts: readonly SourcePost[];
   readonly nextCursor: string | null;
 }
 
@@ -119,12 +136,16 @@ function hasValidMetadataBytes(value: Record<string, unknown>): boolean {
   if (!isPositiveSafeInteger(value.sourceBytes)) return false;
   if (value.sourceBytes > BLACKLIST_TRANSFER_FILE_BYTES) return false;
   if (!isPositiveSafeInteger(value.canonicalBytes)) return false;
-  if (value.canonicalBytes > value.sourceBytes) return false;
+  if (!isPositiveSafeInteger(value.postsBytes) || value.postsBytes < 2) return false;
   if (!isPositiveSafeInteger(value.authorsBytes) || value.authorsBytes < 2) return false;
   return isPositiveSafeInteger(value.tagsBytes) && value.tagsBytes > 2;
 }
 
 function hasValidMetadataCounts(value: Record<string, unknown>): boolean {
+  if (!isNonNegativeSafeInteger(value.postCount)) return false;
+  if ((value.postCount === 0) !== (value.postsBytes === 2)) return false;
+  if (!validChunkCount(value.postCount, value.postChunkCount, BLACKLIST_TRANSFER_POST_CHUNK_SIZE))
+    return false;
   if (!isNonNegativeSafeInteger(value.authorCount)) return false;
   if ((value.authorCount === 0) !== (value.authorsBytes === 2)) return false;
   if (!isPositiveSafeInteger(value.tagCount)) return false;
@@ -152,6 +173,7 @@ export function parseBlacklistTransferFileMetadata(
       "exportedAt",
       "schemaVersion",
       "sourceBytes",
+      "sourceFormatVersion",
       "canonicalBytes",
       "authorsBytes",
       "tagsBytes",
@@ -159,6 +181,9 @@ export function parseBlacklistTransferFileMetadata(
       "tagCount",
       "authorChunkCount",
       "tagChunkCount",
+      "postsBytes",
+      "postCount",
+      "postChunkCount",
     ])
   ) {
     return null;
@@ -167,6 +192,7 @@ export function parseBlacklistTransferFileMetadata(
   if (!hasValidMetadataBytes(value)) return null;
   if (!hasValidMetadataCounts(value)) return null;
   const metadata = value as unknown as BlacklistTransferFileMetadataDto;
+  if (!isWithinBlacklistTransferSourceLimit(metadata)) return null;
   return canonicalTransferBytes(metadata) === metadata.canonicalBytes ? metadata : null;
 }
 
@@ -197,7 +223,7 @@ function hasUniqueChunkTags(tags: readonly BlacklistTransferTagDto[]): boolean {
 
 function parseChunkRecord(
   value: unknown,
-  itemKey: "authors" | "tags",
+  itemKey: "authors" | "tags" | "posts",
   maximum: number,
 ): Record<string, unknown> | null {
   if (!isBlacklistTransferRecord(value)) return null;
@@ -250,6 +276,22 @@ export function parseBlacklistImportTagsChunkInput(
     startIndex: record.startIndex as number,
     tags: parsed,
   };
+}
+
+export function parseBlacklistImportPostsChunkInput(
+  value: unknown,
+): BlacklistImportPostsChunkInput | null {
+  const record = parseChunkRecord(value, "posts", BLACKLIST_TRANSFER_POST_CHUNK_SIZE);
+  if (!record || !isWithinTransferRpcLimit(record)) return null;
+  const posts = parseTransferPosts(record.posts);
+  return posts
+    ? {
+        sessionId: record.sessionId as string,
+        chunkIndex: record.chunkIndex as number,
+        startIndex: record.startIndex as number,
+        posts,
+      }
+    : null;
 }
 
 export function isBlacklistTransferCursor(value: unknown): value is string | null {
@@ -314,6 +356,7 @@ function isCompleteSession(
   metadata: BlacklistTransferFileMetadataDto,
   authors: BlacklistTransferProgressDto,
   tags: BlacklistTransferProgressDto,
+  posts: BlacklistTransferProgressDto,
 ): boolean {
   return (
     authors.chunks === metadata.authorChunkCount &&
@@ -321,7 +364,10 @@ function isCompleteSession(
     authors.bytes === metadata.authorsBytes &&
     tags.chunks === metadata.tagChunkCount &&
     tags.count === metadata.tagCount &&
-    tags.bytes === metadata.tagsBytes
+    tags.bytes === metadata.tagsBytes &&
+    posts.chunks === metadata.postChunkCount &&
+    posts.count === metadata.postCount &&
+    posts.bytes === metadata.postsBytes
   );
 }
 
@@ -334,6 +380,7 @@ function hasStatusMatchingCompleteness(status: BlacklistImportStatus, complete: 
 interface ParsedSessionProgress {
   readonly authors: BlacklistTransferProgressDto;
   readonly tags: BlacklistTransferProgressDto;
+  readonly posts: BlacklistTransferProgressDto;
 }
 
 function parseSessionProgress(
@@ -341,14 +388,16 @@ function parseSessionProgress(
   metadata: BlacklistTransferFileMetadataDto,
 ): ParsedSessionProgress | null {
   if (!isBlacklistTransferRecord(value)) return null;
-  if (!hasExactBlacklistTransferKeys(value, ["authors", "tags"])) return null;
+  if (!hasExactBlacklistTransferKeys(value, ["authors", "tags", "posts"])) return null;
+  const posts = parseProgress(value.posts, metadata.postChunkCount, metadata.postsBytes);
+  if (!posts || posts.count > metadata.postCount) return null;
   const authors = parseProgress(value.authors, metadata.authorChunkCount, metadata.authorsBytes);
   if (!authors) return null;
   const tags = parseProgress(value.tags, metadata.tagChunkCount, metadata.tagsBytes);
   if (!tags) return null;
   if (authors.count > metadata.authorCount) return null;
   if (tags.count > metadata.tagCount) return null;
-  return { authors, tags };
+  return { authors, tags, posts };
 }
 
 export function parseBlacklistImportSessionDto(value: unknown): BlacklistImportSessionDto | null {
@@ -373,7 +422,7 @@ export function parseBlacklistImportSessionDto(value: unknown): BlacklistImportS
   if (!metadata) return null;
   const received = parseSessionProgress(value.received, metadata);
   if (!received) return null;
-  const complete = isCompleteSession(metadata, received.authors, received.tags);
+  const complete = isCompleteSession(metadata, received.authors, received.tags, received.posts);
   return hasStatusMatchingCompleteness(value.status, complete)
     ? (value as unknown as BlacklistImportSessionDto)
     : null;
@@ -417,9 +466,13 @@ export function parseBlacklistExportBegin(value: unknown): BlacklistExportBeginD
     : null;
 }
 
-function parsePageRecord(value: unknown): Record<string, unknown> | null {
+function parsePageRecord(
+  value: unknown,
+  extraKeys: readonly string[] = [],
+): Record<string, unknown> | null {
   if (!isBlacklistTransferRecord(value)) return null;
-  if (!hasExactBlacklistTransferKeys(value, ["revision", "items", "nextCursor"])) return null;
+  if (!hasExactBlacklistTransferKeys(value, ["revision", "items", "nextCursor", ...extraKeys]))
+    return null;
   if (!isNonNegativeSafeInteger(value.revision)) return null;
   if (!isBlacklistTransferCursor(value.nextCursor)) return null;
   if (!Array.isArray(value.items)) return null;
@@ -431,11 +484,23 @@ function parsePageRecord(value: unknown): Record<string, unknown> | null {
 export function parseBlacklistExportAuthorsPage(
   value: unknown,
 ): BlacklistExportAuthorsPageDto | null {
-  const record = parsePageRecord(value);
-  if (!record) return null;
+  const record = parsePageRecord(value, ["posts"]);
+  if (
+    !record ||
+    !Array.isArray(record.posts) ||
+    record.posts.length > BLACKLIST_TRANSFER_EXPORT_PAGE_SIZE
+  )
+    return null;
+  const posts = parseTransferPosts(record.posts);
+  if (!posts) return null;
   const authors = (record.items as unknown[]).map(parseBlacklistTransferAuthorDto);
   if (authors.some((author) => author === null)) return null;
   if (!hasUniqueChunkAuthors(authors as BlacklistTransferAuthorDto[])) return null;
+  if (!validateTransferPostReferences(authors as BlacklistTransferAuthorDto[], posts)) return null;
+  const referenced = new Set(
+    (authors as BlacklistTransferAuthorDto[]).map((author) => author.sourcePostId),
+  );
+  if (posts.some((post) => !referenced.has(post.postId))) return null;
   return record as unknown as BlacklistExportAuthorsPageDto;
 }
 

@@ -3,15 +3,17 @@ import type { BlacklistState, BlacklistedAuthor, CocoonTag } from "../content/bl
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundBlacklistState from "../content/blacklist-state.ts?background-copy";
 
-const { DEFAULT_TAG_ID, parseBlacklistState } =
+const { DEFAULT_TAG_ID, parseBlacklistState, parseBlacklistedAuthor } =
   backgroundBlacklistState as typeof BlacklistStateModule;
 
 export const BLACKLIST_DATABASE_NAME = "cocoon-blacklist";
-export const BLACKLIST_DATABASE_VERSION = 2;
+export const BLACKLIST_DATABASE_VERSION = 3;
 export const BLACKLIST_METADATA_KEY = "state";
 
 export const BLACKLIST_STORE_NAMES = Object.freeze({
   authors: "authors",
+  posts: "posts",
+  importPosts: "import-posts",
   identifiers: "identifiers",
   tags: "tags",
   metadata: "metadata",
@@ -24,6 +26,7 @@ export const BLACKLIST_STORE_NAMES = Object.freeze({
 
 export const LIVE_BLACKLIST_STORE_NAMES = Object.freeze([
   BLACKLIST_STORE_NAMES.authors,
+  BLACKLIST_STORE_NAMES.posts,
   BLACKLIST_STORE_NAMES.identifiers,
   BLACKLIST_STORE_NAMES.tags,
   BLACKLIST_STORE_NAMES.metadata,
@@ -52,7 +55,7 @@ export interface StoredTag extends CocoonTag {
 export interface StoredBlacklistMetadata {
   readonly key: typeof BLACKLIST_METADATA_KEY;
   readonly migrationComplete: true;
-  readonly logicalSchemaVersion: 5;
+  readonly logicalSchemaVersion: 6;
   readonly revision: number;
   readonly authorCount: number;
   readonly tagCount: number;
@@ -124,7 +127,7 @@ export function createMetadata(state: BlacklistState, revision: number): StoredB
   return {
     key: BLACKLIST_METADATA_KEY,
     migrationComplete: true,
-    logicalSchemaVersion: 5,
+    logicalSchemaVersion: 6,
     revision,
     authorCount: state.authors.length,
     tagCount: state.tags.length,
@@ -146,6 +149,7 @@ const STORED_AUTHOR_KEYS = [
   "tagId",
   "blacklistedAt",
   "blockSource",
+  "sourcePostId",
 ] as const;
 
 function hasValidStoredAuthorIndexes(value: Record<string, unknown>, tag: CocoonTag): boolean {
@@ -164,6 +168,7 @@ function logicalAuthorValue(value: Record<string, unknown>): Record<string, unkn
     tagId: value.tagId,
     blacklistedAt: value.blacklistedAt,
     blockSource: value.blockSource,
+    sourcePostId: value.sourcePostId,
   };
 }
 
@@ -176,15 +181,7 @@ function storedAuthorMatches(value: Record<string, unknown>, expected: StoredAut
 export function parseStoredAuthor(value: unknown, tag: CocoonTag): StoredAuthor | null {
   if (!isRecord(value) || !hasExactKeys(value, STORED_AUTHOR_KEYS)) return null;
   if (!hasValidStoredAuthorIndexes(value, tag)) return null;
-  const tags =
-    tag.tagId === DEFAULT_TAG_ID ? [tag] : [{ tagId: DEFAULT_TAG_ID, name: "default" }, tag];
-  const parsed = parseBlacklistState({
-    schemaVersion: 5,
-    tags,
-    authors: [logicalAuthorValue(value)],
-  });
-  if (parsed.status !== "valid") return null;
-  const author = parsed.state.authors[0];
+  const author = parseBlacklistedAuthor(logicalAuthorValue(value), new Set([tag.tagId]));
   if (!author) return null;
   const expected = createStoredAuthor(author, value.order as number);
   return storedAuthorMatches(value, expected) ? expected : null;
@@ -227,7 +224,7 @@ export function parseStoredTag(value: unknown): StoredTag | null {
           { tagId: DEFAULT_TAG_ID, name: "default" },
           { tagId: value.tagId, name: value.name },
         ];
-  const parsed = parseBlacklistState({ schemaVersion: 5, tags, authors: [] });
+  const parsed = parseBlacklistState({ schemaVersion: 6, tags, authors: [], posts: [] });
   const tag = parsed.status === "valid" ? parsed.state.tags.at(-1) : undefined;
   return tag ? { ...tag, nameKey: value.nameKey as string, order: value.order } : null;
 }
@@ -247,7 +244,7 @@ function hasMetadataConstants(value: Record<string, unknown>): boolean {
   return (
     value.key === BLACKLIST_METADATA_KEY &&
     value.migrationComplete === true &&
-    value.logicalSchemaVersion === 5
+    value.logicalSchemaVersion === 6
   );
 }
 
@@ -273,7 +270,7 @@ export function parseStoredMetadata(value: unknown): StoredBlacklistMetadata | n
   return {
     key: BLACKLIST_METADATA_KEY,
     migrationComplete: true,
-    logicalSchemaVersion: 5,
+    logicalSchemaVersion: 6,
     revision: revision!,
     authorCount: authorCount!,
     tagCount: tagCount!,
@@ -402,9 +399,9 @@ function createImportStores(database: IDBDatabase): void {
   });
 }
 
-function upgradeV1Authors(transaction: IDBTransaction): void {
+function upgradeLegacyAuthors(transaction: IDBTransaction, oldVersion: number): void {
   const authors = transaction.objectStore(BLACKLIST_STORE_NAMES.authors);
-  createQueryAuthorIndexes(authors);
+  if (oldVersion === 1) createQueryAuthorIndexes(authors);
   const cursorRequest = authors.openCursor();
   cursorRequest.onerror = () => transaction.abort();
   cursorRequest.onsuccess = () => {
@@ -420,12 +417,57 @@ function upgradeV1Authors(transaction: IDBTransaction): void {
       return;
     }
     try {
-      cursor.update({
+      const upgraded = {
         ...raw,
-        nameSearch: raw.authorNameAtCapture.toLowerCase(),
-        ...authorTimeKeys(raw.blacklistedAt as string | null),
-      });
+        ...(oldVersion === 1
+          ? {
+              nameSearch: raw.authorNameAtCapture.toLowerCase(),
+              ...authorTimeKeys(raw.blacklistedAt as string | null),
+            }
+          : {}),
+        sourcePostId: null,
+      };
+      if (
+        typeof raw.tagId !== "string" ||
+        !parseStoredAuthor(upgraded, { tagId: raw.tagId, name: "default" })
+      ) {
+        transaction.abort();
+        return;
+      }
+      cursor.update(upgraded);
       cursor.continue();
+    } catch {
+      transaction.abort();
+    }
+  };
+}
+
+function createPostStores(database: IDBDatabase): void {
+  database.createObjectStore(BLACKLIST_STORE_NAMES.posts, { keyPath: "postId" });
+  const posts = database.createObjectStore(BLACKLIST_STORE_NAMES.importPosts, {
+    keyPath: ["sessionId", "index"],
+  });
+  posts.createIndex("by-session", "sessionId", { unique: false });
+  posts.createIndex("by-session-post", ["sessionId", "postId"], { unique: true });
+}
+
+function upgradeLegacyMetadata(transaction: IDBTransaction): void {
+  const store = transaction.objectStore(BLACKLIST_STORE_NAMES.metadata);
+  const request = store.get(BLACKLIST_METADATA_KEY);
+  request.onerror = () => transaction.abort();
+  request.onsuccess = () => {
+    const raw: unknown = request.result;
+    if (raw === undefined) return;
+    const upgraded =
+      isRecord(raw) && raw.logicalSchemaVersion === 5
+        ? parseStoredMetadata({ ...raw, logicalSchemaVersion: 6 })
+        : null;
+    if (!upgraded) {
+      transaction.abort();
+      return;
+    }
+    try {
+      store.put(upgraded);
     } catch {
       transaction.abort();
     }
@@ -443,14 +485,18 @@ export function openBlacklistDatabase(
     request.onupgradeneeded = (event) => {
       const database = request.result;
       const transaction = request.transaction;
-      if (!transaction || event.oldVersion > 1) {
+      if (!transaction || event.oldVersion > 2) {
         transaction?.abort();
         return;
       }
       try {
         if (event.oldVersion === 0) createLiveStores(database);
-        else upgradeV1Authors(transaction);
-        createImportStores(database);
+        else {
+          upgradeLegacyAuthors(transaction, event.oldVersion);
+          upgradeLegacyMetadata(transaction);
+        }
+        if (event.oldVersion < 2) createImportStores(database);
+        createPostStores(database);
       } catch {
         transaction.abort();
       }

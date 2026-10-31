@@ -4,6 +4,84 @@ import { test } from "node:test";
 import { createBackgroundBlacklistGateway } from "./background-blacklist-gateway.ts";
 import { createBlacklistContentResponse } from "../core/blacklist-content-rpc-contract.ts";
 
+test("POST-002 gateway validates post receipts and propagates bounded storage failure", async () => {
+  const post = {
+    postId: "zhihu:article:2",
+    platformId: "zhihu",
+    kind: "article",
+    contentId: "2",
+    title: "Title",
+    url: "https://zhuanlan.zhihu.com/p/2",
+  } as const;
+  let result: unknown = { post, revision: 2 };
+  const gateway = createBackgroundBlacklistGateway({
+    async sendMessage() {
+      return createBlacklistContentResponse("ensure-post", true, result);
+    },
+  });
+  deepStrictEqual(await gateway.ensurePost(post), { post, revision: 2 });
+  for (const invalid of [
+    { post, revision: -1 },
+    { post: { ...post, title: "" }, revision: 2 },
+    {
+      post: {
+        ...post,
+        postId: "zhihu:article:3",
+        contentId: "3",
+        url: "https://zhuanlan.zhihu.com/p/3",
+      },
+      revision: 2,
+    },
+    { post, revision: 2, extra: true },
+    { status: "global-failure" },
+  ]) {
+    result = invalid;
+    await rejects(gateway.ensurePost(post));
+  }
+});
+
+test("POST-002 author mutation validates and retains the reference without hydrating posts", async () => {
+  const input = {
+    platformId: "zhihu",
+    userId: "person",
+    memberHashId: null,
+    authorNameAtCapture: "Person",
+    tag: { tagId: "default", name: "default" },
+    isNewTag: false,
+    blacklistedAt: "2026-10-30T00:00:00.000Z",
+    sourcePostId: "zhihu:article:2",
+  };
+  const author = {
+    platformId: input.platformId,
+    userId: input.userId,
+    memberHashId: null,
+    authorNameAtCapture: input.authorNameAtCapture,
+    tagId: "default",
+    blacklistedAt: input.blacklistedAt,
+    sourcePostId: input.sourcePostId,
+    blockSource: "direct",
+  };
+  let result: unknown = {
+    status: "persisted",
+    author,
+    tag: null,
+    baseRevision: 1,
+    revision: 2,
+    authorCount: 1,
+    tagCount: 1,
+  };
+  const gateway = createBackgroundBlacklistGateway({
+    async sendMessage() {
+      return createBlacklistContentResponse("commit-author", true, result);
+    },
+  });
+  strictEqual((await gateway.commitAuthor(input)).author?.sourcePostId, input.sourcePostId);
+  result = { status: "global-failure" };
+  await rejects(gateway.commitAuthor(input), {
+    message: "Background blacklist storage unavailable.",
+  });
+});
+
 test("BUG-016 gateway initializes with summary metadata and reads bounded tag pages", async () => {
   const messages: unknown[] = [];
   const gateway = createBackgroundBlacklistGateway({

@@ -9,6 +9,8 @@ import {
   blacklistTransferTextBytes,
 } from "../core/blacklist-transfer-values.ts";
 import type { BlacklistTransferRpcClient } from "../ui/blacklist-transfer-rpc.ts";
+import type { SourcePost } from "../core/source-post.ts";
+import { parseBlacklistExportAuthorsPage } from "../core/blacklist-transfer-rpc-values.ts";
 import type { PreparedBlacklistImport } from "./transfer-file.ts";
 
 export type OptionsTransferPipelineErrorCode =
@@ -27,7 +29,8 @@ export class OptionsTransferPipelineError extends Error {
 
 export type OptionsTransferProgress =
   | {
-      readonly phase: "import-tags" | "import-authors" | "export-tags" | "export-authors";
+      readonly phase:
+        "import-tags" | "import-posts" | "import-authors" | "export-tags" | "export-authors";
       readonly completed: number;
       readonly total: number;
     }
@@ -66,6 +69,8 @@ interface StartedImport {
 
 interface ExportAssembly {
   readonly parts: BlobPart[];
+  readonly posts: Map<string, SourcePost>;
+  postBytes: number;
   bytes: number;
 }
 
@@ -127,6 +132,23 @@ async function stageTags(options: ImportPipelineOptions, sessionId: string): Pro
   }
 }
 
+async function stagePosts(options: ImportPipelineOptions, sessionId: string): Promise<void> {
+  for (const chunk of options.prepared.postChunks) {
+    const response = await options.client.stagePostsChunk({
+      sessionId,
+      chunkIndex: chunk.chunkIndex,
+      startIndex: chunk.startIndex,
+      posts: chunk.items,
+    });
+    if (!response.ok || !response.data) throw pipelineFailure(response.error, sessionId);
+    options.onProgress?.({
+      phase: "import-posts",
+      completed: chunk.startIndex + chunk.items.length,
+      total: options.prepared.metadata.postCount,
+    });
+  }
+}
+
 async function stageAuthors(options: ImportPipelineOptions, sessionId: string): Promise<void> {
   for (const chunk of options.prepared.authorChunks) {
     const response = await options.client.stageAuthorsChunk({
@@ -163,6 +185,7 @@ export async function runBlacklistImport(
     sessionId = started.sessionId;
     if (!started.ready) {
       await stageTags(options, sessionId);
+      await stagePosts(options, sessionId);
       await stageAuthors(options, sessionId);
       await inspectReady(options, sessionId);
     }
@@ -194,7 +217,7 @@ export async function abortBlacklistImport(
 
 function appendExportPart(assembly: ExportAssembly, part: string): void {
   const nextBytes = assembly.bytes + blacklistTransferTextBytes(part);
-  if (nextBytes > BLACKLIST_TRANSFER_FILE_BYTES) {
+  if (nextBytes + assembly.postBytes > BLACKLIST_TRANSFER_FILE_BYTES) {
     throw new OptionsTransferPipelineError("transfer-too-large");
   }
   assembly.parts.push(part);
@@ -219,6 +242,22 @@ function nextCursor(current: string | null, next: string | null, seen: Set<strin
   return next;
 }
 
+function collectExportPosts(assembly: ExportAssembly, posts: readonly SourcePost[]): void {
+  for (const post of posts) {
+    const existing = assembly.posts.get(post.postId);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(post))
+        throw new OptionsTransferPipelineError("stale-export");
+      continue;
+    }
+    assembly.postBytes +=
+      blacklistTransferTextBytes(JSON.stringify(post)) + (assembly.posts.size > 0 ? 1 : 0);
+    if (assembly.bytes + assembly.postBytes > BLACKLIST_TRANSFER_FILE_BYTES)
+      throw new OptionsTransferPipelineError("transfer-too-large");
+    assembly.posts.set(post.postId, post);
+  }
+}
+
 async function exportAuthors(
   options: ExportPipelineOptions,
   revision: number,
@@ -237,9 +276,12 @@ async function exportAuthors(
     });
     if (!response.ok || !response.data) throw pipelineFailure(response.error);
     if (response.data.revision !== revision) throw new OptionsTransferPipelineError("stale-export");
-    count += response.data.items.length;
+    const page = parseBlacklistExportAuthorsPage(response.data);
+    if (!page) throw new OptionsTransferPipelineError("invalid-transfer-response");
+    collectExportPosts(assembly, page.posts);
+    count += page.items.length;
     if (count > expectedCount) throw new OptionsTransferPipelineError("stale-export");
-    hasItems = appendPage(assembly, response.data.items, hasItems);
+    hasItems = appendPage(assembly, page.items, hasItems);
     options.onProgress?.({ phase: "export-authors", completed: count, total: expectedCount });
     cursor = nextCursor(cursor, response.data.nextCursor, seen);
   } while (cursor !== null);
@@ -280,7 +322,7 @@ function beginExportAssembly(metadata: {
   readonly schemaVersion: number;
 }): ExportAssembly {
   const header = JSON.stringify(metadata);
-  const assembly: ExportAssembly = { parts: [], bytes: 0 };
+  const assembly: ExportAssembly = { parts: [], bytes: 0, posts: new Map(), postBytes: 2 };
   appendExportPart(assembly, `${header.slice(0, -1)},"authors":[`);
   return assembly;
 }
@@ -301,7 +343,10 @@ export async function runBlacklistExport(
     await exportAuthors(options, metadata.revision, metadata.authorCount, assembly);
     appendExportPart(assembly, `],"tags":[`);
     await exportTags(options, metadata.revision, metadata.tagCount, assembly);
-    appendExportPart(assembly, "]}");
+    appendExportPart(assembly, `],"posts":`);
+    assembly.postBytes = 0;
+    appendExportPart(assembly, JSON.stringify([...assembly.posts.values()]));
+    appendExportPart(assembly, "}");
     options.onProgress?.({ phase: "export-finish" });
     const finished = await options.client.finishExport(metadata.revision);
     if (!finished.ok || !finished.data || finished.data.revision !== metadata.revision) {

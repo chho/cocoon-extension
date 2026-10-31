@@ -1,3 +1,4 @@
+import type { SourcePost } from "../core/source-post.ts";
 import type {
   AuthorIdentity,
   BlacklistedAuthor,
@@ -76,6 +77,7 @@ export interface DirectPreflightInput extends AuthorIdentity {
 }
 
 export interface BlacklistRepository {
+  ensurePost(post: SourcePost): Promise<{ readonly post: SourcePost; readonly revision: number }>;
   querySummary(): Promise<{
     readonly revision: number;
     readonly authorCount: number;

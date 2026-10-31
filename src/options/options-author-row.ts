@@ -19,6 +19,27 @@ interface OptionsAuthorRowOptions {
   readonly onRemove: (author: BlacklistAuthorDto, button: HTMLButtonElement) => void;
 }
 
+function createSourceDetails(document: Document, author: BlacklistAuthorDto): HTMLElement {
+  const post = author.sourcePost;
+  const element = post ? document.createElement("a") : document.createElement("span");
+  element.className = "source-post";
+  element.textContent = post?.title ?? "未记录";
+  if (post && element instanceof document.defaultView!.HTMLAnchorElement) {
+    element.href = post.url;
+    element.target = "_blank";
+    element.rel = "noopener";
+    element.title = post.title;
+    element.setAttribute("aria-label", `关联帖子：${post.title}`);
+  }
+  const source = document.createElement("span");
+  source.className = "source-name";
+  source.textContent = formatSource(author.source);
+  const details = document.createElement("div");
+  details.className = "source-details";
+  details.append(source, element);
+  return details;
+}
+
 export function createOptionsAuthorRow(options: OptionsAuthorRowOptions): HTMLElement {
   const { document, item, writesEnabled } = options;
   const { author, tag } = item;
@@ -54,9 +75,7 @@ export function createOptionsAuthorRow(options: OptionsAuthorRowOptions): HTMLEl
   const platform = document.createElement("span");
   platform.className = "platform-name";
   platform.textContent = formatPlatformId(author.platformId);
-  const source = document.createElement("span");
-  source.className = "source-name";
-  source.textContent = formatSource(author.source);
+  const sourceDetails = createSourceDetails(document, author);
   const time = document.createElement("time");
   time.textContent = formatLocalTime(author.blacklistedAt);
   if (author.blacklistedAt) time.dateTime = author.blacklistedAt;
@@ -71,6 +90,6 @@ export function createOptionsAuthorRow(options: OptionsAuthorRowOptions): HTMLEl
     options.onRemove(author, remove);
   });
 
-  row.append(selection, name, tagName, platform, source, time, remove);
+  row.append(selection, name, tagName, platform, sourceDetails, time, remove);
   return row;
 }

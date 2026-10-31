@@ -38,6 +38,10 @@ test("reports one phase summary without author identity data", async () => {
         elapsedMs += 2;
         return { userId: "synthetic-user", memberHashId: null };
       },
+      resolveSourcePost: () => null,
+      async ensurePost(post) {
+        return { post, revision: 0 };
+      },
       now: () => new Date(TIMESTAMP),
       async commitAuthor(input) {
         elapsedMs += 18;
@@ -50,6 +54,7 @@ test("reports one phase summary without author identity data", async () => {
             authorNameAtCapture: input.authorNameAtCapture,
             tagId: input.tag.tagId,
             blacklistedAt: input.blacklistedAt,
+            sourcePostId: null,
             blockSource: "direct" as const,
           },
           tag: null,

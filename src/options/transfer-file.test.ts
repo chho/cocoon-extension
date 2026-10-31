@@ -19,7 +19,7 @@ import {
 
 const JSON_CONTENT = JSON.stringify({
   product: "cocoon-blacklist",
-  formatVersion: 1,
+  formatVersion: 2,
 });
 const FILENAME = "cocoon-blacklist-2026-08-22.json";
 
@@ -151,9 +151,9 @@ const EXPORTED_AT = "2026-08-25T12:34:56.789Z";
 function transferJson(authorCount = 2): string {
   return JSON.stringify({
     product: "cocoon-blacklist",
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: EXPORTED_AT,
-    schemaVersion: 5,
+    schemaVersion: 6,
     authors: Array.from({ length: authorCount }, (_, index) => ({
       platformId: "zhihu",
       userId: `synthetic-${index}`,
@@ -162,7 +162,9 @@ function transferJson(authorCount = 2): string {
       tagId: "default",
       blacklistedAt: EXPORTED_AT,
       blockSource: "direct",
+      sourcePostId: null,
     })),
+    posts: [],
     tags: [{ tagId: "default", name: "default" }],
   });
 }
@@ -208,9 +210,9 @@ test("BUG-016 file preparation supports the 33,524 and 100,000 synthetic protoco
   for (const authorCount of [33_524, 100_000]) {
     const json = JSON.stringify({
       product: "cocoon-blacklist",
-      formatVersion: 1,
+      formatVersion: 2,
       exportedAt: EXPORTED_AT,
-      schemaVersion: 5,
+      schemaVersion: 6,
       authors: Array.from({ length: authorCount }, (_, index) => ({
         platformId: index % 10 === 0 ? "synthetic-platform" : "zhihu",
         userId: `synthetic-user-${String(index).padStart(6, "0")}`,
@@ -220,7 +222,9 @@ test("BUG-016 file preparation supports the 33,524 and 100,000 synthetic protoco
         tagId: "default",
         blacklistedAt: EXPORTED_AT,
         blockSource: "direct",
+        sourcePostId: null,
       })),
+      posts: [],
       tags: [{ tagId: "default", name: "default" }],
     });
     strictEqual(new TextEncoder().encode(json).byteLength < BLACKLIST_TRANSFER_FILE_BYTES, true);
@@ -229,6 +233,36 @@ test("BUG-016 file preparation supports the 33,524 and 100,000 synthetic protoco
     if (result.status !== "valid") throw new Error("Expected scale fixture to be valid.");
     strictEqual(result.prepared.metadata.authorCount, authorCount);
     strictEqual(result.prepared.metadata.authorChunkCount, result.prepared.authorChunks.length);
+  }
+});
+
+test("POST-005 post chunks obey count and whole-message byte bounds", () => {
+  const posts = Array.from({ length: 501 }, (_, index) => ({
+    postId: `zhihu:article:${index + 1}`,
+    platformId: "zhihu",
+    kind: "article",
+    contentId: String(index + 1),
+    title: "😀".repeat(500),
+    url: `https://zhuanlan.zhihu.com/p/${index + 1}`,
+  }));
+  const result = prepareBlacklistTransferJson(
+    JSON.stringify({ ...JSON.parse(transferJson(0)), posts }),
+  );
+  if (result.status !== "valid") throw new Error("Expected prepared posts");
+  strictEqual(result.prepared.metadata.postCount, 501);
+  strictEqual(result.prepared.postChunks.length > 2, true);
+  for (const chunk of result.prepared.postChunks) {
+    const request = createBlacklistTransferRequest("import-posts-chunk", {
+      sessionId: "1".repeat(32),
+      chunkIndex: chunk.chunkIndex,
+      startIndex: chunk.startIndex,
+      posts: chunk.items,
+    });
+    strictEqual(chunk.items.length <= 500, true);
+    strictEqual(
+      (blacklistTransferJsonBytes(request) ?? Infinity) <= BLACKLIST_TRANSFER_RPC_BYTES,
+      true,
+    );
   }
 });
 

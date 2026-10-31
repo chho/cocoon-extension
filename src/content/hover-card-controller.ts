@@ -150,7 +150,7 @@ function resolvePopupIdentity(root: HTMLElement): PopupIdentity | null {
   };
 }
 
-function resolveHoverCardFromItem(item: HTMLElement): ResolvedHoverCard | null {
+export function resolveHoverCardFromItem(item: HTMLElement): ResolvedHoverCard | null {
   if (!item.isConnected) {
     return null;
   }

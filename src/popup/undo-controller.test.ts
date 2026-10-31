@@ -24,6 +24,8 @@ function record(
     tagId: INTERNAL_TAG_ID,
     blacklistedAt: "2026-08-21T10:00:00.000Z",
     source,
+    sourcePostId: null,
+    sourcePost: null,
   };
 }
 

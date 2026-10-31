@@ -12,6 +12,7 @@ import {
   cleanupExpiredImportStaging,
   inspectImportStaging,
   stageImportAuthorsChunk,
+  stageImportPostsChunk,
   stageImportTagsChunk,
 } from "./blacklist-import-staging.ts";
 
@@ -47,6 +48,13 @@ class BlacklistTransferRepositoryAdapter implements BlacklistTransferRepository 
 
   readonly stageTagsChunk: BlacklistTransferRepository["stageTagsChunk"] = async (input) =>
     stageImportTagsChunk({
+      database: await this.#environment.database(),
+      clock: this.#environment.clock,
+      input,
+    });
+
+  readonly stagePostsChunk: BlacklistTransferRepository["stagePostsChunk"] = async (input) =>
+    stageImportPostsChunk({
       database: await this.#environment.database(),
       clock: this.#environment.clock,
       input,

@@ -3,17 +3,22 @@ import type {
   AuthorMutationResult,
   TagDeletionMutationResult,
 } from "../background/blacklist-repository-types.ts";
-import {
+import type * as ContentRpcModule from "../core/blacklist-content-rpc-contract.ts";
+import type {
+  BlacklistContentIdentityMatchInput,
+  BlacklistContentOperation,
+  BlacklistContentTagPageInput,
+} from "../core/blacklist-content-rpc-contract.ts";
+// @ts-expect-error Vite resolves the content-only copy during bundling.
+import * as contentRpc from "../core/blacklist-content-rpc-contract.ts?content-copy";
+const {
   BLACKLIST_CONTENT_IDENTITY_BATCH_SIZE,
   BLACKLIST_CONTENT_TAG_PAGE_SIZE,
   MAX_BLACKLIST_CONTENT_CURSOR_BYTES,
   createBlacklistContentRequest,
   isBlacklistContentQueryIdentity,
   parseBlacklistContentResponseEnvelope,
-  type BlacklistContentIdentityMatchInput,
-  type BlacklistContentOperation,
-  type BlacklistContentTagPageInput,
-} from "../core/blacklist-content-rpc-contract.ts";
+} = contentRpc as typeof ContentRpcModule;
 import type { BlacklistIdentityQueryDto } from "../core/blacklist-query-rpc-contract.ts";
 import {
   DEFAULT_TAG_ID,
@@ -24,6 +29,12 @@ import {
   type CommitInput,
   type UpvoterCommitInput,
 } from "./blacklist-state.ts";
+
+import type * as SourcePostModule from "../core/source-post.ts";
+import type { SourcePost } from "../core/source-post.ts";
+// @ts-expect-error Vite resolves the content-only copy during bundling.
+import * as contentSourcePost from "../core/source-post.ts?content-copy";
+const { isSourcePostId, parseSourcePost } = contentSourcePost as typeof SourcePostModule;
 
 interface RuntimeMessenger {
   sendMessage(message: unknown): Promise<unknown>;
@@ -47,6 +58,7 @@ export interface ContentIdentityMatchResult {
 }
 
 export interface BackgroundBlacklistGateway {
+  ensurePost(post: SourcePost): Promise<{ readonly post: SourcePost; readonly revision: number }>;
   initialize(): Promise<ContentBlacklistInitialization>;
   queryTagsPage(input: BlacklistContentTagPageInput): Promise<ContentTagDirectoryPage>;
   queryIdentityMatches(
@@ -101,7 +113,7 @@ function parseTag(value: unknown): CocoonTag | null {
     value.tagId === DEFAULT_TAG_ID
       ? [candidate]
       : [{ tagId: DEFAULT_TAG_ID, name: "default" }, candidate];
-  const parsed = parseBlacklistState({ schemaVersion: 5, tags, authors: [] });
+  const parsed = parseBlacklistState({ schemaVersion: 6, tags, authors: [], posts: [] });
   return parsed.status === "valid" ? (parsed.state.tags.at(-1) ?? null) : null;
 }
 
@@ -113,8 +125,17 @@ function parseAuthor(value: unknown): BlacklistedAuthor | null {
       : { tagId: value.tagId, name: "Validation tag" };
   const tags =
     tag.tagId === DEFAULT_TAG_ID ? [tag] : [{ tagId: DEFAULT_TAG_ID, name: "default" }, tag];
-  const parsed = parseBlacklistState({ schemaVersion: 5, tags, authors: [value] });
-  return parsed.status === "valid" ? (parsed.state.authors[0] ?? null) : null;
+  const sourcePostId = value.sourcePostId;
+  if (sourcePostId !== null && (!isSourcePostId(sourcePostId) || value.platformId !== "zhihu"))
+    return null;
+  const parsed = parseBlacklistState({
+    schemaVersion: 6,
+    tags,
+    posts: [],
+    authors: [{ ...value, sourcePostId: null }],
+  });
+  const author = parsed.status === "valid" ? parsed.state.authors[0] : null;
+  return author ? { ...author, sourcePostId } : null;
 }
 
 function parseInitialization(value: unknown): ContentBlacklistInitialization | null {
@@ -278,7 +299,30 @@ class RuntimeBackgroundBlacklistGateway implements BackgroundBlacklistGateway {
       operation,
     );
     if (!envelope?.ok) throw new Error("Background blacklist operation failed.");
+    if (
+      isRecord(envelope.result) &&
+      hasExactKeys(envelope.result, ["status"]) &&
+      envelope.result.status === "global-failure"
+    ) {
+      throw new Error("Background blacklist storage unavailable.");
+    }
     return envelope.result;
+  }
+
+  async ensurePost(
+    post: SourcePost,
+  ): Promise<{ readonly post: SourcePost; readonly revision: number }> {
+    const value = await this.request(
+      "ensure-post",
+      createBlacklistContentRequest("ensure-post", { post }),
+    );
+    if (!isRecord(value) || !hasExactKeys(value, ["post", "revision"]))
+      throw new Error("Invalid post receipt.");
+    const persisted = parseSourcePost(value.post);
+    const revision = parseCount(value.revision);
+    if (!persisted || persisted.postId !== post.postId || revision === null)
+      throw new Error("Invalid post receipt.");
+    return { post: persisted, revision };
   }
 
   async initialize(): Promise<ContentBlacklistInitialization> {

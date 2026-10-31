@@ -18,7 +18,7 @@ import { BLACKLIST_REVISION_STORAGE_KEY } from "../core/blacklist-revision-contr
 import {
   createBlacklistTransferFileMetadata,
   type BlacklistTransferAuthorDto,
-  type BlacklistTransferEnvelopeV1,
+  type BlacklistTransferEnvelopeV2,
 } from "../core/blacklist-transfer-values.ts";
 import {
   ImportChunkConflictError,
@@ -27,6 +27,8 @@ import {
   StaleBlacklistExportError,
   TransferFinalizeConflictError,
 } from "./blacklist-transfer-repository-errors.ts";
+import { parseStoredImportAuthor } from "./blacklist-idb-import-schema.ts";
+import { openBlacklistDatabase, requestResult, transactionDone } from "./blacklist-idb-schema.ts";
 import { readLogicalState, storeLogicalState } from "./blacklist-repository.test-support.ts";
 import {
   BLACKLIST_STORE_NAMES,
@@ -38,6 +40,36 @@ Object.defineProperty(globalThis, "IDBKeyRange", {
   configurable: true,
   value: FakeIDBKeyRange,
 });
+
+import type { SourcePost } from "../core/source-post.ts";
+import { createBlacklistTransferController } from "./blacklist-transfer-controller.ts";
+import { createBlacklistTransferRpcClient } from "../ui/blacklist-transfer-rpc.ts";
+import { parseBlacklistTransferRequest } from "../core/blacklist-transfer-rpc-contract.ts";
+import {
+  BLACKLIST_TRANSFER_RPC_BYTES,
+  blacklistTransferJsonBytes,
+  parseBlacklistTransferFileJson,
+} from "../core/blacklist-transfer-values.ts";
+import { createBlacklistTransferResponse } from "../core/blacklist-transfer-rpc-contract.ts";
+import { prepareBlacklistTransferJson } from "../options/transfer-file.ts";
+import { runBlacklistExport, runBlacklistImport } from "../options/transfer-pipeline.ts";
+
+const POST: SourcePost = {
+  postId: "zhihu:answer:2",
+  platformId: "zhihu",
+  kind: "answer",
+  contentId: "2",
+  title: "First synthetic title",
+  url: "https://www.zhihu.com/question/1/answer/2",
+};
+const OTHER_POST: SourcePost = {
+  postId: "zhihu:article:3",
+  platformId: "zhihu",
+  kind: "article",
+  contentId: "3",
+  title: "Other synthetic title",
+  url: "https://zhuanlan.zhihu.com/p/3",
+};
 
 const TIME = "2026-08-25T12:34:56.789Z";
 const HASH_A = "a".repeat(32);
@@ -73,6 +105,7 @@ function author(
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIME,
     blockSource: "direct",
+    sourcePostId: null,
     ...overrides,
   };
 }
@@ -86,15 +119,16 @@ function storedAuthor(
 
 function transfer(
   authors: readonly BlacklistTransferAuthorDto[],
-  tags: BlacklistTransferEnvelopeV1["tags"] = [{ tagId: DEFAULT_TAG_ID, name: "default" }],
-): BlacklistTransferEnvelopeV1 {
+  tags: BlacklistTransferEnvelopeV2["tags"] = [{ tagId: DEFAULT_TAG_ID, name: "default" }],
+): BlacklistTransferEnvelopeV2 {
   return {
     product: "cocoon-blacklist",
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: TIME,
-    schemaVersion: 5,
+    schemaVersion: 6,
     authors,
     tags,
+    posts: [],
   };
 }
 
@@ -128,7 +162,7 @@ function createHarness(label: string, overrides: Partial<BlacklistRepositoryOpti
 
 async function beginImport(
   repository: ReturnType<typeof createBlacklistRepository>,
-  value: BlacklistTransferEnvelopeV1,
+  value: BlacklistTransferEnvelopeV2,
   authorChunkCount = value.authors.length === 0 ? 0 : 1,
   tagChunkCount = 1,
 ) {
@@ -144,8 +178,16 @@ async function beginImport(
 async function stageSingleChunkTransfer(
   repository: ReturnType<typeof createBlacklistRepository>,
   sessionId: string,
-  value: BlacklistTransferEnvelopeV1,
+  value: BlacklistTransferEnvelopeV2,
 ): Promise<void> {
+  if (value.posts.length > 0) {
+    await repository.stagePostsChunk({
+      sessionId,
+      chunkIndex: 0,
+      startIndex: 0,
+      posts: value.posts,
+    });
+  }
   await repository.stageTagsChunk({
     sessionId,
     chunkIndex: 0,
@@ -212,9 +254,10 @@ test("BUG-016/AC-099 stages out of order, resumes after worker rebuild, and fina
   const result = await restarted.finalizeReplace(started.sessionId);
   strictEqual(result.revision, 2);
   deepStrictEqual((await readLogicalState(indexedDB, harness.databaseName)).state, {
-    schemaVersion: 5,
+    schemaVersion: 6,
     authors: imported.authors,
     tags: imported.tags,
+    posts: [],
   });
   strictEqual(await restarted.inspectImport(started.sessionId), null);
   deepStrictEqual(harness.storage.values.get(BLACKLIST_REVISION_STORAGE_KEY), {
@@ -317,12 +360,13 @@ test("BUG-016/AC-099 merge keeps local authors and remaps same-name imported tag
     memberHashId: HASH_A,
   });
   await replaceLive(harness.repository, harness.databaseName, {
-    schemaVersion: 5,
+    schemaVersion: 6,
     tags: [
       { tagId: DEFAULT_TAG_ID, name: "default" },
       { tagId: "local-work", name: "Work" },
     ],
     authors: [localDuplicate],
+    posts: [],
   });
   const imported = transfer(
     [
@@ -366,12 +410,13 @@ test("BUG-016/AC-099 tag-id/name and alias conflicts reject the whole finalize",
   ] as const) {
     const harness = createHarness(`conflict-${label}`);
     await replaceLive(harness.repository, harness.databaseName, {
-      schemaVersion: 5,
+      schemaVersion: 6,
       tags: [
         { tagId: DEFAULT_TAG_ID, name: "default" },
         { tagId: "local", name: "Local" },
       ],
       authors: [storedAuthor("owner", { memberHashId: HASH_A })],
+      posts: [],
     });
     const started = await beginImport(harness.repository, imported);
     await stageSingleChunkTransfer(harness.repository, started.sessionId, imported);
@@ -456,13 +501,14 @@ test("BUG-016/AC-099 injected clock drives expiry inspection and lazy cleanup wi
 test("BUG-016/AC-099 export pages preserve format order and become stale after revision changes", async () => {
   const harness = createHarness("export");
   await replaceLive(harness.repository, harness.databaseName, {
-    schemaVersion: 5,
+    schemaVersion: 6,
     tags: [
       { tagId: DEFAULT_TAG_ID, name: "default" },
       { tagId: "one", name: "One" },
       { tagId: "two", name: "Two" },
     ],
     authors: [storedAuthor("a"), storedAuthor("b", { tagId: "one" }), storedAuthor("c")],
+    posts: [],
   });
   const started = await harness.repository.beginExport();
   strictEqual(started.authorCount, 3);
@@ -502,6 +548,7 @@ test("BUG-016/AC-099 export pages preserve format order and become stale after r
     platformId: "zhihu",
     userId: "changed",
     authorNameAtCapture: "Changed",
+    sourcePostId: null,
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIME,
   });
@@ -524,7 +571,8 @@ test("BUG-016/AC-099 transfer repository never calls live authors/identifiers ge
   IDBObjectStore.prototype.getAll = function (...args: Parameters<IDBObjectStore["getAll"]>) {
     if (
       this.name === BLACKLIST_STORE_NAMES.authors ||
-      this.name === BLACKLIST_STORE_NAMES.identifiers
+      this.name === BLACKLIST_STORE_NAMES.identifiers ||
+      this.name === BLACKLIST_STORE_NAMES.posts
     ) {
       throw new Error("live getAll forbidden");
     }
@@ -533,7 +581,8 @@ test("BUG-016/AC-099 transfer repository never calls live authors/identifiers ge
   IDBIndex.prototype.getAll = function (...args: Parameters<IDBIndex["getAll"]>) {
     if (
       this.objectStore.name === BLACKLIST_STORE_NAMES.authors ||
-      this.objectStore.name === BLACKLIST_STORE_NAMES.identifiers
+      this.objectStore.name === BLACKLIST_STORE_NAMES.identifiers ||
+      this.objectStore.name === BLACKLIST_STORE_NAMES.posts
     ) {
       throw new Error("live getAll forbidden");
     }
@@ -556,4 +605,251 @@ test("BUG-016/AC-099 transfer repository never calls live authors/identifiers ge
     IDBObjectStore.prototype.getAll = originalStoreGetAll;
     IDBIndex.prototype.getAll = originalIndexGetAll;
   }
+});
+
+function transferClient(repository: ReturnType<typeof createBlacklistRepository>) {
+  const controller = createBlacklistTransferController(repository);
+  return createBlacklistTransferRpcClient(async (candidate) => {
+    const request = parseBlacklistTransferRequest(candidate);
+    if (!request) throw new Error("Invalid test request");
+    return controller.handleTransfer(
+      request.operation === "export-authors-page"
+        ? { ...request, input: { ...request.input, limit: 1 } }
+        : request,
+    );
+  });
+}
+
+test("POST-005 full export/import roundtrip deduplicates shared posts across pages and excludes orphans", async () => {
+  const source = createHarness("posts-roundtrip-source");
+  await replaceLive(source.repository, source.databaseName, {
+    ...createInitialState(),
+    posts: [POST, OTHER_POST],
+    authors: [
+      storedAuthor("a", { sourcePostId: POST.postId }),
+      storedAuthor("b", { sourcePostId: POST.postId }),
+    ],
+  });
+  const exported = await runBlacklistExport({ client: transferClient(source.repository) });
+  const json = await new Blob([...exported.parts]).text();
+  const parsed = parseBlacklistTransferFileJson(json);
+  strictEqual(parsed.status, "valid");
+  if (parsed.status !== "valid") throw new Error("Expected valid export");
+  deepStrictEqual(parsed.transfer.posts, [POST]);
+  deepStrictEqual(
+    parsed.transfer.authors.map(({ sourcePostId }) => sourcePostId),
+    [POST.postId, POST.postId],
+  );
+  const target = createHarness("posts-roundtrip-target");
+  await replaceLive(target.repository, target.databaseName, {
+    ...createInitialState(),
+    posts: [OTHER_POST],
+    authors: [storedAuthor("old", { sourcePostId: OTHER_POST.postId })],
+  });
+  const prepared = prepareBlacklistTransferJson(json);
+  if (prepared.status !== "valid") throw new Error("Expected prepared export");
+  await runBlacklistImport({
+    client: transferClient(target.repository),
+    prepared: prepared.prepared,
+    mode: "replace",
+    resumeSessionId: null,
+  });
+  const result = (await readLogicalState(indexedDB, target.databaseName)).state;
+  deepStrictEqual(result.posts, [POST]);
+  deepStrictEqual(result.authors, parsed.transfer.authors);
+});
+
+test("POST-005 merge keeps first shared title and never overwrites existing author provenance", async () => {
+  const harness = createHarness("posts-merge");
+  const existing = storedAuthor("existing");
+  await replaceLive(harness.repository, harness.databaseName, {
+    ...createInitialState(),
+    posts: [POST],
+    authors: [existing],
+  });
+  const imported = {
+    ...transfer([
+      author("existing", { sourcePostId: OTHER_POST.postId }),
+      author("new", { sourcePostId: POST.postId }),
+    ]),
+    posts: [{ ...POST, title: "Later title" }, OTHER_POST],
+  };
+  const session = await beginImport(harness.repository, imported);
+  await stageSingleChunkTransfer(harness.repository, session.sessionId, imported);
+  await harness.repository.finalizeMerge(session.sessionId);
+  const result = (await readLogicalState(indexedDB, harness.databaseName)).state;
+  deepStrictEqual(result.authors[0], existing);
+  strictEqual(result.authors[1]?.sourcePostId, POST.postId);
+  strictEqual(result.posts.find(({ postId }) => postId === POST.postId)?.title, POST.title);
+});
+
+test("POST-005 finalize rejects missing imported refs even when live posts exist, with atomic rollback", async () => {
+  for (const mode of ["merge", "replace"] as const) {
+    const harness = createHarness(`missing-post-${mode}`);
+    const before = { ...createInitialState(), posts: [POST], authors: [storedAuthor("old")] };
+    await replaceLive(harness.repository, harness.databaseName, before);
+    const imported = {
+      ...transfer([author("new", { sourcePostId: POST.postId })]),
+      posts: [OTHER_POST],
+    };
+    const session = await beginImport(harness.repository, imported);
+    await stageSingleChunkTransfer(harness.repository, session.sessionId, imported);
+    await rejects(
+      mode === "merge"
+        ? harness.repository.finalizeMerge(session.sessionId)
+        : harness.repository.finalizeReplace(session.sessionId),
+      IncompleteBlacklistImportError,
+    );
+    deepStrictEqual((await readLogicalState(indexedDB, harness.databaseName)).state, before);
+    strictEqual((await harness.repository.inspectImport(session.sessionId))?.status, "ready");
+  }
+});
+
+test("POST-005 author export pages budget attached post titles inside the RPC limit", async () => {
+  const harness = createHarness("post-page-bytes");
+  const posts: SourcePost[] = Array.from({ length: 120 }, (_, index) => ({
+    ...OTHER_POST,
+    postId: `zhihu:article:${index + 1}`,
+    contentId: String(index + 1),
+    title: "😀".repeat(500),
+    url: `https://zhuanlan.zhihu.com/p/${index + 1}`,
+  }));
+  await replaceLive(harness.repository, harness.databaseName, {
+    ...createInitialState(),
+    posts,
+    authors: posts.map((post, index) =>
+      storedAuthor(`synthetic-${index}`, {
+        sourcePostId: post.postId,
+        authorNameAtCapture: "😀".repeat(500),
+      }),
+    ),
+  });
+  const begun = await harness.repository.beginExport();
+  let cursor: string | null = null;
+  let count = 0;
+  let pages = 0;
+  do {
+    const page = await harness.repository.exportAuthorsPage({
+      revision: begun.revision,
+      cursor,
+      limit: 500,
+    });
+    strictEqual(
+      (blacklistTransferJsonBytes(
+        createBlacklistTransferResponse("export-authors-page", true, page),
+      ) ?? Infinity) <= BLACKLIST_TRANSFER_RPC_BYTES,
+      true,
+    );
+    strictEqual(page.posts.length, page.items.length);
+    count += page.items.length;
+    pages += 1;
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  strictEqual(count, 120);
+  strictEqual(pages > 1, true);
+});
+
+test("POST-005 post staging is persistent, duplicate-safe and rejects conflicting cross-chunk post ids", async () => {
+  const harness = createHarness("post-chunk-retry");
+  const value = {
+    ...transfer([author("new", { sourcePostId: POST.postId })]),
+    posts: [POST, OTHER_POST],
+  };
+  const metadata = {
+    ...createBlacklistTransferFileMetadata(
+      value,
+      new TextEncoder().encode(JSON.stringify(value)).byteLength,
+    ),
+    postChunkCount: 2,
+  };
+  const session = await harness.repository.beginImport(metadata);
+  const chunk = { sessionId: session.sessionId, chunkIndex: 0, startIndex: 0, posts: [POST] };
+  await harness.repository.stagePostsChunk(chunk);
+  const restarted = createBlacklistRepository(harness.options);
+  strictEqual((await restarted.stagePostsChunk(chunk)).status, "duplicate");
+  await rejects(
+    restarted.stagePostsChunk({ ...chunk, chunkIndex: 1, startIndex: 1 }),
+    ImportChunkConflictError,
+  );
+  await restarted.stagePostsChunk({ ...chunk, chunkIndex: 1, startIndex: 1, posts: [OTHER_POST] });
+  await restarted.stageTagsChunk({
+    sessionId: session.sessionId,
+    chunkIndex: 0,
+    startIndex: 0,
+    tags: value.tags,
+  });
+  await restarted.stageAuthorsChunk({
+    sessionId: session.sessionId,
+    chunkIndex: 0,
+    startIndex: 0,
+    authors: value.authors,
+  });
+  await restarted.finalizeReplace(session.sessionId);
+  deepStrictEqual((await readLogicalState(indexedDB, harness.databaseName)).state.posts, [
+    POST,
+    OTHER_POST,
+  ]);
+});
+
+test("POST-005 legacy sessions reject posts and references at staging and revalidate before atomic finalize", async () => {
+  const harness = createHarness("legacy-reject-provenance");
+  const before = { ...createInitialState(), posts: [POST], authors: [storedAuthor("old")] };
+  await replaceLive(harness.repository, harness.databaseName, before);
+  const value = transfer([author("legacy")]);
+  const metadata = createBlacklistTransferFileMetadata(value, JSON.stringify(value).length - 31, 1);
+  const session = await harness.repository.beginImport(metadata);
+  const input = { sessionId: session.sessionId, chunkIndex: 0, startIndex: 0 };
+  await rejects(
+    harness.repository.stagePostsChunk({ ...input, posts: [POST] }),
+    ImportChunkConflictError,
+  );
+  await rejects(
+    harness.repository.stageAuthorsChunk({
+      ...input,
+      authors: [author("legacy", { sourcePostId: POST.postId })],
+    }),
+    ImportChunkConflictError,
+  );
+  await stageSingleChunkTransfer(harness.repository, session.sessionId, value);
+  const database = await openBlacklistDatabase(indexedDB, harness.databaseName);
+  try {
+    const transaction = database.transaction(BLACKLIST_STORE_NAMES.importAuthors, "readwrite");
+    const done = transactionDone(transaction);
+    const store = transaction.objectStore(BLACKLIST_STORE_NAMES.importAuthors);
+    const staged = parseStoredImportAuthor(await requestResult(store.get([session.sessionId, 0])));
+    if (!staged) throw new Error("Expected staged author");
+    store.put({ ...staged, sourcePostId: POST.postId });
+    await done;
+  } finally {
+    database.close();
+  }
+  await rejects(
+    harness.repository.finalizeReplace(session.sessionId),
+    IncompleteBlacklistImportError,
+  );
+  deepStrictEqual((await readLogicalState(indexedDB, harness.databaseName)).state, before);
+  strictEqual((await harness.repository.inspectImport(session.sessionId))?.status, "ready");
+});
+
+test("POST-005 legacy format1 pipeline import writes null references and no posts", async () => {
+  const value = transfer([author("legacy")]);
+  const header = { ...value, posts: undefined };
+  const json = JSON.stringify({
+    ...header,
+    formatVersion: 1,
+    schemaVersion: 5,
+    authors: value.authors.map((item) => ({ ...item, sourcePostId: undefined })),
+  });
+  const prepared = prepareBlacklistTransferJson(json);
+  if (prepared.status !== "valid") throw new Error("Expected prepared legacy import");
+  const harness = createHarness("legacy-posts");
+  await runBlacklistImport({
+    client: transferClient(harness.repository),
+    prepared: prepared.prepared,
+    mode: "replace",
+    resumeSessionId: null,
+  });
+  const result = (await readLogicalState(indexedDB, harness.databaseName)).state;
+  deepStrictEqual(result.authors, value.authors);
+  deepStrictEqual(result.posts, []);
 });

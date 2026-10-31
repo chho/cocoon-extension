@@ -38,6 +38,7 @@ function author(
     tagId: DEFAULT_TAG_ID,
     blacklistedAt: TIME,
     blockSource: "direct",
+    sourcePostId: null,
     ...overrides,
   };
 }
@@ -51,6 +52,8 @@ function dto(value: BlacklistState["authors"][number]): BlacklistAuthorDto {
     tagId: value.tagId,
     blacklistedAt: value.blacklistedAt,
     source: value.blockSource,
+    sourcePostId: value.sourcePostId,
+    sourcePost: null,
   };
 }
 
@@ -99,6 +102,10 @@ class MemoryRepository implements BlacklistRepository {
 
   constructor(storage: MemoryStorage) {
     this.storage = storage;
+  }
+
+  async ensurePost(): Promise<never> {
+    throw new Error("Not used by management fixture");
   }
 
   private async read(): Promise<BlacklistState> {

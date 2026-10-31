@@ -8,6 +8,7 @@ import type { BlacklistedAuthor, CocoonTag, CommitInput } from "./blacklist-stat
 const DEFAULT_TAG = { tagId: "default", name: "default" };
 const CUSTOM_TAG = { tagId: "reading", name: "Reading" };
 const AUTHOR: BlacklistedAuthor = {
+  sourcePostId: null,
   platformId: "zhihu",
   userId: "synthetic-callback-author",
   memberHashId: null,
@@ -17,6 +18,7 @@ const AUTHOR: BlacklistedAuthor = {
   blockSource: "direct",
 };
 const INPUT: CommitInput = {
+  sourcePostId: null,
   platformId: AUTHOR.platformId,
   userId: AUTHOR.userId,
   memberHashId: null,
@@ -26,6 +28,7 @@ const INPUT: CommitInput = {
   blacklistedAt: "2026-09-07T00:00:00.000Z",
 };
 const UPVOTER_INPUT = {
+  sourcePostId: null,
   platformId: INPUT.platformId,
   userId: INPUT.userId,
   authorNameAtCapture: INPUT.authorNameAtCapture,
@@ -52,6 +55,7 @@ function createHarness() {
   }
   const client = createBackgroundBlacklistClient({
     gateway: {
+      ensurePost: async (post) => ({ post, revision: (await write(post)).revision }),
       async initialize() {
         return { revision: state.revision, authorCount: 1, tagCount: state.tags.length };
       },
@@ -105,12 +109,30 @@ function createHarness() {
   });
   // Production runtime passes these methods to other controller dependency objects unchanged.
   const callbacks = {
+    ensurePost: client.ensurePost,
     commitAuthor: client.commitAuthor,
     commitUpvoter: client.commitUpvoter,
     deleteTag: client.deleteTag,
   };
   return { client, callbacks, calls, revisions, remembered, appliedTags, state };
 }
+
+test("POST-002 ensurePost callback retains its receiver and advances revision without caching authors", async () => {
+  const harness = createHarness();
+  const post = {
+    postId: "zhihu:article:2",
+    platformId: "zhihu",
+    kind: "article",
+    contentId: "2",
+    title: "Synthetic",
+    url: "https://zhuanlan.zhihu.com/p/2",
+  } as const;
+  await harness.client.initialize();
+  deepStrictEqual(await harness.callbacks.ensurePost(post), { post, revision: 2 });
+  deepStrictEqual(harness.calls, [post]);
+  deepStrictEqual(harness.revisions, [1, 2]);
+  deepStrictEqual(harness.remembered, []);
+});
 
 const SCENARIOS = [
   { operation: "commitAuthor", input: INPUT, source: "direct" },

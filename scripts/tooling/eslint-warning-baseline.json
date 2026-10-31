@@ -245,38 +245,6 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "complexity",
       "messageId": "complex",
-      "message": "Function 'isRestorableAuthor' has a complexity of 16. Maximum allowed is 10.",
-      "sourceLine": "function isRestorableAuthor(author: BlacklistedAuthor): boolean {",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseAuthor' has a complexity of 23. Maximum allowed is 10.",
-      "sourceLine": "function parseAuthor(",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'parseBlacklistState' has a complexity of 28. Maximum allowed is 10.",
-      "sourceLine": "export function parseBlacklistState(value: unknown): ParsedBlacklistState {",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Function 'planAuthorCommit' has a complexity of 23. Maximum allowed is 10.",
-      "sourceLine": "export function planAuthorCommit(state: BlacklistState, input: CommitInput): CommitPlan {",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
       "message": "Function 'planMemberHashBackfill' has a complexity of 11. Maximum allowed is 10.",
       "sourceLine": "export function planMemberHashBackfill(",
       "count": 1
@@ -285,32 +253,8 @@
       "path": "src/content/blacklist-state.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'parseBlacklistState' has too many lines (79). Maximum allowed is 50.",
-      "sourceLine": "export function parseBlacklistState(value: unknown): ParsedBlacklistState {",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'planAuthorCommit' has too many lines (80). Maximum allowed is 50.",
-      "sourceLine": "export function planAuthorCommit(state: BlacklistState, input: CommitInput): CommitPlan {",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
       "message": "Function 'planMemberHashBackfill' has too many lines (51). Maximum allowed is 50.",
       "sourceLine": "export function planMemberHashBackfill(",
-      "count": 1
-    },
-    {
-      "path": "src/content/blacklist-state.ts",
-      "ruleId": "max-lines",
-      "messageId": "exceed",
-      "message": "File has too many lines (735). Maximum allowed is 500.",
-      "sourceLine": "if (",
       "count": 1
     },
     {
@@ -378,14 +322,6 @@
       "count": 1
     },
     {
-      "path": "src/content/remote-block-coordinator.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createRemoteBlockCoordinator' has too many lines (118). Maximum allowed is 50.",
-      "sourceLine": "export function createRemoteBlockCoordinator(",
-      "count": 1
-    },
-    {
       "path": "src/content/remote-options-view.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
@@ -399,22 +335,6 @@
       "messageId": "exceed",
       "message": "Function 'createMemberUserIdResolver' has too many lines (57). Maximum allowed is 50.",
       "sourceLine": "export function createMemberUserIdResolver(",
-      "count": 1
-    },
-    {
-      "path": "src/content/voter-batch-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async method 'run' has too many lines (105). Maximum allowed is 50.",
-      "sourceLine": "async run(request) {",
-      "count": 1
-    },
-    {
-      "path": "src/content/voter-batch-controller.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Function 'createVoterBatchController' has too many lines (111). Maximum allowed is 50.",
-      "sourceLine": "export function createVoterBatchController(",
       "count": 1
     },
     {
@@ -597,7 +517,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (665). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (663). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -606,7 +526,7 @@
       "ruleId": "max-lines",
       "messageId": "exceed",
       "message": "File has too many lines (826). Maximum allowed is 500.",
-      "sourceLine": "});",
+      "sourceLine": "onActivate(activation) {",
       "count": 1
     },
     {

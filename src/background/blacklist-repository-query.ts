@@ -1,3 +1,4 @@
+import { authorItem, hydrateSourcePosts, boundedAuthorItems } from "./blacklist-author-page.ts";
 import type { CocoonTag } from "../content/blacklist-state.ts";
 import type {
   BlacklistAuthorListItemDto,
@@ -20,7 +21,6 @@ import {
   type StoredAuthor,
   type StoredBlacklistMetadata,
 } from "./blacklist-idb-schema.ts";
-import { logicalAuthor } from "./blacklist-repository-records.ts";
 
 export class StaleBlacklistCursorError extends Error {
   constructor() {
@@ -263,29 +263,9 @@ function authorMatches(author: StoredAuthor, tag: CocoonTag, query: AuthorPageQu
   );
 }
 
-function authorItem(author: StoredAuthor, tag: CocoonTag): BlacklistAuthorListItemDto {
-  const logical = logicalAuthor(author);
-  return {
-    author: {
-      platformId: logical.platformId,
-      userId: logical.userId,
-      memberHashId: logical.memberHashId,
-      authorName: logical.authorNameAtCapture,
-      tagId: logical.tagId,
-      blacklistedAt: logical.blacklistedAt,
-      source: logical.blockSource,
-    },
-    tag: {
-      tagId: tag.tagId,
-      name: tag.name,
-      isDefault: tag.tagId === "default",
-    },
-  };
-}
-
 interface AuthorScanResult {
   readonly items: readonly BlacklistAuthorListItemDto[];
-  readonly lastIncludedKey: readonly IDBValidKey[] | null;
+  readonly includedKeys: readonly (readonly IDBValidKey[])[];
   readonly totalCount: number;
   readonly hasMore: boolean;
 }
@@ -301,14 +281,14 @@ function scanAuthors(options: {
     const { index, range, tags, query, countAll } = options;
     const items: BlacklistAuthorListItemDto[] = [];
     let totalCount = 0;
-    let lastIncludedKey: readonly IDBValidKey[] | null = null;
+    const includedKeys: (readonly IDBValidKey[])[] = [];
     let hasMore = false;
     const request = index.openCursor(range);
     request.onerror = () => reject(request.error ?? new Error("Author query failed."));
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
-        resolve({ items, lastIncludedKey, totalCount, hasMore });
+        resolve({ items, includedKeys, totalCount, hasMore });
         return;
       }
       const raw = cursor.value as Record<string, unknown>;
@@ -322,10 +302,10 @@ function scanAuthors(options: {
         totalCount += 1;
         if (items.length < query.limit) {
           items.push(authorItem(parsed, tag));
-          lastIncludedKey = cursor.key as IDBValidKey[];
+          includedKeys.push(cursor.key as IDBValidKey[]);
         } else if (!countAll) {
           hasMore = true;
-          resolve({ items, lastIncludedKey, totalCount, hasMore });
+          resolve({ items, includedKeys, totalCount, hasMore });
           return;
         } else {
           hasMore = true;
@@ -354,12 +334,37 @@ function authorCursorFor(
   return cursor;
 }
 
+function encodeAuthorPageCursor(
+  query: AuthorPageQuery,
+  revision: number,
+  key: readonly IDBValidKey[],
+  totalCount: number,
+): string {
+  return encodeCursor({
+    version: 1,
+    operation: "authors-page",
+    revision,
+    search: query.search,
+    searchScope: query.searchScope,
+    tagId: query.tagId,
+    platformId: query.platformId,
+    direction: query.direction,
+    key,
+    totalCount,
+  });
+}
+
 export async function queryAuthorsPage(
   database: IDBDatabase,
   query: AuthorPageQuery,
 ): Promise<AuthorPageResult> {
   const transaction = database.transaction(
-    [BLACKLIST_STORE_NAMES.authors, BLACKLIST_STORE_NAMES.tags, BLACKLIST_STORE_NAMES.metadata],
+    [
+      BLACKLIST_STORE_NAMES.authors,
+      BLACKLIST_STORE_NAMES.tags,
+      BLACKLIST_STORE_NAMES.metadata,
+      BLACKLIST_STORE_NAMES.posts,
+    ],
     "readonly",
   );
   const done = transactionDone(transaction);
@@ -377,25 +382,18 @@ export async function queryAuthorsPage(
     query,
     countAll: cursor === null,
   });
+  const items = boundedAuthorItems(await hydrateSourcePosts(transaction, scan.items));
   await done;
   const totalCount = cursor?.totalCount ?? scan.totalCount;
-  const hasMore = cursor === null ? totalCount > scan.items.length : scan.hasMore;
+  const hasMore =
+    items.length < scan.items.length ||
+    (cursor === null ? totalCount > items.length : scan.hasMore);
+  const lastIncludedKey = scan.includedKeys[items.length - 1];
   const nextCursor =
-    hasMore && scan.lastIncludedKey
-      ? encodeCursor({
-          version: 1,
-          operation: "authors-page",
-          revision: metadata.revision,
-          search: query.search,
-          searchScope: query.searchScope,
-          tagId: query.tagId,
-          platformId: query.platformId,
-          direction: query.direction,
-          key: scan.lastIncludedKey,
-          totalCount,
-        })
+    hasMore && lastIncludedKey
+      ? encodeAuthorPageCursor(query, metadata.revision, lastIncludedKey, totalCount)
       : null;
-  return { ...summary(metadata), items: scan.items, nextCursor, totalCount };
+  return { ...summary(metadata), items, nextCursor, totalCount };
 }
 
 export async function queryTagsPage(

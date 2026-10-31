@@ -1,11 +1,7 @@
 import { deepStrictEqual, rejects, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  DEFAULT_TAG_ID,
-  parseBlacklistState,
-  type BlacklistState,
-} from "./blacklist-state.ts";
+import { DEFAULT_TAG_ID, parseBlacklistState, type BlacklistState } from "./blacklist-state.ts";
 import { initializeBlacklistState } from "./initialize-blacklist-state.ts";
 
 const TIMESTAMP = "2026-08-13T12:34:56.789Z";
@@ -27,7 +23,7 @@ function legacyState(authorIds: readonly string[] = []) {
   };
 }
 
-test("PLATFORM-001 migrates v1 to v5 in one locked write without legacy image data", async () => {
+test("PLATFORM-001 migrates v1 to v6 in one locked write without legacy image data", async () => {
   let stored: unknown = legacyState(["legacy-user"]);
   const writes: BlacklistState[] = [];
   const result = await initializeBlacklistState({
@@ -46,17 +42,21 @@ test("PLATFORM-001 migrates v1 to v5 in one locked write without legacy image da
   strictEqual(result.status, "valid");
   strictEqual(writes.length, 1);
   deepStrictEqual(writes[0], {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: legacyState().tags,
-    authors: [{
-      platformId: "zhihu",
-      userId: "legacy-user",
-      memberHashId: null,
-      authorNameAtCapture: "Name legacy-user",
-      tagId: "saved",
-      blacklistedAt: null,
-      blockSource: "direct",
-    }],
+    authors: [
+      {
+        platformId: "zhihu",
+        userId: "legacy-user",
+        memberHashId: null,
+        authorNameAtCapture: "Name legacy-user",
+        tagId: "saved",
+        blacklistedAt: null,
+        blockSource: "direct",
+        sourcePostId: null,
+      },
+    ],
   });
 });
 
@@ -77,30 +77,37 @@ test("migration re-reads under lock so a concurrent legacy update is preserved",
       stored = state;
     },
   });
-  deepStrictEqual(writes[0]?.authors.map((author) => ({
-    platformId: author.platformId,
-    userId: author.userId,
-    memberHashId: author.memberHashId,
-  })), [
-    { platformId: "zhihu", userId: "initial", memberHashId: null },
-    { platformId: "zhihu", userId: "concurrent", memberHashId: null },
-  ]);
+  deepStrictEqual(
+    writes[0]?.authors.map((author) => ({
+      platformId: author.platformId,
+      userId: author.userId,
+      memberHashId: author.memberHashId,
+    })),
+    [
+      { platformId: "zhihu", userId: "initial", memberHashId: null },
+      { platformId: "zhihu", userId: "concurrent", memberHashId: null },
+    ],
+  );
 });
 
-test("initialization does not overwrite a valid v5 state created before lock acquisition", async () => {
+test("initialization does not overwrite a valid v6 state created before lock acquisition", async () => {
   let stored: unknown = undefined;
   const concurrentState: BlacklistState = {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
-    authors: [{
-      platformId: "zhihu",
-      userId: "concurrent",
-      memberHashId: null,
-      authorNameAtCapture: "Concurrent",
-      tagId: DEFAULT_TAG_ID,
-      blacklistedAt: TIMESTAMP,
-      blockSource: "direct",
-    }],
+    authors: [
+      {
+        platformId: "zhihu",
+        userId: "concurrent",
+        memberHashId: null,
+        authorNameAtCapture: "Concurrent",
+        tagId: DEFAULT_TAG_ID,
+        blacklistedAt: TIMESTAMP,
+        blockSource: "direct",
+        sourcePostId: null,
+      },
+    ],
   };
   let writes = 0;
   const result = await initializeBlacklistState({
@@ -124,16 +131,19 @@ test("initialization does not overwrite a valid v5 state created before lock acq
 test("migration write failure leaves the legacy value untouched", async () => {
   const legacy = legacyState(["legacy-user"]);
   let stored: unknown = legacy;
-  await rejects(initializeBlacklistState({
-    async withExclusiveLock(operation) {
-      return operation();
-    },
-    async readState() {
-      return parseBlacklistState(stored);
-    },
-    async writeState() {
-      throw new Error("storage unavailable");
-    },
-  }), /storage unavailable/);
+  await rejects(
+    initializeBlacklistState({
+      async withExclusiveLock(operation) {
+        return operation();
+      },
+      async readState() {
+        return parseBlacklistState(stored);
+      },
+      async writeState() {
+        throw new Error("storage unavailable");
+      },
+    }),
+    /storage unavailable/,
+  );
   strictEqual(stored, legacy);
 });

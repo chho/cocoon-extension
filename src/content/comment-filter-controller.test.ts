@@ -555,6 +555,7 @@ function blockedAliasState(memberHashId: string | null = null): BlacklistState {
         tagId: "default",
         blacklistedAt: ALIAS_TIMESTAMP,
         blockSource: "direct",
+        sourcePostId: null,
       },
     ],
   };

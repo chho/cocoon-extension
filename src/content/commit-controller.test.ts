@@ -79,6 +79,8 @@ function createHarness(options: { readonly failUserId?: string } = {}) {
       const userId = target.profileUserIdAtClick;
       return userId ? { userId, memberHashId: target.memberHashIdAtClick } : null;
     },
+    resolveSourcePost: () => null,
+    ensurePost: async (post) => ({ post, revision }),
     now() {
       clockCalls += 1;
       return new Date(TIMESTAMP);
@@ -144,6 +146,54 @@ function createHarness(options: { readonly failUserId?: string } = {}) {
   };
 }
 
+test("POST-002 ensures the post before direct persistence and stops on ensure failure", async () => {
+  const post = {
+    postId: "zhihu:answer:2",
+    platformId: "zhihu",
+    kind: "answer",
+    contentId: "2",
+    title: "Title",
+    url: "https://www.zhihu.com/question/1/answer/2",
+  } as const;
+  for (const fails of [false, true]) {
+    const events: string[] = [];
+    const controller = createCommitController<TestCard, TestButton>({
+      async resolveAuthorIdentity() {
+        return { userId: "person", memberHashId: null };
+      },
+      resolveSourcePost() {
+        return post;
+      },
+      async ensurePost(value) {
+        deepStrictEqual(value, post);
+        events.push("post");
+        if (fails) throw new Error("storage failed");
+        return { post, revision: 1 };
+      },
+      now: () => new Date(TIMESTAMP),
+      async commitAuthor(input) {
+        events.push("author");
+        strictEqual(input.sourcePostId, post.postId);
+        return {
+          status: "persisted",
+          author: { ...input, tagId: "default", blockSource: "direct" },
+          tag: null,
+          baseRevision: 1,
+          revision: 2,
+          authorCount: 1,
+          tagCount: 1,
+        };
+      },
+      requestFailureFocus() {},
+      reportFailure() {},
+    });
+    const result = await controller.commit(task("post"));
+    deepStrictEqual(events, fails ? ["post"] : ["post", "author"]);
+    strictEqual(result.status, fails ? "failed" : "persisted");
+    if (result.status === "persisted") strictEqual(result.author.sourcePostId, post.postId);
+  }
+});
+
 test("CAP-007 concurrent duplicate commits perform one image-free write", async () => {
   const harness = createHarness();
   const duplicateTask = task("duplicate", undefined, {
@@ -165,6 +215,7 @@ test("CAP-007 concurrent duplicate commits perform one image-free write", async 
     authorNameAtCapture: "author-duplicate",
     tagId: "default",
     blacklistedAt: TIMESTAMP,
+    sourcePostId: null,
     blockSource: "direct",
   });
 });
@@ -221,6 +272,7 @@ test("BUG-008 exact duplicate backfills a proven hash in one atomic write withou
         authorNameAtCapture: "First name",
         tagId: "default",
         blacklistedAt: TIMESTAMP,
+        sourcePostId: null,
         blockSource: "direct",
       },
     ],
@@ -255,6 +307,7 @@ test("BUG-008 duplicate alias conflict fails with no write or runtime mutation",
         authorNameAtCapture: "Existing",
         tagId: "default",
         blacklistedAt: TIMESTAMP,
+        sourcePostId: null,
         blockSource: "direct",
       },
       {
@@ -264,6 +317,7 @@ test("BUG-008 duplicate alias conflict fails with no write or runtime mutation",
         authorNameAtCapture: "Other",
         tagId: "default",
         blacklistedAt: TIMESTAMP,
+        sourcePostId: null,
         blockSource: "direct",
       },
     ],

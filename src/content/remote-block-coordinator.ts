@@ -1,4 +1,8 @@
 import type { AuthorMutationResult } from "../background/blacklist-repository-types.ts";
+import type * as ContentRpcModule from "../core/blacklist-content-rpc-contract.ts";
+// @ts-expect-error Vite resolves the content-only copy during bundling.
+import * as contentRpc from "../core/blacklist-content-rpc-contract.ts?content-copy";
+const { isBlacklistContentUpvoterInput } = contentRpc as typeof ContentRpcModule;
 import {
   ZHIHU_PLATFORM_ID,
   createBlacklistTimestamp,
@@ -21,6 +25,7 @@ export type UserBlockRequest =
       readonly userId: string;
       readonly authorName: string;
       readonly tagId: string;
+      readonly sourcePostId: string | null;
     };
 
 export type CoordinatedBlockResult =
@@ -35,7 +40,14 @@ export type CoordinatedBlockResult =
   | { readonly status: "stopped" }
   | {
       readonly status: "failed";
-      readonly reason: "authentication" | "rate-limit" | "csrf" | "network" | "http" | "storage";
+      readonly reason:
+        | "authentication"
+        | "rate-limit"
+        | "csrf"
+        | "network"
+        | "http"
+        | "storage"
+        | "storage-global";
     };
 
 export type CrossContextTryLockResult<T> =
@@ -87,96 +99,103 @@ function slotLockName(userId: string): string {
   return `${SLOT_LOCK_PREFIX}-${slot}`;
 }
 
+async function persistUpvoter(
+  dependencies: RemoteBlockCoordinatorDependencies,
+  request: UpvoterBlockRequest,
+  isStopped: () => boolean,
+): Promise<CoordinatedBlockResult> {
+  if (isStopped()) return { status: "stopped" };
+  try {
+    const input: UpvoterCommitInput = {
+      platformId: ZHIHU_PLATFORM_ID,
+      userId: request.userId,
+      authorNameAtCapture: request.authorName,
+      tagId: request.tagId,
+      sourcePostId: request.sourcePostId,
+      blacklistedAt: createBlacklistTimestamp(dependencies.now),
+    };
+    if (!isBlacklistContentUpvoterInput(input)) return { status: "failed", reason: "storage" };
+    const result = await dependencies.commitUpvoter(input);
+    if (result.status === "invalid") {
+      return { status: "failed", reason: "storage" };
+    }
+    if (result.status === "duplicate") {
+      return { status: "skipped", reason: "existing" };
+    }
+    return { status: "success", persistedUpvoter: true };
+  } catch (error) {
+    dependencies.reportStorageFailure(error);
+    return { status: "failed", reason: "storage-global" };
+  }
+}
+
+async function checkPreflight(
+  dependencies: RemoteBlockCoordinatorDependencies,
+  request: DirectBlockRequest,
+): Promise<CoordinatedBlockResult | null> {
+  try {
+    const result = await dependencies.preflightDirect(
+      request.userId,
+      request.expectedBlacklistedAt,
+    );
+    return result.status === "ready" ? null : { status: "skipped", reason: "existing" };
+  } catch (error) {
+    dependencies.reportStorageFailure(error);
+    return { status: "failed", reason: "storage" };
+  }
+}
+
+async function runInBlockSlot(
+  dependencies: RemoteBlockCoordinatorDependencies,
+  request: DirectBlockRequest,
+  isStopped: () => boolean,
+): Promise<SlotResult> {
+  return dependencies.withCrossContextLock(slotLockName(request.userId), async () => {
+    if (isStopped()) return { status: "remote", result: { status: "stopped" } };
+    const latestPreflight = await checkPreflight(dependencies, request);
+    if (latestPreflight) return { status: "preflight", result: latestPreflight };
+    if (isStopped()) return { status: "remote", result: { status: "stopped" } };
+    try {
+      return {
+        status: "remote",
+        result: await dependencies.blockUser(request.userId, isStopped),
+      };
+    } catch {
+      return {
+        status: "remote",
+        result: { status: "failed", reason: "network" },
+      };
+    }
+  });
+}
+
+async function executeDirectUserLocked(
+  dependencies: RemoteBlockCoordinatorDependencies,
+  request: DirectBlockRequest,
+  isStopped: () => boolean,
+): Promise<CoordinatedBlockResult> {
+  if (isStopped()) return { status: "stopped" };
+  const initialPreflight = await checkPreflight(dependencies, request);
+  if (initialPreflight) return initialPreflight;
+  if (isStopped()) return { status: "stopped" };
+
+  let slotResult: SlotResult;
+  try {
+    slotResult = await runInBlockSlot(dependencies, request, isStopped);
+  } catch {
+    return { status: "failed", reason: "network" };
+  }
+  if (slotResult.status === "preflight") return slotResult.result;
+  const remote = slotResult.result;
+  if (remote.status === "stopped") return { status: "stopped" };
+  if (remote.status === "failed") return { status: "failed", reason: remote.reason };
+  return { status: "success", persistedUpvoter: false };
+}
+
 export function createRemoteBlockCoordinator(
   dependencies: RemoteBlockCoordinatorDependencies,
 ): RemoteBlockCoordinator {
   const inFlight = new Map<string, Promise<CoordinatedBlockResult>>();
-
-  async function checkPreflight(
-    request: DirectBlockRequest,
-  ): Promise<CoordinatedBlockResult | null> {
-    try {
-      const result = await dependencies.preflightDirect(
-        request.userId,
-        request.expectedBlacklistedAt,
-      );
-      return result.status === "ready" ? null : { status: "skipped", reason: "existing" };
-    } catch (error) {
-      dependencies.reportStorageFailure(error);
-      return { status: "failed", reason: "storage" };
-    }
-  }
-
-  async function persistUpvoter(
-    request: UpvoterBlockRequest,
-    isStopped: () => boolean,
-  ): Promise<CoordinatedBlockResult> {
-    if (isStopped()) return { status: "stopped" };
-    try {
-      const result = await dependencies.commitUpvoter({
-        platformId: ZHIHU_PLATFORM_ID,
-        userId: request.userId,
-        authorNameAtCapture: request.authorName,
-        tagId: request.tagId,
-        blacklistedAt: createBlacklistTimestamp(dependencies.now),
-      });
-      if (result.status === "invalid") {
-        throw new Error("Unable to create an upvoter blacklist record.");
-      }
-      if (result.status === "duplicate") {
-        return { status: "skipped", reason: "existing" };
-      }
-      return { status: "success", persistedUpvoter: true };
-    } catch (error) {
-      dependencies.reportStorageFailure(error);
-      return { status: "failed", reason: "storage" };
-    }
-  }
-
-  async function runInBlockSlot(
-    request: DirectBlockRequest,
-    isStopped: () => boolean,
-  ): Promise<SlotResult> {
-    return dependencies.withCrossContextLock(slotLockName(request.userId), async () => {
-      if (isStopped()) return { status: "remote", result: { status: "stopped" } };
-      const latestPreflight = await checkPreflight(request);
-      if (latestPreflight) return { status: "preflight", result: latestPreflight };
-      if (isStopped()) return { status: "remote", result: { status: "stopped" } };
-      try {
-        return {
-          status: "remote",
-          result: await dependencies.blockUser(request.userId, isStopped),
-        };
-      } catch {
-        return {
-          status: "remote",
-          result: { status: "failed", reason: "network" },
-        };
-      }
-    });
-  }
-
-  async function executeDirectUserLocked(
-    request: DirectBlockRequest,
-    isStopped: () => boolean,
-  ): Promise<CoordinatedBlockResult> {
-    if (isStopped()) return { status: "stopped" };
-    const initialPreflight = await checkPreflight(request);
-    if (initialPreflight) return initialPreflight;
-    if (isStopped()) return { status: "stopped" };
-
-    let slotResult: SlotResult;
-    try {
-      slotResult = await runInBlockSlot(request, isStopped);
-    } catch {
-      return { status: "failed", reason: "network" };
-    }
-    if (slotResult.status === "preflight") return slotResult.result;
-    const remote = slotResult.result;
-    if (remote.status === "stopped") return { status: "stopped" };
-    if (remote.status === "failed") return { status: "failed", reason: remote.reason };
-    return { status: "success", persistedUpvoter: false };
-  }
 
   async function executeDirect(
     request: DirectBlockRequest,
@@ -186,7 +205,7 @@ export function createRemoteBlockCoordinator(
     try {
       const locked = await dependencies.tryWithCrossContextUserLock(
         userLockName(request.userId),
-        async () => executeDirectUserLocked(request, isStopped),
+        async () => executeDirectUserLocked(dependencies, request, isStopped),
       );
       return locked.acquired ? locked.value : { status: "skipped", reason: "concurrent" };
     } catch {
@@ -196,7 +215,7 @@ export function createRemoteBlockCoordinator(
 
   return {
     async block(request, isStopped = () => false) {
-      if (request.source === "upvoter") return persistUpvoter(request, isStopped);
+      if (request.source === "upvoter") return persistUpvoter(dependencies, request, isStopped);
       const existingRequest = inFlight.get(request.userId);
       if (existingRequest) {
         await existingRequest;

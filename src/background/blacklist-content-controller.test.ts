@@ -10,12 +10,57 @@ function request(
   input: unknown,
 ): BlacklistContentRequest {
   return {
-    version: 2,
+    version: 3,
     type: "cocoon.blacklist.content.request",
     operation,
     input,
   } as unknown as BlacklistContentRequest;
 }
+
+test("POST-002 post persistence runs inside the lock and global failures are sanitized", async () => {
+  const post = {
+    postId: "zhihu:article:2",
+    platformId: "zhihu",
+    kind: "article",
+    contentId: "2",
+    title: "Title",
+    url: "https://zhuanlan.zhihu.com/p/2",
+  } as const;
+  let locked = false;
+  let fail = false;
+  const controller = createBlacklistContentController(
+    {
+      async ensurePost(input: unknown) {
+        strictEqual(locked, true);
+        deepStrictEqual(input, post);
+        if (fail) throw new DOMException("Do not expose storage details", "QuotaExceededError");
+        return { post, revision: 2 };
+      },
+      async commitUpvoter() {
+        throw new Error("Do not expose storage details");
+      },
+    } as unknown as BlacklistRepository,
+    {
+      async runExclusive(operation) {
+        locked = true;
+        try {
+          return await operation();
+        } finally {
+          locked = false;
+        }
+      },
+    },
+  );
+  deepStrictEqual(await controller.handle(request("ensure-post", { post })), { post, revision: 2 });
+  fail = true;
+  deepStrictEqual(await controller.handle(request("ensure-post", { post })), {
+    status: "global-failure",
+  });
+  deepStrictEqual(await controller.handle(request("commit-upvoter", { input: {} })), {
+    status: "global-failure",
+  });
+  strictEqual(locked, false);
+});
 
 test("BUG-016 content initialization and identity checks use bounded queries, never repository hydration", async () => {
   let hydrateCalls = 0;

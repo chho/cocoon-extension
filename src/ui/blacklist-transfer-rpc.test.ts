@@ -7,7 +7,7 @@ import {
 } from "../core/blacklist-transfer-rpc-contract.ts";
 import {
   createBlacklistTransferFileMetadata,
-  type BlacklistTransferEnvelopeV1,
+  type BlacklistTransferEnvelopeV2,
 } from "../core/blacklist-transfer-values.ts";
 import {
   BlacklistTransferRpcClientError,
@@ -16,12 +16,13 @@ import {
 
 const EXPORTED_AT = "2026-08-25T12:34:56.789Z";
 const SESSION_ID = "1".repeat(32);
-const transfer: BlacklistTransferEnvelopeV1 = {
+const transfer: BlacklistTransferEnvelopeV2 = {
   product: "cocoon-blacklist",
-  formatVersion: 1,
+  formatVersion: 2,
   exportedAt: EXPORTED_AT,
-  schemaVersion: 5,
+  schemaVersion: 6,
   authors: [],
+  posts: [],
   tags: [{ tagId: "default", name: "default" }],
 };
 const metadata = createBlacklistTransferFileMetadata(
@@ -42,10 +43,12 @@ function successFor(message: unknown) {
         updatedAt: 1,
         expiresAt: 2,
         received: {
+          posts: { chunks: 0, count: 0, bytes: 2 },
           authors: { chunks: 0, count: 0, bytes: 2 },
           tags: { chunks: 0, count: 0, bytes: 2 },
         },
       });
+    case "import-posts-chunk":
     case "import-authors-chunk":
     case "import-tags-chunk":
       return createBlacklistTransferResponse(request.operation, false, null, "incomplete-import");
@@ -60,9 +63,9 @@ function successFor(message: unknown) {
     case "export-begin":
       return createBlacklistTransferResponse(request.operation, true, {
         product: "cocoon-blacklist",
-        formatVersion: 1,
+        formatVersion: 2,
         exportedAt: EXPORTED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         revision: 2,
         authorCount: 0,
         tagCount: 1,
@@ -71,6 +74,7 @@ function successFor(message: unknown) {
       return createBlacklistTransferResponse(request.operation, true, {
         revision: 2,
         items: [],
+        posts: [],
         nextCursor: null,
       });
     case "export-tags-page":
@@ -98,6 +102,7 @@ test("BUG-016 strict transfer UI client exposes only controller operations", asy
     tagId: "default",
     blacklistedAt: EXPORTED_AT,
     blockSource: "direct",
+    sourcePostId: null,
   } as const;
 
   await client.beginImport(metadata);

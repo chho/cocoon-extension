@@ -34,6 +34,7 @@ function logicalAuthor(author: BlacklistedAuthor): BlacklistedAuthor {
     tagId: author.tagId,
     blacklistedAt: author.blacklistedAt,
     blockSource: author.blockSource,
+    sourcePostId: author.sourcePostId,
   };
 }
 
@@ -41,21 +42,28 @@ async function readRawLogicalState(database: IDBDatabase): Promise<{
   readonly authors: readonly unknown[];
   readonly tags: readonly unknown[];
   readonly metadata: unknown;
+  readonly posts: readonly unknown[];
 }> {
   const transaction = database.transaction(
-    [BLACKLIST_STORE_NAMES.authors, BLACKLIST_STORE_NAMES.tags, BLACKLIST_STORE_NAMES.metadata],
+    [
+      BLACKLIST_STORE_NAMES.authors,
+      BLACKLIST_STORE_NAMES.tags,
+      BLACKLIST_STORE_NAMES.metadata,
+      BLACKLIST_STORE_NAMES.posts,
+    ],
     "readonly",
   );
   const done = transactionDone(transaction);
-  const [authors, tags, metadata] = await Promise.all([
+  const [authors, tags, metadata, posts] = await Promise.all([
     requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.authors).getAll()),
     requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.tags).getAll()),
     requestResult(
       transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).get(BLACKLIST_METADATA_KEY),
     ),
+    requestResult(transaction.objectStore(BLACKLIST_STORE_NAMES.posts).getAll()),
   ]);
   await done;
-  return { authors, tags, metadata };
+  return { authors, tags, metadata, posts };
 }
 
 function parseLogicalTags(rawTags: readonly unknown[]): CocoonTag[] {
@@ -86,8 +94,9 @@ function validatedLogicalState(
   authors: readonly BlacklistedAuthor[],
   tags: readonly CocoonTag[],
   rawMetadata: unknown,
+  posts: readonly unknown[],
 ): LogicalBlacklistStateRead {
-  const parsed = parseBlacklistState({ schemaVersion: 5, authors, tags });
+  const parsed = parseBlacklistState({ schemaVersion: 6, authors, tags, posts });
   const metadata = parseStoredMetadata(rawMetadata);
   if (parsed.status !== "valid" || !metadata)
     throw new Error("Stored logical test state is invalid.");
@@ -108,7 +117,12 @@ export async function readLogicalState(
   try {
     const raw = await readRawLogicalState(database);
     const tags = parseLogicalTags(raw.tags);
-    return validatedLogicalState(parseLogicalAuthors(raw.authors, tags), tags, raw.metadata);
+    return validatedLogicalState(
+      parseLogicalAuthors(raw.authors, tags),
+      tags,
+      raw.metadata,
+      raw.posts,
+    );
   } finally {
     database.close();
   }
@@ -121,7 +135,7 @@ export async function storeLogicalState(
   revision = 1,
 ): Promise<void> {
   const parsed = parseBlacklistState(state);
-  if (parsed.status !== "valid") throw new Error("Test state must be valid schema v5 data.");
+  if (parsed.status !== "valid") throw new Error("Test state must be valid schema v6 data.");
   const database = await openBlacklistDatabase(factory, databaseName);
   try {
     const transaction = database.transaction(LIVE_BLACKLIST_STORE_NAMES, "readwrite");
@@ -129,6 +143,9 @@ export async function storeLogicalState(
     for (const storeName of LIVE_BLACKLIST_STORE_NAMES) {
       transaction.objectStore(storeName).clear();
     }
+    parsed.state.posts.forEach((post) =>
+      transaction.objectStore(BLACKLIST_STORE_NAMES.posts).add(post),
+    );
     parsed.state.tags.forEach((tag, order) => {
       transaction.objectStore(BLACKLIST_STORE_NAMES.tags).add(createStoredTag(tag, order));
     });

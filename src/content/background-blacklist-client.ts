@@ -1,13 +1,17 @@
+import type { SourcePost } from "../core/source-post.ts";
 import type {
   AliasMutationResult,
   AuthorMutationResult,
   TagDeletionMutationResult,
 } from "../background/blacklist-repository-types.ts";
-import {
-  BLACKLIST_CONTENT_TAG_PAGE_SIZE,
-  type BlacklistContentIdentityMatchInput,
-  type BlacklistContentTagPageInput,
+import type * as ContentRpcModule from "../core/blacklist-content-rpc-contract.ts";
+import type {
+  BlacklistContentIdentityMatchInput,
+  BlacklistContentTagPageInput,
 } from "../core/blacklist-content-rpc-contract.ts";
+// @ts-expect-error Vite resolves the content-only copy during bundling.
+import * as contentRpc from "../core/blacklist-content-rpc-contract.ts?content-copy";
+const { BLACKLIST_CONTENT_TAG_PAGE_SIZE } = contentRpc as typeof ContentRpcModule;
 import type * as RevisionContractModule from "../core/blacklist-revision-contract.ts";
 // @ts-expect-error Vite resolves the content-only copy during bundling.
 import * as contentRevisionContract from "../core/blacklist-revision-contract.ts?content-copy";
@@ -36,6 +40,7 @@ const { BLACKLIST_REVISION_STORAGE_KEY, parseBlacklistRevisionSignal } =
 export { BLACKLIST_REVISION_STORAGE_KEY };
 
 export interface BackgroundBlacklistClient {
+  ensurePost(post: SourcePost): Promise<{ readonly post: SourcePost; readonly revision: number }>;
   initialize(): Promise<void>;
   queryTagsPage(input: BlacklistContentTagPageInput): Promise<ContentTagDirectoryPage>;
   queryIdentityMatches(
@@ -80,7 +85,7 @@ async function loadContentDirectory(
     }
     if (cursor !== null) seenCursors.add(cursor);
   } while (cursor !== null);
-  const parsed = parseBlacklistState({ schemaVersion: 5, authors: [], tags });
+  const parsed = parseBlacklistState({ schemaVersion: 6, posts: [], authors: [], tags });
   if (parsed.status !== "valid" || parsed.state.tags.length !== initialization.tagCount) {
     throw new Error("Background returned an inconsistent content tag directory.");
   }
@@ -163,6 +168,12 @@ class BackgroundBlacklistClientImpl implements BackgroundBlacklistClient {
   }
 
   // These callbacks are passed directly to controller dependencies; retain the client receiver.
+  readonly ensurePost = (post: SourcePost) =>
+    this.mutate(
+      () => this.dependencies.gateway.ensurePost(post),
+      async (result) => this.sync.handleRevision(result.revision),
+    );
+
   readonly commitAuthor = (input: CommitInput): Promise<AuthorMutationResult> => {
     return this.mutate(
       () => this.dependencies.gateway.commitAuthor(input),

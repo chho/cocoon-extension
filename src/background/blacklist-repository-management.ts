@@ -1,3 +1,4 @@
+import { sourcePostFrom } from "./blacklist-post-repository.ts";
 import type * as BlacklistStateModule from "../content/blacklist-state.ts";
 import type { AuthorIdentity, BlacklistedAuthor, CocoonTag } from "../content/blacklist-state.ts";
 // @ts-expect-error Vite resolves the background-only copy during bundling.
@@ -38,7 +39,7 @@ const {
   DEFAULT_TAG_ID,
   canonicalizeAuthorUserId,
   isValidPlatformId,
-  parseBlacklistState,
+  parseBlacklistedAuthor,
   validateNewTagLabel,
 } = backgroundBlacklistState as typeof BlacklistStateModule;
 
@@ -174,16 +175,6 @@ export async function removeAuthorTarget(
   }
 }
 
-function validateRestoredAuthor(
-  author: BlacklistedAuthor,
-  tag: CocoonTag,
-): BlacklistedAuthor | null {
-  const tags =
-    tag.tagId === DEFAULT_TAG_ID ? [tag] : [{ tagId: DEFAULT_TAG_ID, name: "default" }, tag];
-  const parsed = parseBlacklistState({ schemaVersion: 5, tags, authors: [author] });
-  return parsed.status === "valid" ? (parsed.state.authors[0] ?? null) : null;
-}
-
 export async function restoreAuthorTarget(
   database: IDBDatabase,
   untrustedAuthor: BlacklistedAuthor,
@@ -194,11 +185,13 @@ export async function restoreAuthorTarget(
     const metadata = await metadataFrom(transaction);
     const tag = await storedTagFrom(transaction, untrustedAuthor.tagId);
     if (!tag) return finish(done, { status: "missing-tag", ...context(metadata) });
-    const author = validateRestoredAuthor(untrustedAuthor, {
-      tagId: tag.tagId,
-      name: tag.name,
-    });
+    const author = parseBlacklistedAuthor(untrustedAuthor, new Set([tag.tagId]));
     if (!author) return finish(done, { status: "invalid", ...context(metadata) });
+    if (author.sourcePostId !== null) {
+      const post = await sourcePostFrom(transaction, author.sourcePostId);
+      if (!post || post.platformId !== author.platformId)
+        return finish(done, { status: "invalid", ...context(metadata) });
+    }
     const owners = await Promise.all(
       [author.userId, author.memberHashId]
         .filter((identifier): identifier is string => identifier !== null)

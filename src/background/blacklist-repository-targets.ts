@@ -1,3 +1,4 @@
+import { isSourcePostReference, requireSourcePost } from "./blacklist-post-repository.ts";
 import type * as BlacklistStateModule from "../content/blacklist-state.ts";
 import type {
   BlacklistedAuthor,
@@ -19,7 +20,6 @@ import {
 import {
   abortTransaction as abort,
   authorFrom,
-  createTransactionContext as createTargetContext,
   finishTransaction as finish,
   identifierOwner,
   isBoundedAuthorName,
@@ -88,6 +88,7 @@ function hasValidDirectFields(input: CommitInput): boolean {
     isBoundedStableId(input.tag.tagId) &&
     isTrimmedNonEmpty(input.tag.name) &&
     Array.from(input.tag.name).length <= 30 &&
+    isSourcePostReference(input.sourcePostId) &&
     isValidBlacklistTimestamp(input.blacklistedAt)
   );
 }
@@ -226,6 +227,7 @@ async function commitNewAuthor(
     tagId: selection.tag.tagId,
     blacklistedAt: input.blacklistedAt,
     blockSource: "direct",
+    sourcePostId: input.sourcePostId,
   };
   putNewAuthor(target.transaction, author, target.metadata);
   if (selection.created) {
@@ -253,15 +255,16 @@ export async function commitAuthorTarget(
   const done = transactionDone(transaction);
   try {
     const target = { transaction, done, metadata: await metadataFrom(transaction) };
+    await requireSourcePost(transaction, input);
     const [userOwner, hashOwner] = await Promise.all([
       identifierOwner(transaction, input.platformId, input.userId),
       input.memberHashId === null
         ? Promise.resolve(null)
         : identifierOwner(transaction, input.platformId, input.memberHashId),
     ]);
-    return userOwner === null
+    return await (userOwner === null
       ? commitNewAuthor(target, input, hashOwner)
-      : commitExistingAuthor(target, input, userOwner, hashOwner);
+      : commitExistingAuthor(target, input, userOwner, hashOwner));
   } catch (error) {
     abort(transaction);
     await done.catch(() => undefined);
@@ -345,8 +348,8 @@ export async function backfillMemberHashTarget(
   const transaction = database.transaction(Object.values(BLACKLIST_STORE_NAMES), "readwrite");
   const done = transactionDone(transaction);
   try {
-    const target = await createTargetContext(transaction);
-    return applyMemberHashBackfill(target, input);
+    const target = { transaction, done, metadata: await metadataFrom(transaction) };
+    return await applyMemberHashBackfill(target, input);
   } catch (error) {
     abort(transaction);
     await done.catch(() => undefined);
@@ -362,6 +365,7 @@ function canonicalUpvoterInput(input: UpvoterCommitInput): UpvoterCommitInput | 
     canonicalizeAuthorUserId(input.platformId, input.userId) === input.userId &&
     isBoundedAuthorName(input.authorNameAtCapture) &&
     isBoundedStableId(input.tagId) &&
+    isSourcePostReference(input.sourcePostId) &&
     isValidBlacklistTimestamp(input.blacklistedAt);
   return valid ? input : null;
 }
@@ -391,6 +395,7 @@ async function insertUpvoter(
     tagId: tag.tagId,
     blacklistedAt: input.blacklistedAt,
     blockSource: "upvoter",
+    sourcePostId: input.sourcePostId,
   };
   putNewAuthor(target.transaction, author, target.metadata);
   const next = incrementMetadata(target.metadata, { authors: 1 });
@@ -412,8 +417,9 @@ export async function commitUpvoterTarget(
   const transaction = database.transaction(Object.values(BLACKLIST_STORE_NAMES), "readwrite");
   const done = transactionDone(transaction);
   try {
-    const target = await createTargetContext(transaction);
-    return insertUpvoter(target, input);
+    const target = { transaction, done, metadata: await metadataFrom(transaction) };
+    await requireSourcePost(transaction, input);
+    return await insertUpvoter(target, input);
   } catch (error) {
     abort(transaction);
     await done.catch(() => undefined);

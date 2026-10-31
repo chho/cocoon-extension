@@ -7,7 +7,7 @@ Last updated: 2026-10-30. **Draft; this task does not submit or publish an exten
 - Store candidate: production `npm run build` output in `dist/` only.
 - Local testing: `npm run build:dev` output in `dist-dev/`, named **Cocoon Dev**, same icon.
 - Production build guards reject included diagnostic modules and protocol/storage markers. Never upload `dist-dev/`, local diagnostics, browser data, `.git/`, dependencies, source docs or credentials as the store package.
-- Use the same numeric version, currently 0.6.2. Dev has a separate version label and installation/data; it is not a second store listing in this task.
+- Use the same numeric version, 0.7.1. Dev has a separate version label and installation/data; it is not a second store listing in this task.
 
 ## Listing draft
 
@@ -18,6 +18,8 @@ Last updated: 2026-10-30. **Draft; this task does not submit or publish an exten
 **Detailed description:**
 
 Cocoon helps you hide unwanted authors from the Zhihu home feed and organize your local blocklist with tags. Choose a tag to hide matching feed cards and supported comments. Search and manage saved authors, remove blocks, and import or export a local backup. Drag custom tags within the blocking drawer to arrange them, or use Alt+Left/Right; your drawer order is remembered locally and the built-in default remains first.
+
+When available, the management page shows the saved title and link of the post associated with an author's first block. Bulk voter records share that post rather than duplicating it.
 
 Optional Zhihu actions use your existing signed-in account. Account-level blocking applies only to the directly selected author; content voters are added only to Cocoon's local blocklist. These actions remain off unless enabled by you.
 
@@ -48,6 +50,7 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 
 - Author names, profile links, member identifiers, tags and timestamps support author filtering and local management.
 - Optional user-authorized Zhihu account actions and identity/voter lookups use the existing same-origin session, including applicable cookies and an anti-forgery token where needed. No credentials are retained in diagnostic records or blacklist exports.
+- Submitted feed-card blocks and reliably associated hover-card blocks can retain shared post titles, content identifiers and permanent links; related authors/voters reference them. Backups include referenced posts, while unreferenced local posts are retained until replacement or uninstall.
 - Local backups contain personal records. There is no developer-operated upload service, advertising or analytics.
 - Dev-only diagnostics can retain real author identities, related interaction times and geometry; they are local, bounded and not automatically uploaded. They must not be confused with the store production data flow.
 - The publisher must review current store disclosure categories against the final production package before submission. No disclosure form has been submitted in this task.
@@ -65,6 +68,8 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 
 | Version | Status | Change |
 | --- | --- | --- |
+| 0.7.1 | Reviewed, not submitted | Complete 0.7 post provenance for reliably associated author hover cards; voter operations remain disabled for hover entries. |
+| 0.7.0 | Reviewed, not submitted | Shared first-block post references; management links, schema v6 and versioned backup migration. |
 | 0.6.2 | Draft, not submitted | Restore continuous tag rows with full-width wrapping and protected default drag boundaries. |
 | 0.6.1 | Draft, not submitted | Restore the default tag’s compact height beside wrapped custom tags. |
 | 0.6.0 | Draft, not submitted | Custom-tag drawer sorting with locally remembered order; default remains fixed. |

@@ -19,6 +19,7 @@ function author(userId: string, tagId = DEFAULT_TAG_ID): BlacklistedAuthor {
     tagId,
     blacklistedAt: TIMESTAMP,
     blockSource: "direct",
+    sourcePostId: null,
   };
 }
 

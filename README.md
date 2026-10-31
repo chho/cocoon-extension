@@ -58,6 +58,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 - Searches, filters, sorts, and removes locally blocked authors.
 - Filters records by tag and platform source.
+- Shows the first associated post's saved title and link when available.
 - Renames and deletes custom tags in a full-width maintenance list.
 - Imports or exports a strictly validated JSON backup.
 - Supports atomic merge and confirmed replace-all imports.
@@ -135,24 +136,27 @@ After changing the Manifest or a content script, rebuild the project, reload the
 
 Read the [Privacy Policy](PRIVACY.md) for data handling, Zhihu session usage, and deletion details.
 
-Cocoon stores blacklist authors and tags in extension-owned IndexedDB. Each record may include:
+Cocoon stores blacklist authors, tags, and shared post references in extension-owned IndexedDB. Each record may include:
 
 - platform identifier;
 - stable author identifier and an optional verified site-specific alias;
 - author display name captured at the time of blocking;
 - tag association;
 - block source;
-- first-blocked timestamp.
+- first-blocked timestamp;
+- an optional reference to the post associated with the first block.
 
-Site-specific preferences, the drawer’s custom-tag display order, a payload-free blacklist revision notification, and temporary per-tab badge state remain in Chrome extension storage. Existing schema v1–v5 blacklist data is automatically and fail-safely migrated from `chrome.storage.local` on first access.
+For supported feed cards, Cocoon saves the post's title and permanent answer/article URL once, then shares that record across the directly blocked author and newly blocked voters. The post is saved before users are processed; individual user failures do not roll back successful users. Existing authors keep their first reference. Supported hover-card actions can also save the triggering feed post, including a post containing an inline comment; this does not imply that the blocked user wrote the post. Attribution requires a fresh, uniquely matching hover card and valid trigger context. Reused or ambiguous windows, conflicting pointer/focus, and the same identity encountered on different posts during a page session can leave the reference empty without preventing blocking. Hover entries still cannot process content voters. Old records are not backfilled, and cards without a trustworthy title/link have no post reference. Titles are local snapshots; original links can later become unavailable. No post body or screenshot is saved.
+
+Site-specific preferences, the drawer’s custom-tag display order, a payload-free blacklist revision notification, and temporary per-tab badge state remain in Chrome extension storage. Existing schema v1–v5 blacklist data and the previous IndexedDB database are automatically and fail-safely migrated to schema v6 on first access, with empty post references for older authors.
 
 Cocoon does not currently provide its own server, cloud sync, analytics, advertising, or telemetry. Runtime network requests are limited to origins declared by bundled site plugins and are made only for implemented identity resolution, content-related lookup, or explicitly enabled account-level actions. The current build makes such requests only to the supported page's existing origin.
 
 Cocoon does not impose an author-count limit on its IndexedDB blacklist; usable capacity depends on Chrome's dynamic storage quota and the device. Popup, management, and page filtering use bounded queries instead of loading the complete author list into one message.
 
-Exported JSON files contain local author and tag records. Import and export use revision-bound pages and persistent staging, and a single transfer file is limited to 32 MiB. This file limit is an operation safety boundary, not a blacklist capacity limit. Treat exports as personal data: store them securely and inspect their destination before sharing.
+Exported JSON files contain local authors, tags, and the shared posts referenced by those authors. New backups use format v2/schema v6; imports also accept old format v1/schema v5 files. Older extension versions cannot read the new backup format. A near-limit old backup can still be imported, but its expanded format-v2 export may exceed the unchanged 32 MiB export limit. Import and export use revision-bound pages and persistent staging, and a single transfer file is limited to 32 MiB. This file limit is an operation safety boundary, not a blacklist capacity limit. Treat exports as personal data: store them securely and inspect their destination before sharing.
 
-Removing the extension clears extension-managed local storage through Chrome. Individual records can also be removed from the popup or management page.
+Removing the extension clears extension-managed local storage through Chrome. Individual author records can also be removed from the popup or management page. Removing an author retains shared post records for other users, in-flight operations, and undo; unreferenced posts are not automatically purged or exported. A replace-all import atomically replaces the dataset, including posts.
 
 ## Permissions
 

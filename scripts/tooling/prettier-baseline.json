@@ -2,10 +2,6 @@
   "version": 1,
   "files": [
     {
-      "path": "options/options.html",
-      "sha256": "b3c5098c7c22971bc54cf53d7c9f19134ee5035013976c2b7374a99d7d76ae8c"
-    },
-    {
       "path": "popup/popup.html",
       "sha256": "e8fa6ab6c56550fac19ab5641f8c807954429c7af68210f9f9517424d6617d20"
     },
@@ -84,10 +80,6 @@
     {
       "path": "src/content/drawer-visibility.ts",
       "sha256": "99b21892887e3181f5a3a04b9572b0982bb850de92db61b21d2b06e02908a084"
-    },
-    {
-      "path": "src/content/initialize-blacklist-state.test.ts",
-      "sha256": "93aab48fbd4705488eaffcb5aa8ffa57d8b81c41d6a36719cfd74ed6ffca6f5c"
     },
     {
       "path": "src/content/initialize-blacklist-state.ts",

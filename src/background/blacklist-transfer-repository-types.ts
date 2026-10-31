@@ -4,6 +4,7 @@ import type {
   BlacklistExportPageInput,
   BlacklistExportTagsPageDto,
   BlacklistImportAuthorsChunkInput,
+  BlacklistImportPostsChunkInput,
   BlacklistImportSessionDto,
   BlacklistImportTagsChunkInput,
   BlacklistTransferSummaryDto,
@@ -18,6 +19,7 @@ export interface ImportChunkStageResult {
 export interface BlacklistTransferRepository {
   beginImport(metadata: BlacklistTransferFileMetadataDto): Promise<BlacklistImportSessionDto>;
   stageAuthorsChunk(input: BlacklistImportAuthorsChunkInput): Promise<ImportChunkStageResult>;
+  stagePostsChunk(input: BlacklistImportPostsChunkInput): Promise<ImportChunkStageResult>;
   stageTagsChunk(input: BlacklistImportTagsChunkInput): Promise<ImportChunkStageResult>;
   inspectImport(sessionId: string): Promise<BlacklistImportSessionDto | null>;
   abortImport(sessionId: string): Promise<boolean>;

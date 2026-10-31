@@ -40,6 +40,7 @@ const committed = {
     authorNameAtCapture: "Author",
     tagId: "default",
     blacklistedAt: "2026-08-14T00:00:00.000Z",
+    sourcePostId: "zhihu:answer:2",
     blockSource: "direct",
   },
   state: createInitialState(),
@@ -56,7 +57,9 @@ test("UI-007/VOTER-014 runs the author remote job and voter local job without pr
       calls.push("author");
       return { status: "success", persistedUpvoter: false };
     },
-    async blockVoters() {
+    async blockVoters(_task, persisted, voterSource) {
+      strictEqual(persisted.author.sourcePostId, "zhihu:answer:2");
+      deepStrictEqual(voterSource, source);
       calls.push("voters");
       return {
         phase: "complete",

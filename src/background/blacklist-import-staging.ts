@@ -1,6 +1,7 @@
 import type * as TransferContractModule from "../core/blacklist-transfer-rpc-contract.ts";
 import type {
   BlacklistImportAuthorsChunkInput,
+  BlacklistImportPostsChunkInput,
   BlacklistImportSessionDto,
   BlacklistImportTagsChunkInput,
   BlacklistTransferProgressDto,
@@ -10,6 +11,7 @@ import type { BlacklistTransferFileMetadataDto } from "../core/blacklist-transfe
 import * as backgroundTransferContract from "../core/blacklist-transfer-rpc-contract.ts?background-copy";
 import {
   createStoredImportAuthor,
+  createStoredImportPost,
   createStoredImportChunk,
   createStoredImportIdentifier,
   createStoredImportSession,
@@ -29,6 +31,7 @@ import type { ImportChunkStageResult } from "./blacklist-transfer-repository-typ
 
 const {
   parseBlacklistImportAuthorsChunkInput,
+  parseBlacklistImportPostsChunkInput,
   parseBlacklistImportTagsChunkInput,
   parseBlacklistTransferFileMetadata,
 } = backgroundTransferContract as typeof TransferContractModule;
@@ -115,10 +118,13 @@ export async function beginImportStaging(options: {
 }
 
 function chunkRecord(
-  input: BlacklistImportAuthorsChunkInput | BlacklistImportTagsChunkInput,
+  input:
+    | BlacklistImportAuthorsChunkInput
+    | BlacklistImportTagsChunkInput
+    | BlacklistImportPostsChunkInput,
   kind: StoredImportChunk["kind"],
 ): StoredImportChunk {
-  const items = "authors" in input ? input.authors : input.tags;
+  const items = "authors" in input ? input.authors : "posts" in input ? input.posts : input.tags;
   return createStoredImportChunk({
     sessionId: input.sessionId,
     kind,
@@ -160,7 +166,10 @@ function isComplete(session: StoredImportSession): boolean {
     received.authors.bytes === metadata.authorsBytes &&
     received.tags.chunks === metadata.tagChunkCount &&
     received.tags.count === metadata.tagCount &&
-    received.tags.bytes === metadata.tagsBytes
+    received.tags.bytes === metadata.tagsBytes &&
+    received.posts.chunks === metadata.postChunkCount &&
+    received.posts.count === metadata.postCount &&
+    received.posts.bytes === metadata.postsBytes
   );
 }
 
@@ -184,9 +193,10 @@ function updatedSession(
 }
 
 function validateChunkRange(session: StoredImportSession, chunk: StoredImportChunk): void {
-  const total = chunk.kind === "authors" ? session.metadata.authorCount : session.metadata.tagCount;
-  const chunks =
-    chunk.kind === "authors" ? session.metadata.authorChunkCount : session.metadata.tagChunkCount;
+  const prefix = { authors: "author", tags: "tag", posts: "post" } as const;
+  const key = prefix[chunk.kind];
+  const total = session.metadata[`${key}Count`];
+  const chunks = session.metadata[`${key}ChunkCount`];
   if (
     chunk.chunkIndex >= chunks ||
     chunk.startIndex >= total ||
@@ -221,6 +231,18 @@ function stageTagRecords(transaction: IDBTransaction, input: BlacklistImportTags
   });
 }
 
+async function stagePostRecords(
+  transaction: IDBTransaction,
+  input: BlacklistImportPostsChunkInput,
+): Promise<void> {
+  const posts = transaction.objectStore(BLACKLIST_STORE_NAMES.importPosts);
+  for (const [offset, post] of input.posts.entries()) {
+    await requestResult(
+      posts.add(createStoredImportPost(input.sessionId, input.startIndex + offset, post)),
+    );
+  }
+}
+
 function isConstraintError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -232,7 +254,11 @@ function isConstraintError(error: unknown): boolean {
 
 function stagingStoreNames(kind: StoredImportChunk["kind"]): string[] {
   const itemStore =
-    kind === "authors" ? BLACKLIST_STORE_NAMES.importAuthors : BLACKLIST_STORE_NAMES.importTags;
+    kind === "authors"
+      ? BLACKLIST_STORE_NAMES.importAuthors
+      : kind === "posts"
+        ? BLACKLIST_STORE_NAMES.importPosts
+        : BLACKLIST_STORE_NAMES.importTags;
   return [
     BLACKLIST_STORE_NAMES.importSessions,
     BLACKLIST_STORE_NAMES.importChunks,
@@ -256,11 +282,30 @@ async function existingChunkFrom(
   return existing;
 }
 
+function validateLegacyChunk(
+  session: StoredImportSession,
+  input:
+    | BlacklistImportAuthorsChunkInput
+    | BlacklistImportTagsChunkInput
+    | BlacklistImportPostsChunkInput,
+): void {
+  if (session.metadata.sourceFormatVersion !== 1) return;
+  if (
+    "posts" in input ||
+    ("authors" in input && input.authors.some((author) => author.sourcePostId !== null))
+  ) {
+    throw new ImportChunkConflictError();
+  }
+}
+
 async function stageChunk(options: {
   readonly database: IDBDatabase;
   readonly clock: () => number;
   readonly kind: StoredImportChunk["kind"];
-  readonly input: BlacklistImportAuthorsChunkInput | BlacklistImportTagsChunkInput;
+  readonly input:
+    | BlacklistImportAuthorsChunkInput
+    | BlacklistImportTagsChunkInput
+    | BlacklistImportPostsChunkInput;
 }): Promise<ImportChunkStageResult> {
   const transaction = options.database.transaction(stagingStoreNames(options.kind), "readwrite");
   const done = transactionDone(transaction);
@@ -270,6 +315,7 @@ async function stageChunk(options: {
       await storedSessionFrom(transaction, options.input.sessionId),
       now,
     );
+    validateLegacyChunk(session, options.input);
     const chunk = chunkRecord(options.input, options.kind);
     validateChunkRange(session, chunk);
     const existing = await existingChunkFrom(transaction, chunk);
@@ -279,6 +325,8 @@ async function stageChunk(options: {
     }
     if (options.kind === "authors") {
       stageAuthorRecords(transaction, options.input as BlacklistImportAuthorsChunkInput);
+    } else if (options.kind === "posts") {
+      await stagePostRecords(transaction, options.input as BlacklistImportPostsChunkInput);
     } else {
       stageTagRecords(transaction, options.input as BlacklistImportTagsChunkInput);
     }
@@ -317,6 +365,16 @@ export function stageImportTagsChunk(options: {
   return stageChunk({ ...options, kind: "tags", input });
 }
 
+export function stageImportPostsChunk(options: {
+  readonly database: IDBDatabase;
+  readonly clock: () => number;
+  readonly input: BlacklistImportPostsChunkInput;
+}): Promise<ImportChunkStageResult> {
+  const input = parseBlacklistImportPostsChunkInput(options.input);
+  if (!input) throw new Error("Blacklist import post chunk is invalid.");
+  return stageChunk({ ...options, kind: "posts", input });
+}
+
 export async function inspectImportStaging(
   database: IDBDatabase,
   sessionId: string,
@@ -336,6 +394,7 @@ function sessionRange(sessionId: string): IDBKeyRange {
 
 export function deleteImportSessionRecords(transaction: IDBTransaction, sessionId: string): void {
   for (const storeName of [
+    BLACKLIST_STORE_NAMES.importPosts,
     BLACKLIST_STORE_NAMES.importAuthors,
     BLACKLIST_STORE_NAMES.importIdentifiers,
     BLACKLIST_STORE_NAMES.importTags,
@@ -352,6 +411,7 @@ export async function abortImportStaging(
 ): Promise<boolean> {
   const transaction = database.transaction(
     [
+      BLACKLIST_STORE_NAMES.importPosts,
       BLACKLIST_STORE_NAMES.importSessions,
       BLACKLIST_STORE_NAMES.importAuthors,
       BLACKLIST_STORE_NAMES.importIdentifiers,
@@ -373,6 +433,7 @@ export async function cleanupExpiredImportStaging(
 ): Promise<number> {
   const transaction = database.transaction(
     [
+      BLACKLIST_STORE_NAMES.importPosts,
       BLACKLIST_STORE_NAMES.importSessions,
       BLACKLIST_STORE_NAMES.importAuthors,
       BLACKLIST_STORE_NAMES.importIdentifiers,

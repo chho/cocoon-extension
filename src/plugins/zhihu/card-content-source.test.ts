@@ -4,7 +4,62 @@ import { JSDOM } from "jsdom";
 
 import { createRemoteOptionsView } from "../../content/remote-options-view.ts";
 import { createDefaultRemotePreferences } from "../../content/remote-preferences.ts";
-import { getCardContentSource } from "./card-content-source.ts";
+import { getCardContentSource, getCardSourcePost } from "./card-content-source.ts";
+
+test("POST-001 reused cards cannot attach a new post to previously captured voters", () => {
+  const { dom, card } = fixture(`<div class="ContentItem" data-zop="{}">${title(ANSWER)}</div>`);
+  const captured = getCardContentSource(card);
+  const link = card.querySelector<HTMLAnchorElement>(".ContentItem-title a")!;
+  strictEqual(getCardSourcePost(card, captured)?.postId, "zhihu:answer:200");
+  for (const href of [
+    "/question/100/answer/201",
+    "/question/101/answer/200",
+    "https://zhuanlan.zhihu.com/p/200",
+  ]) {
+    link.setAttribute("href", href);
+    strictEqual(getCardSourcePost(card, captured), null);
+  }
+  link.setAttribute("href", ANSWER);
+  strictEqual(getCardSourcePost(card, null), null);
+  dom.window.close();
+});
+
+test("POST-001 captures only a single own title with a canonical permalink", () => {
+  const { dom, card } = fixture(`<div class="ContentItem" data-zop="{}">
+    <h2 class="ContentItem-title"><a href="/question/100/answer/200?tracking=1#x">  Own <b>title</b> </a></h2>
+    <div class="RichText">${title("/question/999/answer/888")}</div>
+    <div class="ContentItem">${title("/question/999/answer/777")}</div>
+  </div>`);
+  const captured = getCardContentSource(card);
+  deepStrictEqual(getCardSourcePost(card, captured), {
+    postId: "zhihu:answer:200",
+    platformId: "zhihu",
+    kind: "answer",
+    contentId: "200",
+    title: "Own title",
+    url: "https://www.zhihu.com/question/100/answer/200",
+  });
+  card.querySelector(".ContentItem-title")!.insertAdjacentHTML("afterend", title(ARTICLE));
+  strictEqual(getCardSourcePost(card, captured), null);
+  card.querySelectorAll(".ContentItem-title").forEach((node) => node.remove());
+  strictEqual(getCardSourcePost(card, captured), null);
+  dom.window.close();
+});
+
+test("POST-001 normalizes article links but rejects credentials and untrusted titles", () => {
+  for (const [href, label, expected] of [
+    ["https://www.zhihu.com/p/300/", " Article ", "https://zhuanlan.zhihu.com/p/300"],
+    ["https://user@www.zhihu.com/question/100/answer/200", "Title", null],
+    ["/question/100/answer/200", " ", null],
+    ["/question/100/answer/200", "x".repeat(501), null],
+  ] as const) {
+    const { dom, card } = fixture(
+      `<div class="ContentItem" data-zop="{}"><h2 class="ContentItem-title"><a href="${href}">${label}</a></h2></div>`,
+    );
+    strictEqual(getCardSourcePost(card, getCardContentSource(card))?.url ?? null, expected);
+    dom.window.close();
+  }
+});
 
 const ANSWER = "/question/100/answer/200";
 const ARTICLE = "https://zhuanlan.zhihu.com/p/300";

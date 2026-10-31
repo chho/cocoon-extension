@@ -26,6 +26,8 @@ function author(overrides: Partial<BlacklistAuthorDto> = {}): BlacklistAuthorDto
     tagId: "default",
     blacklistedAt: TIME,
     source: "direct",
+    sourcePostId: null,
+    sourcePost: null,
     ...overrides,
   };
 }

@@ -22,9 +22,10 @@ const SESSION_ID = "a".repeat(32);
 const TIME = "2026-08-25T12:34:56.789Z";
 const envelope = {
   product: "cocoon-blacklist" as const,
-  formatVersion: 1 as const,
+  formatVersion: 2 as const,
   exportedAt: TIME,
-  schemaVersion: 5 as const,
+  schemaVersion: 6 as const,
+  posts: [],
   authors: [
     {
       platformId: "zhihu",
@@ -34,6 +35,7 @@ const envelope = {
       tagId: "default",
       blacklistedAt: TIME,
       blockSource: "direct" as const,
+      sourcePostId: null,
     },
   ],
   tags: [{ tagId: "default", name: "default" }],
@@ -80,7 +82,7 @@ test("BUG-016 import staging record parsers require exact derived records", () =
   }
 });
 
-test("BUG-016 IDB v2 staging stores expose cleanup and session-scoped uniqueness indexes", async () => {
+test("POST-005 IDB v3 staging stores expose cleanup and session-scoped uniqueness indexes", async () => {
   const database = await openBlacklistDatabase(
     indexedDB,
     `cocoon-import-schema-${crypto.randomUUID()}`,
@@ -92,6 +94,10 @@ test("BUG-016 IDB v2 staging stores expose cleanup and session-scoped uniqueness
     const identifiers = transaction.objectStore(BLACKLIST_STORE_NAMES.importIdentifiers);
     const tags = transaction.objectStore(BLACKLIST_STORE_NAMES.importTags);
     const chunks = transaction.objectStore(BLACKLIST_STORE_NAMES.importChunks);
+    const posts = transaction.objectStore(BLACKLIST_STORE_NAMES.importPosts);
+    deepStrictEqual(posts.keyPath, ["sessionId", "index"]);
+    strictEqual(posts.index("by-session-post").unique, true);
+    strictEqual(posts.indexNames.contains("by-session"), true);
 
     strictEqual(sessions.indexNames.contains("by-expires-at"), true);
     strictEqual(authors.index("by-session-author").unique, true);

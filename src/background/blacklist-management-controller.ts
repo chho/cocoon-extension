@@ -35,6 +35,8 @@ function toAuthorDto(author: BlacklistedAuthor): BlacklistAuthorDto {
     tagId: author.tagId,
     blacklistedAt: author.blacklistedAt,
     source: author.blockSource,
+    sourcePostId: author.sourcePostId,
+    sourcePost: null,
   };
 }
 
@@ -47,6 +49,7 @@ function fromAuthorDto(author: BlacklistAuthorDto): BlacklistedAuthor {
     tagId: author.tagId,
     blacklistedAt: author.blacklistedAt,
     blockSource: author.source,
+    sourcePostId: author.sourcePostId,
   };
 }
 

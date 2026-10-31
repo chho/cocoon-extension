@@ -65,6 +65,7 @@ function author(
   return {
     platformId,
     userId,
+    sourcePostId: null,
     memberHashId: null,
     authorNameAtCapture: `Synthetic ${userId}`,
     tagId: DEFAULT_TAG_ID,
@@ -76,7 +77,8 @@ function author(
 
 function queryState(): BlacklistState {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [
       { tagId: DEFAULT_TAG_ID, name: "default" },
       { tagId: "reading", name: "Reading" },
@@ -138,11 +140,12 @@ async function collectAuthorIds(
   return ids;
 }
 
-test("BUG-016 v1 upgrades atomically to v2 and backfills only query fields", async () => {
+test("POST-004 v1 upgrades atomically to v3 with query fields and null source refs", async () => {
   const databaseName = uniqueDatabaseName("upgrade");
   const existingAuthor = author("zhihu", "legacy", { memberHashId: HASH, blacklistedAt: null });
   const state: BlacklistState = {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [existingAuthor],
   };
@@ -179,7 +182,8 @@ test("BUG-016 invalid v1 author aborts upgrade and preserves the v1 database", a
   const databaseName = uniqueDatabaseName("upgrade-abort");
   const invalid = author("zhihu", "legacy", { blacklistedAt: "invalid" });
   const state = {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
+    posts: [],
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [invalid],
   };
@@ -323,6 +327,72 @@ test("BUG-016 identity batches match aliases without crossing platform boundarie
   ]);
 });
 
+test("POST-003 hydrated maximal-text pages remain byte-bounded without gaps or duplicate post reads", async () => {
+  const databaseName = uniqueDatabaseName("post-byte-bound");
+  const repository = createBlacklistRepository({
+    indexedDB,
+    databaseName,
+    storage: new MemoryStorage(),
+  });
+  await repository.querySummary();
+  const post = {
+    postId: `zhihu:answer:${"9".repeat(64)}`,
+    platformId: "zhihu" as const,
+    kind: "answer" as const,
+    contentId: "9".repeat(64),
+    title: "😀".repeat(500),
+    url: `https://www.zhihu.com/question/${"8".repeat(64)}/answer/${"9".repeat(64)}`,
+  };
+  const tag = { tagId: "😀".repeat(512), name: "😀".repeat(30) };
+  const authors = Array.from({ length: 70 }, (_, index) =>
+    author("zhihu", `${index}-${"😀".repeat(500)}`, {
+      authorNameAtCapture: "😀".repeat(500),
+      tagId: tag.tagId,
+      sourcePostId: post.postId,
+    }),
+  );
+  await storeLogicalState(indexedDB, databaseName, {
+    schemaVersion: 6,
+    tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }, tag],
+    authors,
+    posts: [post],
+  });
+  const originalGet = IDBObjectStore.prototype.get;
+  const originalGetAll = IDBObjectStore.prototype.getAll;
+  let postReads = 0;
+  IDBObjectStore.prototype.get = function (...args: Parameters<IDBObjectStore["get"]>) {
+    if (this.name === BLACKLIST_STORE_NAMES.posts) postReads += 1;
+    return originalGet.apply(this, args);
+  };
+  IDBObjectStore.prototype.getAll = function (...args: Parameters<IDBObjectStore["getAll"]>) {
+    if (this.name === BLACKLIST_STORE_NAMES.posts) throw new Error("unbounded posts read");
+    return originalGetAll.apply(this, args);
+  };
+  try {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pageCount = 0;
+    do {
+      const page = await repository.queryAuthorsPage(authorPageQuery({ limit: 50, cursor }));
+      strictEqual(new TextEncoder().encode(JSON.stringify(page)).byteLength <= 256 * 1024, true);
+      strictEqual(page.totalCount, 70);
+      for (const item of page.items) {
+        deepStrictEqual(item.author.sourcePost, post);
+        strictEqual(item.author.sourcePostId, post.postId);
+        seen.push(item.author.userId);
+      }
+      cursor = page.nextCursor;
+      pageCount += 1;
+    } while (cursor);
+    strictEqual(seen.length, 70);
+    strictEqual(new Set(seen).size, 70);
+    strictEqual(postReads, pageCount);
+  } finally {
+    IDBObjectStore.prototype.get = originalGet;
+    IDBObjectStore.prototype.getAll = originalGetAll;
+  }
+});
+
 test("BUG-016 query hot paths never call getAll on authors or identifiers", async () => {
   const repository = await createRepository("hot-path");
   const originalStoreGetAll = IDBObjectStore.prototype.getAll;
@@ -408,10 +478,12 @@ async function createVersionOneDatabase(
     transaction.objectStore(BLACKLIST_STORE_NAMES.tags).add(createStoredTag(tag, order)),
   );
   state.authors.forEach((item, order) => {
+    const legacy = { ...item };
+    Reflect.deleteProperty(legacy, "sourcePostId");
     transaction.objectStore(BLACKLIST_STORE_NAMES.authors).add({
       authorKey: authorKey(item.platformId, item.userId),
       order,
-      ...item,
+      ...legacy,
     });
     transaction
       .objectStore(BLACKLIST_STORE_NAMES.identifiers)
@@ -422,7 +494,9 @@ async function createVersionOneDatabase(
         .add(createStoredIdentifier(item, item.memberHashId));
     }
   });
-  transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).add(createMetadata(state, 0));
+  transaction
+    .objectStore(BLACKLIST_STORE_NAMES.metadata)
+    .add({ ...createMetadata(state, 0), logicalSchemaVersion: 5 });
   await transactionDone(transaction);
   return database;
 }

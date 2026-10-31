@@ -36,6 +36,7 @@ function commitInput(state: BlacklistState, overrides: Partial<CommitInput> = {}
   return {
     platformId: "zhihu",
     userId: "stable-user",
+    sourcePostId: null,
     memberHashId: null,
     authorNameAtCapture: "Name",
     tag: state.tags[0]!,
@@ -49,6 +50,7 @@ function author(userId: string, memberHashId: string | null = null) {
   return {
     platformId: "zhihu",
     userId,
+    sourcePostId: null,
     memberHashId,
     authorNameAtCapture: `Name ${userId}`,
     tagId: DEFAULT_TAG_ID,
@@ -57,10 +59,46 @@ function author(userId: string, memberHashId: string | null = null) {
   };
 }
 
-test("PLATFORM-001 initializes strict schema v5 with one built-in tag", () => {
+test("POST-004 validates schema6 references and migrates v5 without invented provenance", () => {
+  const post = {
+    postId: "zhihu:answer:23",
+    platformId: "zhihu",
+    kind: "answer",
+    contentId: "23",
+    title: "Synthetic",
+    url: "https://www.zhihu.com/question/12/answer/23",
+  };
+  const legacy = author("legacy");
+  const oldAuthor = { ...legacy };
+  Reflect.deleteProperty(oldAuthor, "sourcePostId");
+  const migrated = parseBlacklistState({
+    schemaVersion: 5,
+    tags: createInitialState().tags,
+    authors: [oldAuthor],
+  });
+  strictEqual(migrated.status, "migrated");
+  deepStrictEqual(migrated.state.posts, []);
+  strictEqual(migrated.state.authors[0]?.sourcePostId, null);
+  const state = {
+    ...createInitialState(),
+    schemaVersion: 6,
+    posts: [post],
+    authors: [{ ...legacy, sourcePostId: post.postId }],
+  };
+  strictEqual(parseBlacklistState(state).status, "valid");
+  for (const invalid of [
+    { ...state, posts: [] },
+    { ...state, posts: [post, post] },
+    { ...state, authors: [{ ...state.authors[0], platformId: "other" }] },
+    { ...state, authors: [{ ...state.authors[0], sourcePostId: undefined }] },
+  ])
+    strictEqual(parseBlacklistState(invalid).status, "malformed");
+});
+
+test("PLATFORM-001 initializes strict schema v6 with one built-in tag", () => {
   const state = createInitialState();
   strictEqual(state.schemaVersion, STORAGE_SCHEMA_VERSION);
-  strictEqual(STORAGE_SCHEMA_VERSION, 5);
+  strictEqual(STORAGE_SCHEMA_VERSION, 6);
   deepStrictEqual(state.tags, [{ tagId: DEFAULT_TAG_ID, name: "default" }]);
   deepStrictEqual(state.authors, []);
   strictEqual(parseBlacklistState(undefined).status, "missing");
@@ -107,7 +145,7 @@ test("creates one timestamp from the injected clock", () => {
   throws(() => createBlacklistTimestamp(() => new Date(Number.NaN)), /Invalid time value/);
 });
 
-test("PLATFORM-001 migrates v1/v2/v3/v4 to v5 with a Zhihu platform and is idempotent", () => {
+test("PLATFORM-001 migrates v1/v2/v3/v4 to v6 with a Zhihu platform and is idempotent", () => {
   const legacyImageKey = `card${"Image"}`;
   for (const schemaVersion of [1, 2, 3, 4] as const) {
     const legacyAuthor: Record<string, unknown> = {
@@ -136,6 +174,7 @@ test("PLATFORM-001 migrates v1/v2/v3/v4 to v5 with a Zhihu platform and is idemp
     deepStrictEqual(parsed.state.authors[0], {
       platformId: "zhihu",
       userId: `legacy-${schemaVersion}`,
+      sourcePostId: null,
       memberHashId: null,
       authorNameAtCapture: "Legacy",
       tagId: DEFAULT_TAG_ID,
@@ -179,7 +218,7 @@ test("STORAGE-002 legacy schemas reject extra and oversized fields before migrat
   }
 });
 
-test("v5 requires exact author fields and valid platform/source/timestamp/hash values", () => {
+test("v6 requires exact author fields and valid platform/source/timestamp/hash values", () => {
   const valid = { ...createInitialState(), authors: [author("valid", HASH_A)] };
   strictEqual(parseBlacklistState(valid).status, "valid");
   for (const changedAuthor of [
@@ -192,7 +231,7 @@ test("v5 requires exact author fields and valid platform/source/timestamp/hash v
   }
 });
 
-test("v5 rejects duplicate identifiers and all same-platform identifier collisions", () => {
+test("v6 rejects duplicate identifiers and all same-platform identifier collisions", () => {
   for (const authors of [
     [author("same"), author("same")],
     [author("first", HASH_A), author("second", HASH_A)],
@@ -273,6 +312,7 @@ test("PLATFORM-001 commit and upvoter duplicate checks are scoped to one platfor
   );
 
   const upvoter = planUpvoterCommit(youtubeState, {
+    sourcePostId: null,
     platformId: "zhihu",
     userId: "same-id",
     authorNameAtCapture: "Zhihu voter",
@@ -282,7 +322,7 @@ test("PLATFORM-001 commit and upvoter duplicate checks are scoped to one platfor
   strictEqual(upvoter.status, "ready");
 });
 
-test("BUG-008 v5 normalizes mixed-case Zhihu hashes while preserving ordinary token case", () => {
+test("BUG-008 v6 normalizes mixed-case Zhihu hashes while preserving ordinary token case", () => {
   const parsed = parseBlacklistState({
     ...createInitialState(),
     authors: [author("CaseSensitive-Token", MIXED_HASH)],
@@ -426,9 +466,10 @@ test("tag deletion preserves member hash and every non-tag author field", () => 
   });
 });
 
-test("historical upvoter flow creates a v5-compatible Zhihu null-hash record", () => {
+test("historical upvoter flow creates a v6-compatible Zhihu null-hash/null-source record", () => {
   const state = createInitialState();
   const plan = planUpvoterCommit(state, {
+    sourcePostId: null,
     platformId: "zhihu",
     userId: "voter-user",
     authorNameAtCapture: "Voter",
@@ -440,6 +481,7 @@ test("historical upvoter flow creates a v5-compatible Zhihu null-hash record", (
   deepStrictEqual(plan.state.authors[0], {
     platformId: "zhihu",
     userId: "voter-user",
+    sourcePostId: null,
     memberHashId: null,
     authorNameAtCapture: "Voter",
     tagId: DEFAULT_TAG_ID,

@@ -4,6 +4,7 @@ import {
   parseBlacklistExportBegin,
   parseBlacklistExportPageInput,
   parseBlacklistExportTagsPage,
+  parseBlacklistImportPostsChunkInput,
   parseBlacklistImportAuthorsChunkInput,
   parseBlacklistImportSessionDto,
   parseBlacklistImportTagsChunkInput,
@@ -15,6 +16,7 @@ import {
   type BlacklistExportPageInput,
   type BlacklistExportTagsPageDto,
   type BlacklistImportAuthorsChunkInput,
+  type BlacklistImportPostsChunkInput,
   type BlacklistImportSessionDto,
   type BlacklistImportStatus,
   type BlacklistImportTagsChunkInput,
@@ -36,6 +38,7 @@ export const BLACKLIST_TRANSFER_RESPONSE_TYPE = "cocoon.blacklist.transfer.respo
 export type BlacklistTransferOperation =
   | "import-begin"
   | "import-authors-chunk"
+  | "import-posts-chunk"
   | "import-tags-chunk"
   | "import-inspect"
   | "import-finalize"
@@ -53,6 +56,7 @@ export type {
   BlacklistExportPageInput,
   BlacklistExportTagsPageDto,
   BlacklistImportAuthorsChunkInput,
+  BlacklistImportPostsChunkInput,
   BlacklistImportSessionDto,
   BlacklistImportStatus,
   BlacklistImportTagsChunkInput,
@@ -61,6 +65,7 @@ export type {
 };
 
 export {
+  parseBlacklistImportPostsChunkInput,
   parseBlacklistImportAuthorsChunkInput,
   parseBlacklistImportSessionDto,
   parseBlacklistImportTagsChunkInput,
@@ -77,6 +82,7 @@ interface TransferRequest<Operation extends BlacklistTransferOperation, Input> {
 export type BlacklistTransferRequest =
   | TransferRequest<"import-begin", { readonly metadata: BlacklistTransferFileMetadataDto }>
   | TransferRequest<"import-authors-chunk", BlacklistImportAuthorsChunkInput>
+  | TransferRequest<"import-posts-chunk", BlacklistImportPostsChunkInput>
   | TransferRequest<"import-tags-chunk", BlacklistImportTagsChunkInput>
   | TransferRequest<"import-inspect", { readonly sessionId: string }>
   | TransferRequest<
@@ -116,6 +122,7 @@ type TransferResponse<Operation extends BlacklistTransferOperation, Data> = {
 export type BlacklistTransferResponse =
   | TransferResponse<"import-begin", BlacklistImportSessionDto>
   | TransferResponse<"import-authors-chunk", BlacklistImportChunkResultDto>
+  | TransferResponse<"import-posts-chunk", BlacklistImportChunkResultDto>
   | TransferResponse<"import-tags-chunk", BlacklistImportChunkResultDto>
   | TransferResponse<"import-inspect", BlacklistImportSessionDto>
   | TransferResponse<"import-finalize", BlacklistTransferSummaryDto>
@@ -128,6 +135,7 @@ export type BlacklistTransferResponse =
 const OPERATIONS: readonly BlacklistTransferOperation[] = [
   "import-begin",
   "import-authors-chunk",
+  "import-posts-chunk",
   "import-tags-chunk",
   "import-inspect",
   "import-finalize",
@@ -200,6 +208,7 @@ function parseRevisionInput(value: unknown): BlacklistTransferRequest["input"] |
 const REQUEST_INPUT_PARSERS: Record<BlacklistTransferOperation, TransferInputParser> = {
   "import-begin": parseImportBeginInput,
   "import-authors-chunk": parseBlacklistImportAuthorsChunkInput,
+  "import-posts-chunk": parseBlacklistImportPostsChunkInput,
   "import-tags-chunk": parseBlacklistImportTagsChunkInput,
   "import-inspect": parseSessionInput,
   "import-finalize": parseFinalizeInput,
@@ -260,6 +269,7 @@ function parseFinishResult(value: unknown): { readonly revision: number } | null
 const SUCCESS_DATA_PARSERS: Record<BlacklistTransferOperation, TransferDataParser> = {
   "import-begin": parseSessionResult,
   "import-authors-chunk": parseChunkResult,
+  "import-posts-chunk": parseChunkResult,
   "import-tags-chunk": parseChunkResult,
   "import-inspect": parseSessionResult,
   "import-finalize": parseBlacklistTransferSummary,

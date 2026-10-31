@@ -15,38 +15,42 @@ export function createBlacklistContentController(
 ): BlacklistContentController {
   return {
     async handle(request) {
-      return lock.runExclusive(async () => {
-        switch (request.operation) {
-          case "initialize":
-            return repository.querySummary();
-          case "tags-page": {
-            const page = await repository.queryTagsPage(request.input);
-            return {
-              revision: page.revision,
-              tags: page.tags.map(({ tagId, name }) => ({ tagId, name })),
-              nextCursor: page.nextCursor,
-            };
+      return lock
+        .runExclusive(async () => {
+          switch (request.operation) {
+            case "initialize":
+              return repository.querySummary();
+            case "tags-page": {
+              const page = await repository.queryTagsPage(request.input);
+              return {
+                revision: page.revision,
+                tags: page.tags.map(({ tagId, name }) => ({ tagId, name })),
+                nextCursor: page.nextCursor,
+              };
+            }
+            case "identity-match":
+              return repository.queryIdentityMatches(request.input);
+            case "ensure-post":
+              return repository.ensurePost(request.input.post);
+            case "commit-author":
+              return repository.commitAuthor(request.input.input);
+            case "backfill-member-hash":
+              return repository.backfillMemberHash(
+                request.input.identity,
+                request.input.memberHashId,
+              );
+            case "commit-upvoter":
+              return repository.commitUpvoter(request.input.input);
+            case "preflight-direct":
+              return repository.preflightDirect({
+                ...request.input.identity,
+                expectedBlacklistedAt: request.input.expectedBlacklistedAt,
+              });
+            case "delete-tag":
+              return repository.deleteTag(request.input.tagId);
           }
-          case "identity-match":
-            return repository.queryIdentityMatches(request.input);
-          case "commit-author":
-            return repository.commitAuthor(request.input.input);
-          case "backfill-member-hash":
-            return repository.backfillMemberHash(
-              request.input.identity,
-              request.input.memberHashId,
-            );
-          case "commit-upvoter":
-            return repository.commitUpvoter(request.input.input);
-          case "preflight-direct":
-            return repository.preflightDirect({
-              ...request.input.identity,
-              expectedBlacklistedAt: request.input.expectedBlacklistedAt,
-            });
-          case "delete-tag":
-            return repository.deleteTag(request.input.tagId);
-        }
-      });
+        })
+        .catch(() => ({ status: "global-failure" }));
     },
   };
 }

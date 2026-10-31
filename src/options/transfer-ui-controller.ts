@@ -68,6 +68,8 @@ function progressText(progress: OptionsTransferProgress): string {
   switch (progress.phase) {
     case "import-tags":
       return `正在上传标签 ${progress.completed} / ${progress.total}…`;
+    case "import-posts":
+      return `正在上传关联帖子 ${progress.completed} / ${progress.total}…`;
     case "import-authors":
       return `正在上传作者 ${progress.completed} / ${progress.total}…`;
     case "import-inspect":
@@ -185,8 +187,8 @@ class OptionsTransferUi implements OptionsTransferUiController {
       return;
     }
     this.prepared = result.prepared;
-    const { authorCount, tagCount } = result.prepared.metadata;
-    this.elements.status.textContent = `已校验 ${authorCount} 位作者和 ${tagCount} 个标签；单个导入文件上限为 32 MiB。`;
+    const { authorCount, tagCount, postCount } = result.prepared.metadata;
+    this.elements.status.textContent = `已校验 ${authorCount} 位作者、${tagCount} 个标签和 ${postCount} 条关联帖子；单个导入文件上限为 32 MiB。`;
   }
 
   private async readSelectedFile(): Promise<void> {
@@ -230,10 +232,10 @@ class OptionsTransferUi implements OptionsTransferUiController {
   }
 
   private importSuccessText(mode: "merge" | "replace", selected: PreparedBlacklistImport): string {
-    const { authorCount, tagCount } = selected.metadata;
+    const { authorCount, tagCount, postCount } = selected.metadata;
     return mode === "merge"
-      ? `合并完成；文件包含 ${authorCount} 位作者和 ${tagCount} 个标签。`
-      : `已替换为 ${authorCount} 位作者和 ${tagCount} 个标签。`;
+      ? `合并完成；文件包含 ${authorCount} 位作者、${tagCount} 个标签和 ${postCount} 条关联帖子。`
+      : `已替换为 ${authorCount} 位作者、${tagCount} 个标签和 ${postCount} 条关联帖子。`;
   }
 
   private async importPrepared(mode: "merge" | "replace"): Promise<void> {
@@ -286,7 +288,7 @@ class OptionsTransferUi implements OptionsTransferUiController {
     }
     const selected = this.prepared;
     this.replaceDialogController.openWithDescription(
-      `将用文件中的 ${selected.metadata.authorCount} 位作者和 ${selected.metadata.tagCount} 个标签替换当前列表。现有设置会保留。`,
+      `将用文件中的 ${selected.metadata.authorCount} 位作者、${selected.metadata.tagCount} 个标签和 ${selected.metadata.postCount} 条关联帖子替换当前全部作者、标签和帖子。现有设置会保留。`,
       this.elements.importData,
       () => {
         if (this.prepared === selected) void this.importPrepared("replace");

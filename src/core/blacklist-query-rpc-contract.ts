@@ -13,7 +13,7 @@ import {
   type BlacklistTagDto,
 } from "./blacklist-rpc-contract.ts";
 
-export const BLACKLIST_QUERY_RPC_VERSION = 1 as const;
+export const BLACKLIST_QUERY_RPC_VERSION = 2 as const;
 export const BLACKLIST_QUERY_REQUEST_TYPE = "cocoon.blacklist.query.request" as const;
 export const BLACKLIST_QUERY_RESPONSE_TYPE = "cocoon.blacklist.query.response" as const;
 export const BLACKLIST_QUERY_PAGE_SIZE = 50;

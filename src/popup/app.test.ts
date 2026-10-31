@@ -31,6 +31,8 @@ const AUTHOR: BlacklistAuthorDto = {
   tagId: "default",
   blacklistedAt: "2026-08-21T10:00:00.000Z",
   source: "direct",
+  sourcePostId: null,
+  sourcePost: null,
 };
 const AUTHOR_ITEM: BlacklistAuthorListItemDto = { author: AUTHOR, tag: DEFAULT_TAG };
 

@@ -17,6 +17,8 @@ function items(count: number, prefix = "Author"): readonly AuthorListItem[] {
       tagId: "default",
       blacklistedAt: "2026-08-21T10:00:00.000Z",
       source: "direct" as const,
+      sourcePostId: null,
+      sourcePost: null,
     },
     tag: { tagId: "default", name: "default", isDefault: true },
   }));

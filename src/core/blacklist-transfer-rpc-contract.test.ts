@@ -10,7 +10,7 @@ import {
   parseBlacklistTransferFileJson,
   serializeBlacklistTransferFile,
   type BlacklistTransferAuthorDto,
-  type BlacklistTransferEnvelopeV1,
+  type BlacklistTransferEnvelopeV2,
 } from "./blacklist-transfer-values.ts";
 import {
   createBlacklistTransferRequest,
@@ -32,19 +32,21 @@ function author(index: number, overrides: Partial<BlacklistTransferAuthorDto> = 
     tagId: "default",
     blacklistedAt: EXPORTED_AT,
     blockSource: "direct" as const,
+    sourcePostId: null,
     ...overrides,
   };
 }
 
 function envelope(
   authors: readonly BlacklistTransferAuthorDto[] = [author(0)],
-): BlacklistTransferEnvelopeV1 {
+): BlacklistTransferEnvelopeV2 {
   return {
     product: "cocoon-blacklist",
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: EXPORTED_AT,
-    schemaVersion: 5,
+    schemaVersion: 6,
     authors,
+    posts: [],
     tags: [{ tagId: "default", name: "default" }],
   };
 }
@@ -60,6 +62,7 @@ function session(): BlacklistImportSessionDto {
     updatedAt: 1_000,
     expiresAt: 2_000,
     received: {
+      posts: { chunks: 0, count: 0, bytes: 2 },
       authors: { chunks: 0, count: 0, bytes: 2 },
       tags: { chunks: 0, count: 0, bytes: 2 },
     },
@@ -87,7 +90,7 @@ function beginForScale(authorCount: number, canonicalBytes: number) {
   });
 }
 
-test("BUG-016/AC-099 format v1/schema v5 round-trips without the old 8 MiB/count limits", () => {
+test("BUG-016/AC-099 format v2/schema v6 round-trips without the old 8 MiB/count limits", () => {
   const transfer = envelope([
     author(0, { memberHashId: "b".repeat(32) }),
     author(1, { platformId: "youtube", tagId: "reading" }),
@@ -274,6 +277,7 @@ test("BUG-016/AC-099 strict responses expose only session/progress, pages, or su
   const page = createBlacklistTransferResponse("export-authors-page", true, {
     revision: 4,
     items: [author(0)],
+    posts: [],
     nextCursor: JSON.stringify({ version: 1, operation: "export-authors", revision: 4, order: 0 }),
   });
   strictEqual(parseBlacklistTransferResponse(page, "export-authors-page"), page);

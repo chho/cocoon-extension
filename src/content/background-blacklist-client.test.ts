@@ -15,6 +15,9 @@ test("BUG-015/BUG-016 client initialization preserves the sync receiver and load
   const revisions: number[] = [];
   const client = createBackgroundBlacklistClient({
     gateway: {
+      async ensurePost(post) {
+        return { post, revision: 0 };
+      },
       async initialize() {
         initializations += 1;
         return { revision: 3, authorCount: 100_000, tagCount: 2 };
@@ -84,6 +87,9 @@ test("BUG-016 client exposes revision-bound identity matching without full state
   const requested = [{ platformId: "zhihu", identifier: "visible" }] as const;
   const client = createBackgroundBlacklistClient({
     gateway: {
+      async ensurePost(post) {
+        return { post, revision: 0 };
+      },
       async initialize() {
         return { revision: 4, authorCount: 1, tagCount: 1 };
       },

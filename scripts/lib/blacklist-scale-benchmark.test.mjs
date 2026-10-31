@@ -69,7 +69,7 @@ test("BUG-016 memory-only benchmark reports full synthetic scale without waiting
   strictEqual(result.status, 0, result.stderr);
   const metrics = JSON.parse(result.stdout);
   strictEqual(metrics.scale, 33_524);
-  strictEqual(metrics.utf8Bytes, 7_670_490);
+  strictEqual(metrics.utf8Bytes, 8_340_981);
   strictEqual(metrics.result, "memory-completed");
   strictEqual(result.stdout.includes("synthetic-user-"), false);
 });

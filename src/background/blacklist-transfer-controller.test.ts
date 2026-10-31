@@ -10,7 +10,7 @@ import {
 } from "../core/blacklist-transfer-rpc-contract.ts";
 import {
   createBlacklistTransferFileMetadata,
-  type BlacklistTransferEnvelopeV1,
+  type BlacklistTransferEnvelopeV2,
 } from "../core/blacklist-transfer-values.ts";
 import {
   createBlacklistTransferController,
@@ -33,12 +33,13 @@ Object.defineProperty(globalThis, "IDBKeyRange", {
 
 const SESSION_ID = "1".repeat(32);
 const EXPORTED_AT = "2026-08-25T12:34:56.789Z";
-const transfer: BlacklistTransferEnvelopeV1 = {
+const transfer: BlacklistTransferEnvelopeV2 = {
   product: "cocoon-blacklist",
-  formatVersion: 1,
+  formatVersion: 2,
   exportedAt: EXPORTED_AT,
-  schemaVersion: 5,
+  schemaVersion: 6,
   authors: [],
+  posts: [],
   tags: [{ tagId: "default", name: "default" }],
 };
 const metadata = createBlacklistTransferFileMetadata(
@@ -53,6 +54,7 @@ const session: BlacklistImportSessionDto = {
   updatedAt: 1,
   expiresAt: 2,
   received: {
+    posts: { chunks: 0, count: 0, bytes: 2 },
     authors: { chunks: 0, count: 0, bytes: 2 },
     tags: { chunks: 1, count: 1, bytes: metadata.tagsBytes },
   },
@@ -60,9 +62,9 @@ const session: BlacklistImportSessionDto = {
 const summary = { revision: 2, authorCount: 0, tagCount: 1 };
 const exportBegin = {
   product: "cocoon-blacklist",
-  formatVersion: 1,
+  formatVersion: 2,
   exportedAt: EXPORTED_AT,
-  schemaVersion: 5,
+  schemaVersion: 6,
   revision: 2,
   authorCount: 0,
   tagCount: 1,
@@ -81,6 +83,10 @@ function repository(overrides: Partial<BlacklistTransferControllerRepository> = 
     },
     async stageTagsChunk() {
       calls.push("stageTagsChunk");
+      return { status: "staged", session };
+    },
+    async stagePostsChunk() {
+      calls.push("stagePostsChunk");
       return { status: "staged", session };
     },
     async inspectImport() {
@@ -109,7 +115,7 @@ function repository(overrides: Partial<BlacklistTransferControllerRepository> = 
     },
     async exportAuthorsPage() {
       calls.push("exportAuthorsPage");
-      return { revision: 2, items: [], nextCursor: null };
+      return { revision: 2, items: [], posts: [], nextCursor: null };
     },
     async exportTagsPage() {
       calls.push("exportTagsPage");
@@ -144,6 +150,7 @@ function requests() {
           tagId: "default",
           blacklistedAt: EXPORTED_AT,
           blockSource: "direct",
+          sourcePostId: null,
         },
       ],
     }),

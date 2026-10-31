@@ -5,7 +5,9 @@ import type {
 } from "../content/blacklist-state.ts";
 import type { BlacklistIdentityQueryDto } from "./blacklist-query-rpc-contract.ts";
 
-export const BLACKLIST_CONTENT_RPC_VERSION = 2 as const;
+import { isSourcePostId, parseSourcePost, type SourcePost } from "./source-post.ts";
+
+export const BLACKLIST_CONTENT_RPC_VERSION = 3 as const;
 export const BLACKLIST_CONTENT_RPC_REQUEST_TYPE = "cocoon.blacklist.content.request" as const;
 export const BLACKLIST_CONTENT_RPC_RESPONSE_TYPE = "cocoon.blacklist.content.response" as const;
 export const MAX_BLACKLIST_CONTENT_RPC_BYTES = 256 * 1024;
@@ -27,6 +29,7 @@ export type BlacklistContentOperation =
   | "tags-page"
   | "identity-match"
   | "commit-author"
+  | "ensure-post"
   | "backfill-member-hash"
   | "commit-upvoter"
   | "preflight-direct"
@@ -47,6 +50,7 @@ export type BlacklistContentRequest =
   | ContentRequest<"initialize", Record<string, never>>
   | ContentRequest<"tags-page", BlacklistContentTagPageInput>
   | ContentRequest<"identity-match", BlacklistContentIdentityMatchInput>
+  | ContentRequest<"ensure-post", { readonly post: SourcePost }>
   | ContentRequest<"commit-author", { readonly input: CommitInput }>
   | ContentRequest<
       "backfill-member-hash",
@@ -155,6 +159,14 @@ function isMemberHash(value: unknown, userId: string): value is string | null {
   );
 }
 
+function isSourceReference(value: unknown): value is string | null {
+  return value === null || isSourcePostId(value);
+}
+
+function isAuthorName(value: unknown): value is string {
+  return typeof value === "string" && codePointLength(value) <= MAX_AUTHOR_NAME_CODE_POINTS;
+}
+
 function isCommitInput(value: unknown): value is CommitInput {
   return (
     isRecord(value) &&
@@ -162,6 +174,7 @@ function isCommitInput(value: unknown): value is CommitInput {
       "authorNameAtCapture",
       "blacklistedAt",
       "isNewTag",
+      "sourcePostId",
       "memberHashId",
       "platformId",
       "tag",
@@ -170,15 +183,15 @@ function isCommitInput(value: unknown): value is CommitInput {
     value.platformId === ZHIHU_PLATFORM_ID &&
     isCanonicalZhihuUserId(value.userId) &&
     isMemberHash(value.memberHashId, value.userId) &&
-    typeof value.authorNameAtCapture === "string" &&
-    codePointLength(value.authorNameAtCapture) <= MAX_AUTHOR_NAME_CODE_POINTS &&
+    isSourceReference(value.sourcePostId) &&
+    isAuthorName(value.authorNameAtCapture) &&
     isTag(value.tag) &&
     typeof value.isNewTag === "boolean" &&
     isTimestamp(value.blacklistedAt)
   );
 }
 
-function isUpvoterInput(value: unknown): value is UpvoterCommitInput {
+export function isBlacklistContentUpvoterInput(value: unknown): value is UpvoterCommitInput {
   return (
     isRecord(value) &&
     hasExactKeys(value, [
@@ -186,13 +199,14 @@ function isUpvoterInput(value: unknown): value is UpvoterCommitInput {
       "blacklistedAt",
       "platformId",
       "tagId",
+      "sourcePostId",
       "userId",
     ]) &&
     value.platformId === ZHIHU_PLATFORM_ID &&
     isCanonicalZhihuUserId(value.userId) &&
-    typeof value.authorNameAtCapture === "string" &&
-    codePointLength(value.authorNameAtCapture) <= MAX_AUTHOR_NAME_CODE_POINTS &&
+    isAuthorName(value.authorNameAtCapture) &&
     isTrimmedWithin(value.tagId, MAX_STABLE_ID_CODE_POINTS) &&
+    isSourceReference(value.sourcePostId) &&
     isTimestamp(value.blacklistedAt)
   );
 }
@@ -279,7 +293,7 @@ function parseAliasBackfill(input: Record<string, unknown>): BlacklistContentReq
 }
 
 function parseUpvoterCommit(input: Record<string, unknown>): BlacklistContentRequest | null {
-  return hasExactKeys(input, ["input"]) && isUpvoterInput(input.input)
+  return hasExactKeys(input, ["input"]) && isBlacklistContentUpvoterInput(input.input)
     ? createBlacklistContentRequest("commit-upvoter", { input: input.input })
     : null;
 }
@@ -309,6 +323,10 @@ function parseContentOperation(
       return parseTagPage(input);
     case "identity-match":
       return parseIdentityMatch(input);
+    case "ensure-post": {
+      const post = hasExactKeys(input, ["post"]) ? parseSourcePost(input.post) : null;
+      return post ? createBlacklistContentRequest("ensure-post", { post }) : null;
+    }
     case "commit-author":
       return parseCommitAuthor(input);
     case "backfill-member-hash":

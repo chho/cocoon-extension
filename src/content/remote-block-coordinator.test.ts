@@ -116,6 +116,7 @@ function directAuthor(userId: string, tagId = "default") {
     authorNameAtCapture: `Direct ${userId}`,
     tagId,
     blacklistedAt: TIMESTAMP,
+    sourcePostId: null,
     blockSource: "direct" as const,
   };
 }
@@ -304,6 +305,7 @@ function createHarness(initialState: BlacklistState, options: HarnessOptions = {
 function upvoterRequest(userId = "voter-user") {
   return {
     source: "upvoter" as const,
+    sourcePostId: null,
     platformId: "zhihu",
     userId,
     authorName: `Voter ${userId}`,
@@ -323,7 +325,7 @@ function userIdsBySlot(countPerSlot: number): readonly string[][] {
   return slots;
 }
 
-test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v5 Zhihu record", async () => {
+test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v6 Zhihu record", async () => {
   const initial: BlacklistState = {
     ...createInitialState(),
     tags: [...createInitialState().tags, { tagId: "chosen", name: "Chosen" }],
@@ -350,10 +352,11 @@ test("VOTER-014 upvoter persistence performs zero blockUser calls and writes a v
       authorNameAtCapture: "Voter voter-user",
       tagId: "chosen",
       blacklistedAt: TIMESTAMP,
+      sourcePostId: null,
       blockSource: "upvoter",
     },
   ]);
-  strictEqual(harness.state().schemaVersion, 5);
+  strictEqual(harness.state().schemaVersion, 6);
   strictEqual(isValidBlacklistTimestamp(harness.state().authors[0]?.blacklistedAt), true);
   strictEqual(harness.runtime(), harness.state());
   strictEqual(
@@ -714,7 +717,7 @@ test("SOURCE-005 a waiting upvoter persists after the first concurrent write fai
   harness.releaseWrite();
 
   deepStrictEqual(await Promise.all([first, second]), [
-    { status: "failed", reason: "storage" },
+    { status: "failed", reason: "storage-global" },
     { status: "success", persistedUpvoter: true },
   ]);
   strictEqual(harness.state().authors[0]?.userId, "retry-user");
@@ -732,7 +735,7 @@ test("ERR-001 upvoter storage failure does not apply runtime state or report suc
 
   const result = await harness.coordinator.block(upvoterRequest("failed-user"));
 
-  deepStrictEqual(result, { status: "failed", reason: "storage" });
+  deepStrictEqual(result, { status: "failed", reason: "storage-global" });
   deepStrictEqual(harness.state(), initial);
   deepStrictEqual(harness.runtime(), initial);
   deepStrictEqual(harness.counts(), {
@@ -812,7 +815,7 @@ test("ERR-001 upvoter storage lock and read exceptions stay storage-classified",
 
     deepStrictEqual(await harness.coordinator.block(upvoterRequest("storage-error-user")), {
       status: "failed",
-      reason: "storage",
+      reason: "storage-global",
     });
     deepStrictEqual(harness.counts(), {
       posts: 0,

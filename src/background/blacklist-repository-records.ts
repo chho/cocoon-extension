@@ -10,7 +10,6 @@ import {
   parseStoredMetadata,
   parseStoredTag,
   requestResult,
-  transactionDone,
   type StoredBlacklistMetadata,
   type StoredTag,
 } from "./blacklist-idb-schema.ts";
@@ -49,6 +48,7 @@ export function logicalAuthor(
     tagId: author.tagId,
     blacklistedAt: author.blacklistedAt,
     blockSource: author.blockSource,
+    sourcePostId: author.sourcePostId,
   };
 }
 
@@ -68,13 +68,6 @@ export async function metadataFrom(transaction: IDBTransaction): Promise<StoredB
   const metadata = parseStoredMetadata(raw);
   if (!metadata) throw new Error("IndexedDB blacklist metadata is unreadable.");
   return metadata;
-}
-
-export async function createTransactionContext(
-  transaction: IDBTransaction,
-): Promise<RepositoryTransactionContext> {
-  const done = transactionDone(transaction);
-  return { transaction, done, metadata: await metadataFrom(transaction) };
 }
 
 export async function identifierOwner(

@@ -8,7 +8,7 @@ Cocoon 是一个使用 TypeScript、Vite 和 Chrome Manifest V3 开发的浏览�
 
 - Action Badge 统计当前标签页本次页面生命周期内被隐藏的卡片与评论数量；Popup 显示页面状态、准确拦截数、本地作者/标签摘要、搜索、单个解除、8 秒撤销和管理页入口。
 - 进入知乎首页 `https://www.zhihu.com/` 后，为内容信息流卡片添加极简 `×`，并在受支持的知乎作者悬浮窗口中添加屏蔽入口。
-- 点击入口只打开本地标签抽屉；选择或创建标签后，才通过 background 将 schema v5 作者记录写入扩展自有 IndexedDB，并隐藏当前及后续出现的同作者卡片、评论和回复；不采集或保存卡片图像。
+- 点击入口只打开本地标签抽屉；选择或创建标签后，才通过 background 将 schema v6 作者记录与可空首次帖子引用写入扩展自有 IndexedDB，并隐藏当前及后续出现的同作者卡片、评论和回复；不采集或保存卡片图像。
 - 标签抽屉可按用户可见且已记忆的选项，对直接选择的单个作者执行知乎账号级拉黑，或读取当前内容的点赞者并仅将其加入 Cocoon 本地黑名单；点赞者不得进入远程拉黑 POST。
 - 独立管理页提供完整作者列表、搜索、标签/平台筛选、排序、单个/批量解除、标签维护，以及严格校验且原子执行的 JSON 导入与导出。
 - 本地身份按 `(platformId, userId)` 隔离；当前只有知乎运行时插件，展示或导入其他平台分类不表示支持对应网站过滤。
@@ -235,9 +235,11 @@ git diff --check
 - 内容脚本运行在 isolated world，但共享页面 DOM；Console 日志仍可在页面开发者工具中查看。
 - Service Worker 会被随时终止；黑名单持久权威状态必须存入 IndexedDB，偏好等其他持久状态存入 `chrome.storage.local`，会话权威状态存入 `chrome.storage.session`，不得只依赖后台模块全局变量。异步消息 listener 必须同步声明保持响应通道，并确保最多响应一次。
 
-## Schema v5 与平台身份边界
+## Schema 与平台身份边界
 
-- background 独占访问的 IndexedDB 是唯一黑名单权威，逻辑 `schemaVersion` 仍为 `5`；旧 `cocoonBlacklistState` 只允许作为一次性 v1～v5 迁移来源，成功迁移后删除。`cocoonBlacklistRevision` 只是不含黑名单数据的非权威通知，不得用于重建状态或形成平行权威。
+本轮已批准 `POST-001`～`POST-006`：`POST-006` 扩展悬浮名片的可选帖子来源记录，必须独立于 `voterSource`，不得影响既有按钮注入/身份判断或启用名片点赞者操作；不可靠关联正常降级为空引用。逻辑 schema 升级到 v6，新增共享帖子与作者可空首次引用；IndexedDB 物理版本及 transfer 格式必须显式升级，继续读取旧 v1～v5 数据和 format v1/schema v5 导入。新导出使用 format v2/schema v6，共享帖子只导出一次。其余平台、安全、原子导入和有界传输规则不变。帖子先独立提交，用户逐条短事务校验引用，网络不进入事务，不做整批回滚；迁移、解除、撤销、替换和在途任务必须避免悬空引用。
+
+- background 独占访问的 IndexedDB 是唯一黑名单权威，逻辑 `schemaVersion` 为 `6`；旧 `cocoonBlacklistState` 只允许作为一次性 v1～v5 迁移来源，成功迁移后删除。`cocoonBlacklistRevision` 只是不含黑名单数据的非权威通知，不得用于重建状态或形成平行权威。
 - 作者记录必须包含合法 `platformId`，身份、去重、恢复、批量解除和 alias 冲突都按 `(platformId, identifier)` 隔离；跨平台相同 `userId` 可以共存。
 - 所有 v1～v4 有效历史记录迁移为 `platformId: "zhihu"`；迁移必须幂等、无图且保留标签、名称、来源和首次屏蔽时间。
 - `memberHashId` 是知乎专用 alias，非知乎记录必须为 `null`；非知乎稳定 ID 不执行知乎 hash 规范化。
@@ -249,10 +251,10 @@ git diff --check
 - Popup/options 的黑名单读写必须通过严格版本化 RPC 和 background IndexedDB 事务边界；未知、额外字段、错误 operation、未授权 sender 或超限消息必须 fail closed。
 - 普通管理 RPC 只接受精确内置 Popup/options 页面；content 身份查询只接受同扩展知乎主 frame；JSON transfer operation 只能接受精确 `options/options.html` sender。
 - Popup/options/content 必须使用有界摘要、keyset 分页或身份批查，不得通过单条消息读取完整作者集合；普通 RPC 单条 JSON 最多 256 KiB，作者页最多 50 条、标签页最多 100 条、身份批查最多 200 个、管理 mutation batch 最多 500 个，cursor 最多 2 KiB。
-- 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors 和 tags，不得包含设置、Badge/session 状态或其他 storage 数据；导出必须绑定 revision 分页读取并在 options 本地组装 Blob，中途 revision 变化时中止。
-- 导入合并与替换必须先完成固定键、版本、字段、长度、标签引用、平台身份和 alias 冲突校验，再以持久 session 和有界 chunk staging 接收，最后在锁内重读并最多执行一次原子 finalize；解析、冲突、锁或写入失败时不得留下部分权威状态或虚假成功。
+- 导出 envelope 只允许包含固定产品/格式/schema 元数据、authors、tags 和被引用的 posts，不得包含设置、Badge/session 状态或其他 storage 数据；导出必须绑定 revision 分页读取并在 options 本地组装 Blob，中途 revision 变化时中止。
+- 导入合并与替换必须先完成固定键、版本、字段、长度、标签/帖子引用、平台身份和 alias 冲突校验，再以持久 session 和有界 chunk staging 接收，最后在锁内重读并最多执行一次原子 finalize；解析、冲突、锁或写入失败时不得留下部分权威状态或虚假成功。
 - IndexedDB 作者总数不设 Cocoon 人工上限；实际容量受浏览器配额和设备资源约束。单次 transfer 文件上限为 32 MiB，标签最多 2,000 个，每个 chunk 最多 500 位作者且单条消息最多 256 KiB；这些操作边界不得被当作数据库总容量限制。不得为导出新增 `downloads` 权限，继续使用扩展页面本地 Blob 下载。
-- 真实 `cocoon-blacklist-*.json` 导出包含作者名称、稳定 ID、alias、标签、来源和时间等个人数据，不得提交、分享、上传或附加到 Issue，也不得直接用作测试 fixture。测试必须使用合成标识和最小构造数据。
+- 真实 `cocoon-blacklist-*.json` 导出包含作者名称、稳定 ID、alias、标签、来源、时间及关联帖子标题/URL 等个人数据，不得提交、分享、上传或附加到 Issue，也不得直接用作测试 fixture。测试必须使用合成标识和最小构造数据。
 
 ## 公开仓库与敏感文件规则
 
@@ -333,7 +335,7 @@ git diff --check
 - [ ] 管理页搜索/筛选/排序、作者与标签操作、平台显示及导入导出按本次范围通过自动化或用户验收
 - [ ] 知乎首页现有和动态卡片、评论/回复及受支持悬浮入口保持单次注入、稳定身份和失败安全
 - [ ] 点击卡片/悬浮入口只打开抽屉且不会误触跳转；赋予标签后才执行持久化、过滤和当前可见选项授权的知乎操作
-- [ ] schema v5、平台隔离、知乎 alias/网络范围和点赞者仅本地入库边界没有回归
+- [ ] schema v6 及旧数据迁移、平台隔离、知乎 alias/网络范围和点赞者仅本地入库边界没有回归
 - [ ] 导入导出严格校验、options-only 授权、原子写入、Blob 下载和个人数据保护没有回归
 - [ ] 没有无必要新增 Chrome 权限、页面范围、远程代码、第三方请求或服务端
 - [ ] 没有提交真实快照、导出 JSON、凭据、个人数据、被忽略 docs、`dist/` 或 `node_modules/`

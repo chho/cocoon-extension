@@ -29,8 +29,9 @@ import {
   formatBenchmarkReport,
   splitAuthorChunks,
   utf8Bytes,
-  validateSyntheticTransfer,
 } from "./lib/blacklist-scale-benchmark.mjs";
+
+import { parseBlacklistTransferEnvelope } from "../src/core/blacklist-transfer-values.ts";
 
 Object.defineProperty(globalThis, "IDBKeyRange", {
   configurable: true,
@@ -122,10 +123,12 @@ async function seedV1Database(databaseName, state) {
       transaction.objectStore(BLACKLIST_STORE_NAMES.tags).add(createStoredTag(tag, order));
     });
     state.authors.forEach((author, order) => {
+      const legacyAuthor = { ...author };
+      delete legacyAuthor.sourcePostId;
       transaction.objectStore(BLACKLIST_STORE_NAMES.authors).add({
         authorKey: authorKey(author.platformId, author.userId),
         order,
-        ...author,
+        ...legacyAuthor,
       });
       transaction
         .objectStore(BLACKLIST_STORE_NAMES.identifiers)
@@ -136,7 +139,9 @@ async function seedV1Database(databaseName, state) {
           .add(createStoredIdentifier(author, author.memberHashId));
       }
     });
-    transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).add(createMetadata(state, 0));
+    transaction
+      .objectStore(BLACKLIST_STORE_NAMES.metadata)
+      .add({ ...createMetadata(state, 0), logicalSchemaVersion: 5 });
     await transactionDone(transaction);
   } finally {
     database.close();
@@ -150,8 +155,8 @@ async function stagePrototypeHeader(database, transfer) {
   );
   transaction.objectStore(BLACKLIST_STORE_NAMES.importSessions).put({
     sessionId: SESSION_ID,
-    formatVersion: 1,
-    schemaVersion: 5,
+    formatVersion: 2,
+    schemaVersion: 6,
     authorCount: transfer.authors.length,
     tagCount: transfer.tags.length,
   });
@@ -210,18 +215,6 @@ async function stagePrototype(database, transfer, chunks) {
   }
 }
 
-function stagedAuthor(record) {
-  return {
-    platformId: record.platformId,
-    userId: record.userId,
-    memberHashId: record.memberHashId,
-    authorNameAtCapture: record.authorNameAtCapture,
-    tagId: record.tagId,
-    blacklistedAt: record.blacklistedAt,
-    blockSource: record.blockSource,
-  };
-}
-
 async function readPrototypeTags(database) {
   const transaction = database.transaction(BLACKLIST_STORE_NAMES.importTags, "readonly");
   const raw = await requestResult(
@@ -240,7 +233,7 @@ function writePrototypeMetadata(transaction, authorCount, tagCount) {
   transaction.objectStore(BLACKLIST_STORE_NAMES.metadata).put({
     key: BLACKLIST_METADATA_KEY,
     migrationComplete: true,
-    logicalSchemaVersion: 5,
+    logicalSchemaVersion: 6,
     revision: 1,
     authorCount,
     tagCount,
@@ -270,9 +263,8 @@ function copyPrototypeAuthors(options) {
       }
       return;
     }
-    const record = cursor.value;
-    const author = stagedAuthor(record);
-    if (!validTagIds.has(author.tagId)) {
+    const { sessionId, index, ...author } = cursor.value;
+    if (sessionId !== SESSION_ID || !validTagIds.has(author.tagId)) {
       transaction.abort();
       return;
     }
@@ -286,7 +278,7 @@ function copyPrototypeAuthors(options) {
       identityOwners.add(key);
       identifiers.put(createStoredIdentifier(author, identifier));
     }
-    authors.put(createStoredAuthor(author, record.index));
+    authors.put(createStoredAuthor(author, index));
     authorCount += 1;
     cursor.continue();
   };
@@ -371,20 +363,25 @@ function benchmarkResult(result) {
 }
 
 async function prepareTransferBenchmark(scale, tracker) {
-  const generated = measureSync(tracker, () => createSyntheticTransfer(scale));
+  // Keep the synthetic legacy generator as migration coverage, then benchmark current files.
+  const generated = measureSync(tracker, () =>
+    parseBlacklistTransferEnvelope(createSyntheticTransfer(scale)),
+  );
+  if (!generated.value) throw new Error("Synthetic legacy normalization failed.");
   const serialized = measureSync(tracker, () => JSON.stringify(generated.value));
   const byteLength = utf8Bytes(serialized.value);
   const textRead = await measureAsync(tracker, async () => new Blob([serialized.value]).text());
   const parsed = measureSync(tracker, () => JSON.parse(textRead.value));
   collectGarbage(tracker);
-  const validated = measureSync(tracker, () => validateSyntheticTransfer(parsed.value));
-  if (!validated.value.valid || validated.value.authorCount !== scale) {
+  const validated = measureSync(tracker, () => parseBlacklistTransferEnvelope(parsed.value));
+  if (!validated.value || validated.value.authors.length !== scale) {
     throw new Error("Synthetic transfer strict validation failed.");
   }
   const state = {
-    schemaVersion: 5,
-    tags: parsed.value.tags,
-    authors: parsed.value.authors,
+    schemaVersion: 6,
+    tags: validated.value.tags,
+    authors: validated.value.authors,
+    posts: validated.value.posts,
   };
   const chunks = splitAuthorChunks(state.authors);
   return {

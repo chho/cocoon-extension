@@ -354,9 +354,9 @@ test("BUG-016 strict transfer listener claims only exact options senders", async
   const request = createBlacklistTransferRequest("export-begin", {});
   const response = createBlacklistTransferResponse("export-begin", true, {
     product: "cocoon-blacklist",
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: "2026-08-25T12:34:56.789Z",
-    schemaVersion: 5,
+    schemaVersion: 6,
     revision: 3,
     authorCount: 33_524,
     tagCount: 3,

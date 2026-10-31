@@ -39,6 +39,7 @@ function fallbackError(operation: BlacklistTransferOperation): BlacklistTransfer
   switch (operation) {
     case "import-begin":
     case "import-authors-chunk":
+    case "import-posts-chunk":
     case "import-tags-chunk":
     case "import-finalize":
     case "import-abort":
@@ -114,6 +115,12 @@ async function runImportTransfer(
         true,
         await repository.stageTagsChunk(request.input),
       );
+    case "import-posts-chunk":
+      return createBlacklistTransferResponse(
+        "import-posts-chunk",
+        true,
+        await repository.stagePostsChunk(request.input),
+      );
     case "import-inspect": {
       const session = await repository.inspectImport(request.input.sessionId);
       if (!session) throw new ImportSessionNotFoundError();
@@ -129,9 +136,7 @@ async function runImportTransfer(
     case "import-abort": {
       const aborted = await repository.abortImport(request.input.sessionId);
       if (!aborted) throw new ImportSessionNotFoundError();
-      return createBlacklistTransferResponse("import-abort", true, {
-        sessionId: request.input.sessionId,
-      });
+      return createBlacklistTransferResponse("import-abort", true, request.input);
     }
   }
 }

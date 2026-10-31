@@ -5,6 +5,7 @@ import {
   parseBlacklistTransferResponse,
   type BlacklistExportPageInput,
   type BlacklistImportAuthorsChunkInput,
+  type BlacklistImportPostsChunkInput,
   type BlacklistImportMode,
   type BlacklistImportTagsChunkInput,
   type BlacklistTransferOperation,
@@ -34,6 +35,9 @@ export interface BlacklistTransferRpcClient {
   stageTagsChunk(
     input: BlacklistImportTagsChunkInput,
   ): Promise<TransferResponseFor<"import-tags-chunk">>;
+  stagePostsChunk(
+    input: BlacklistImportPostsChunkInput,
+  ): Promise<TransferResponseFor<"import-posts-chunk">>;
   inspectImport(sessionId: string): Promise<TransferResponseFor<"import-inspect">>;
   finalizeImport(
     sessionId: string,
@@ -65,6 +69,10 @@ class RuntimeBlacklistTransferRpcClient implements BlacklistTransferRpcClient {
 
   stageTagsChunk(input: BlacklistImportTagsChunkInput) {
     return this.request("import-tags-chunk", input);
+  }
+
+  stagePostsChunk(input: BlacklistImportPostsChunkInput) {
+    return this.request("import-posts-chunk", input);
   }
 
   inspectImport(sessionId: string) {

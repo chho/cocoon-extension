@@ -25,6 +25,7 @@ export interface VoterBatchRequest {
   readonly source: ZhihuContentSource;
   readonly tagId: string;
   readonly directAuthorUserId: string;
+  readonly sourcePostId: string | null;
   readonly isStopped: () => boolean;
 }
 
@@ -55,6 +56,59 @@ function initialProgress(): VoterBatchProgress {
   };
 }
 
+async function persistVoterQueue(
+  request: VoterBatchRequest,
+  coordinator: RemoteBlockCoordinator,
+  queue: VoterFetchResult["users"],
+  progress: { skipped: number; report: (changes: Partial<VoterBatchProgress>) => void },
+): Promise<void> {
+  const counts = { success: 0, failed: 0, skipped: progress.skipped };
+  const { report } = progress;
+  let globalFailure = false;
+  const isStopped = () => globalFailure || request.isStopped();
+  let nextIndex = 0;
+  let stoppedAfterStart = 0;
+  report({ phase: "persisting", ...counts, unprocessed: queue.length });
+
+  async function worker(): Promise<void> {
+    while (!isStopped()) {
+      const index = nextIndex;
+      if (index >= queue.length) return;
+      nextIndex += 1;
+      const voter = queue[index];
+      report({ unprocessed: queue.length - nextIndex });
+      const result = await coordinator.block(
+        {
+          source: "upvoter",
+          userId: voter.userId,
+          authorName: voter.authorName,
+          tagId: request.tagId,
+          sourcePostId: request.sourcePostId,
+        },
+        isStopped,
+      );
+      if (result.status === "success") {
+        counts.success += 1;
+      } else if (result.status === "skipped") {
+        counts.skipped += 1;
+      } else if (result.status === "stopped") {
+        stoppedAfterStart += 1;
+      } else {
+        counts.failed += 1;
+        if (result.reason === "storage-global") globalFailure = true;
+      }
+      report(counts);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(PERSIST_CONCURRENCY, queue.length) }, async () => worker()),
+  );
+  const unprocessed = queue.length - nextIndex + stoppedAfterStart;
+  const phase = globalFailure ? "failed" : request.isStopped() ? "stopped" : "complete";
+  report({ phase, ...counts, unprocessed });
+}
+
 export function createVoterBatchController(
   dependencies: VoterBatchControllerDependencies,
 ): VoterBatchController {
@@ -68,12 +122,8 @@ export function createVoterBatchController(
       report({});
 
       const currentUser = await dependencies.fetchCurrentUser(request.isStopped);
-      if (request.isStopped()) {
-        report({ phase: "stopped" });
-        return progress;
-      }
-      if (currentUser.status !== "success") {
-        report({ phase: "failed" });
+      if (request.isStopped() || currentUser.status !== "success") {
+        report({ phase: request.isStopped() ? "stopped" : "failed" });
         return progress;
       }
 
@@ -89,86 +139,25 @@ export function createVoterBatchController(
           });
         },
       );
-      let skipped = voters.invalid + voters.duplicates;
-      report({
-        fetched: voters.users.length,
-        skipped,
-        dataComplete: voters.complete,
-      });
+      const skipped = voters.invalid + voters.duplicates;
+      report({ fetched: voters.users.length, skipped, dataComplete: voters.complete });
 
-      if (request.isStopped()) {
+      if (request.isStopped() || voters.fatalReason !== null) {
         report({
-          phase: "stopped",
-          unprocessed: voters.users.length,
-        });
-        return progress;
-      }
-      if (voters.fatalReason !== null) {
-        report({
-          phase: "failed",
+          phase: request.isStopped() ? "stopped" : "failed",
           unprocessed: voters.users.length,
         });
         return progress;
       }
 
-      const queue = voters.users.filter((voter) => {
-        const shouldSkip =
-          voter.userId === currentUser.userId || voter.userId === request.directAuthorUserId;
-        if (shouldSkip) {
-          skipped += 1;
-        }
-        return !shouldSkip;
-      });
-
-      let nextIndex = 0;
-      let started = 0;
-      let stoppedAfterStart = 0;
-      let success = 0;
-      let failed = 0;
-      report({
-        phase: "persisting",
-        skipped,
-        unprocessed: queue.length,
-      });
-
-      async function worker(): Promise<void> {
-        while (!request.isStopped()) {
-          const index = nextIndex;
-          if (index >= queue.length) {
-            return;
-          }
-          nextIndex += 1;
-          started += 1;
-          const voter = queue[index];
-          report({ unprocessed: Math.max(0, queue.length - started) });
-          const result = await dependencies.coordinator.block(
-            {
-              source: "upvoter",
-              userId: voter.userId,
-              authorName: voter.authorName,
-              tagId: request.tagId,
-            },
-            request.isStopped,
-          );
-          if (result.status === "success") {
-            success += 1;
-          } else if (result.status === "skipped") {
-            skipped += 1;
-          } else if (result.status === "stopped") {
-            stoppedAfterStart += 1;
-          } else {
-            failed += 1;
-          }
-          report({ success, failed, skipped });
-        }
-      }
-
-      await Promise.all(
-        Array.from({ length: Math.min(PERSIST_CONCURRENCY, queue.length) }, async () => worker()),
+      const queue = voters.users.filter(
+        (voter) =>
+          voter.userId !== currentUser.userId && voter.userId !== request.directAuthorUserId,
       );
-      const unprocessed = queue.length - started + stoppedAfterStart;
-      const phase = request.isStopped() ? "stopped" : "complete";
-      report({ phase, success, failed, skipped, unprocessed });
+      await persistVoterQueue(request, dependencies.coordinator, queue, {
+        skipped: skipped + voters.users.length - queue.length,
+        report,
+      });
       return progress;
     },
   };

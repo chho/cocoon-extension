@@ -17,7 +17,7 @@ import {
   type BlacklistTagDto,
 } from "./blacklist-rpc-values.ts";
 
-export const BLACKLIST_RPC_VERSION = 2 as const;
+export const BLACKLIST_RPC_VERSION = 3 as const;
 export const BLACKLIST_RPC_REQUEST_TYPE = "cocoon.blacklist.request" as const;
 export const BLACKLIST_RPC_RESPONSE_TYPE = "cocoon.blacklist.response" as const;
 export const MAX_BLACKLIST_MANAGEMENT_RPC_BYTES = 256 * 1024;

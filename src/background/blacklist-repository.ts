@@ -1,3 +1,5 @@
+import type { SourcePost } from "../core/source-post.ts";
+import { ensurePostTarget } from "./blacklist-post-repository.ts";
 import type * as BlacklistStateModule from "../content/blacklist-state.ts";
 import type {
   BlacklistState,
@@ -93,6 +95,7 @@ function writeStateRecords(transaction: IDBTransaction, state: BlacklistState): 
   const authors = transaction.objectStore(BLACKLIST_STORE_NAMES.authors);
   const identifiers = transaction.objectStore(BLACKLIST_STORE_NAMES.identifiers);
   const tags = transaction.objectStore(BLACKLIST_STORE_NAMES.tags);
+  state.posts.forEach((post) => transaction.objectStore(BLACKLIST_STORE_NAMES.posts).add(post));
   state.tags.forEach((tag, order) => tags.add(createStoredTag(tag, order)));
   state.authors.forEach((author, order) => {
     authors.add(createStoredAuthor(author, order));
@@ -286,6 +289,10 @@ class IndexedDbBlacklistRepository {
 
   async queryIdentityMatches(query: Parameters<BlacklistRepository["queryIdentityMatches"]>[0]) {
     return queryIdentityMatches(await ensureInitialized(this.environment), query);
+  }
+
+  ensurePost(post: SourcePost) {
+    return publishResult(this.environment, async (database) => ensurePostTarget(database, post));
   }
 
   commitAuthor(input: CommitInput) {

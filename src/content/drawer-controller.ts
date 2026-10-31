@@ -1,6 +1,7 @@
 import { CLOSED_DRAWER_STATE, reduceDrawerState, type DrawerState } from "./drawer-state.ts";
 import type { CocoonTag } from "./blacklist-state";
 import type { ZhihuContentSource } from "./zhihu-content-source.ts";
+import type { SourcePost } from "../core/source-post.ts";
 
 export interface DrawerAnchorBounds {
   readonly top: number;
@@ -20,6 +21,8 @@ export interface DrawerTarget<TCard, TButton> {
   readonly memberHashIdAtClick: string | null;
   readonly anchorBounds: DrawerAnchorBounds | null;
   readonly voterSource: ZhihuContentSource | null;
+  // Absent uses card-time validation; null is an explicitly unavailable hover snapshot.
+  readonly sourcePost?: SourcePost | null;
 }
 
 export interface RemoteAuthorization {

@@ -31,6 +31,7 @@ function author(index: number): BlacklistTransferAuthorDto {
     tagId: "default",
     blacklistedAt: EXPORTED_AT,
     blockSource: "direct",
+    sourcePostId: null,
   };
 }
 
@@ -40,11 +41,12 @@ function prepared(authorCount = 501) {
   const result = prepareBlacklistTransferJson(
     JSON.stringify({
       product: "cocoon-blacklist",
-      formatVersion: 1,
+      formatVersion: 2,
       exportedAt: EXPORTED_AT,
-      schemaVersion: 5,
+      schemaVersion: 6,
       authors: Array.from({ length: authorCount }, (_, index) => author(index)),
       tags,
+      posts: [],
     }),
   );
   if (result.status !== "valid") throw new Error("Expected prepared transfer fixture.");
@@ -64,6 +66,11 @@ function session(
     updatedAt: 1,
     expiresAt: 2,
     received: {
+      posts: {
+        chunks: complete ? value.metadata.postChunkCount : 0,
+        count: complete ? value.metadata.postCount : 0,
+        bytes: complete ? value.metadata.postsBytes : 2,
+      },
       authors: {
         chunks: complete ? value.metadata.authorChunkCount : 0,
         count: complete ? value.metadata.authorCount : 0,
@@ -86,6 +93,7 @@ function unusedClient(): BlacklistTransferRpcClient {
     beginImport: unused,
     stageAuthorsChunk: unused,
     stageTagsChunk: unused,
+    stagePostsChunk: unused,
     inspectImport: unused,
     finalizeImport: unused,
     abortImport: unused,
@@ -196,7 +204,7 @@ test("BUG-016 import starts a new session, retains retry identity on storage err
   strictEqual(aborted, 1);
 });
 
-test("BUG-016 export assembles exact format-v1 Blob parts only after revision finish", async () => {
+test("BUG-016 export assembles exact format-v2 Blob parts only after revision finish", async () => {
   const exportedAuthors = [author(0), author(1)];
   let authorPage = 0;
   const client: BlacklistTransferRpcClient = {
@@ -204,9 +212,9 @@ test("BUG-016 export assembles exact format-v1 Blob parts only after revision fi
     async beginExport() {
       return createBlacklistTransferResponse("export-begin", true, {
         product: "cocoon-blacklist",
-        formatVersion: 1,
+        formatVersion: 2,
         exportedAt: EXPORTED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         revision: 4,
         authorCount: 2,
         tagCount: 1,
@@ -217,6 +225,7 @@ test("BUG-016 export assembles exact format-v1 Blob parts only after revision fi
       return createBlacklistTransferResponse("export-authors-page", true, {
         revision: 4,
         items: [exportedAuthors[authorPage - 1]!],
+        posts: [],
         nextCursor: authorPage === 1 ? "next-author" : null,
       });
     },
@@ -236,11 +245,12 @@ test("BUG-016 export assembles exact format-v1 Blob parts only after revision fi
   const json = await new Blob([...result.parts]).text();
   deepStrictEqual(JSON.parse(json), {
     product: "cocoon-blacklist",
-    formatVersion: 1,
+    formatVersion: 2,
     exportedAt: EXPORTED_AT,
-    schemaVersion: 5,
+    schemaVersion: 6,
     authors: exportedAuthors,
     tags,
+    posts: [],
   });
   strictEqual(result.filename, "cocoon-blacklist-2026-08-25.json");
   strictEqual(result.authorCount, 2);
@@ -253,9 +263,9 @@ test("BUG-016 stale export fails before returning downloadable parts", async () 
     async beginExport() {
       return createBlacklistTransferResponse("export-begin", true, {
         product: "cocoon-blacklist",
-        formatVersion: 1,
+        formatVersion: 2,
         exportedAt: EXPORTED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         revision: 4,
         authorCount: 0,
         tagCount: 1,
@@ -265,6 +275,7 @@ test("BUG-016 stale export fails before returning downloadable parts", async () 
       return createBlacklistTransferResponse("export-authors-page", true, {
         revision: 4,
         items: [],
+        posts: [],
         nextCursor: null,
       });
     },

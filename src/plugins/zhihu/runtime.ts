@@ -66,7 +66,9 @@ import {
   fetchZhihuVoters,
 } from "../../content/zhihu-remote-api.ts";
 import { createZhihuBlacklistIdentityRuntime } from "./blacklist-identity-runtime.ts";
-import { getCardContentSource } from "./card-content-source.ts";
+import { getCardContentSource, getCardSourcePost } from "./card-content-source.ts";
+import { createHoverPostTracker } from "./hover-post-tracker.ts";
+import { createHoverDrawerTarget } from "./hover-drawer-target.ts";
 
 const CARD_SELECTOR = ".TopstoryItem";
 const CONTENT_SELECTOR = ".ContentItem[data-zop]";
@@ -543,18 +545,13 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     });
   }
 
+  const hoverPostTracker = createHoverPostTracker(document);
   async function openHoverDrawer(activation: HoverAuthorActivation): Promise<void> {
-    const target: HtmlDrawerTarget = {
-      targetId: `hover-${nextTargetId}`,
-      card: activation.root,
-      button: activation.button,
-      authorNameAtClick: activation.authorName,
-      profileUserIdAtClick: activation.userId,
-      memberHashIdAtClick: activation.memberHashId,
-      anchorBounds: activation.anchorBounds,
-      voterSource: null,
-    };
-    nextTargetId += 1;
+    const target = createHoverDrawerTarget(
+      activation,
+      `hover-${nextTargetId++}`,
+      hoverPostTracker.capture(activation),
+    );
     await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
       drawerController.open(target);
     });
@@ -770,6 +767,11 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
         );
       },
       now: () => new Date(),
+      resolveSourcePost: (target) =>
+        target.sourcePost === undefined
+          ? getCardSourcePost(target.card, target.voterSource)
+          : target.sourcePost,
+      ensurePost: blacklistClient.ensurePost,
       commitAuthor: blacklistClient.commitAuthor,
       // The owning drawer submission restores focus; late failures must not steal it.
       requestFailureFocus() {},
@@ -817,15 +819,12 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     },
     async blockVoters(task, committed, voterSource) {
       const voterBatchController = createVoterBatchController({
-        async fetchCurrentUser(isStopped) {
-          return fetchCurrentZhihuUser(fetch, { isStopped });
-        },
-        async fetchVoters(source, isStopped, onProgress) {
-          return fetchZhihuVoters(fetch, source, {
+        fetchCurrentUser: async (isStopped) => fetchCurrentZhihuUser(fetch, { isStopped }),
+        fetchVoters: async (source, isStopped, onProgress) =>
+          fetchZhihuVoters(fetch, source, {
             isStopped,
             onProgress,
-          });
-        },
+          }),
         coordinator: remoteBlockCoordinator,
         reportProgress() {},
       });
@@ -833,6 +832,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
         source: voterSource,
         tagId: task.selection.tag.tagId,
         directAuthorUserId: committed.userId,
+        sourcePostId: committed.author.sourcePostId,
         isStopped: () => lifecycleEnded,
       });
     },

@@ -6,14 +6,22 @@ import {
   isContractRecord as isBlacklistTransferRecord,
 } from "./blacklist-contract-validation.ts";
 
+import {
+  isSourcePostId,
+  parseSourcePosts as parseTransferPosts,
+  type SourcePost,
+} from "./source-post.ts";
+export { parseTransferPosts };
+
 export const BLACKLIST_TRANSFER_PRODUCT = "cocoon-blacklist" as const;
-export const BLACKLIST_TRANSFER_FORMAT_VERSION = 1 as const;
-export const BLACKLIST_TRANSFER_SCHEMA_VERSION = 5 as const;
+export const BLACKLIST_TRANSFER_FORMAT_VERSION = 2 as const;
+export const BLACKLIST_TRANSFER_SCHEMA_VERSION = 6 as const;
 export const BLACKLIST_TRANSFER_FILE_BYTES = 32 * 1024 * 1024;
 export const BLACKLIST_TRANSFER_RPC_BYTES = 256 * 1024;
 export const BLACKLIST_TRANSFER_CURSOR_BYTES = 2 * 1024;
 export const BLACKLIST_TRANSFER_AUTHOR_CHUNK_SIZE = 500;
 export const BLACKLIST_TRANSFER_TAG_CHUNK_SIZE = 500;
+export const BLACKLIST_TRANSFER_POST_CHUNK_SIZE = 500;
 export const BLACKLIST_TRANSFER_EXPORT_PAGE_SIZE = 500;
 export const BLACKLIST_TRANSFER_TAG_LIMIT = 2_000;
 export const BLACKLIST_TRANSFER_PAGE_PAYLOAD_BYTES = 240 * 1024;
@@ -33,6 +41,7 @@ export interface BlacklistTransferAuthorDto {
   readonly tagId: string;
   readonly blacklistedAt: string | null;
   readonly blockSource: "direct" | "upvoter";
+  readonly sourcePostId: string | null;
 }
 
 export interface BlacklistTransferTagDto {
@@ -40,13 +49,14 @@ export interface BlacklistTransferTagDto {
   readonly name: string;
 }
 
-export interface BlacklistTransferEnvelopeV1 {
+export interface BlacklistTransferEnvelopeV2 {
   readonly product: typeof BLACKLIST_TRANSFER_PRODUCT;
   readonly formatVersion: typeof BLACKLIST_TRANSFER_FORMAT_VERSION;
   readonly exportedAt: string;
   readonly schemaVersion: typeof BLACKLIST_TRANSFER_SCHEMA_VERSION;
   readonly authors: readonly BlacklistTransferAuthorDto[];
   readonly tags: readonly BlacklistTransferTagDto[];
+  readonly posts: readonly SourcePost[];
 }
 
 export interface BlacklistTransferFileMetadataDto {
@@ -55,19 +65,23 @@ export interface BlacklistTransferFileMetadataDto {
   readonly exportedAt: string;
   readonly schemaVersion: typeof BLACKLIST_TRANSFER_SCHEMA_VERSION;
   readonly sourceBytes: number;
+  readonly sourceFormatVersion: 1 | 2;
   readonly canonicalBytes: number;
   readonly authorsBytes: number;
   readonly tagsBytes: number;
+  readonly postsBytes: number;
   readonly authorCount: number;
   readonly tagCount: number;
+  readonly postCount: number;
   readonly authorChunkCount: number;
   readonly tagChunkCount: number;
+  readonly postChunkCount: number;
 }
 
 export type BlacklistTransferFileParseResult =
   | {
       readonly status: "valid";
-      readonly transfer: BlacklistTransferEnvelopeV1;
+      readonly transfer: BlacklistTransferEnvelopeV2;
       readonly metadata: BlacklistTransferFileMetadataDto;
     }
   | { readonly status: "invalid" | "too-large" };
@@ -119,6 +133,11 @@ function hasValidAuthorText(value: Record<string, unknown>): boolean {
 }
 
 function hasValidAuthorSource(value: Record<string, unknown>): boolean {
+  if (
+    value.sourcePostId !== null &&
+    (value.platformId !== "zhihu" || !isSourcePostId(value.sourcePostId))
+  )
+    return false;
   if (value.blacklistedAt !== null && !isTimestamp(value.blacklistedAt)) return false;
   if (value.blockSource !== "direct" && value.blockSource !== "upvoter") return false;
   return value.blockSource !== "upvoter" || value.blacklistedAt !== null;
@@ -135,6 +154,7 @@ export function parseBlacklistTransferAuthorDto(value: unknown): BlacklistTransf
       "tagId",
       "blacklistedAt",
       "blockSource",
+      "sourcePostId",
     ])
   ) {
     return null;
@@ -152,6 +172,7 @@ export function parseBlacklistTransferAuthorDto(value: unknown): BlacklistTransf
     tagId: value.tagId as string,
     blacklistedAt: value.blacklistedAt as string | null,
     blockSource: value.blockSource as "direct" | "upvoter",
+    sourcePostId: value.sourcePostId as string | null,
   };
 }
 
@@ -201,9 +222,12 @@ function validateAuthors(
 
 function hasValidEnvelopeHeader(value: Record<string, unknown>): boolean {
   if (value.product !== BLACKLIST_TRANSFER_PRODUCT) return false;
-  if (value.formatVersion !== BLACKLIST_TRANSFER_FORMAT_VERSION) return false;
   if (!isTimestamp(value.exportedAt)) return false;
-  return value.schemaVersion === BLACKLIST_TRANSFER_SCHEMA_VERSION;
+  return (
+    (value.formatVersion === 1 && value.schemaVersion === 5) ||
+    (value.formatVersion === BLACKLIST_TRANSFER_FORMAT_VERSION &&
+      value.schemaVersion === BLACKLIST_TRANSFER_SCHEMA_VERSION)
+  );
 }
 
 function parseTransferAuthors(value: unknown): readonly BlacklistTransferAuthorDto[] | null {
@@ -220,9 +244,7 @@ function parseTransferTags(value: unknown): readonly BlacklistTransferTagDto[] |
   return tags.some((tag) => tag === null) ? null : (tags as BlacklistTransferTagDto[]);
 }
 
-export function parseBlacklistTransferEnvelopeV1(
-  value: unknown,
-): BlacklistTransferEnvelopeV1 | null {
+export function parseBlacklistTransferEnvelope(value: unknown): BlacklistTransferEnvelopeV2 | null {
   if (!isBlacklistTransferRecord(value)) return null;
   if (
     !hasExactBlacklistTransferKeys(value, [
@@ -232,24 +254,56 @@ export function parseBlacklistTransferEnvelopeV1(
       "schemaVersion",
       "authors",
       "tags",
+      ...(value.formatVersion === 1 ? [] : ["posts"]),
     ])
   ) {
     return null;
   }
   if (!hasValidEnvelopeHeader(value)) return null;
-  const authors = parseTransferAuthors(value.authors);
-  const tags = parseTransferTags(value.tags);
-  if (!authors || !tags) return null;
-  const tagIds = validateTags(tags);
-  if (!tagIds || !validateAuthors(authors, tagIds)) return null;
+  const collections = parseTransferCollections(value);
+  if (!collections) return null;
   return {
     product: BLACKLIST_TRANSFER_PRODUCT,
     formatVersion: BLACKLIST_TRANSFER_FORMAT_VERSION,
     exportedAt: value.exportedAt as string,
     schemaVersion: BLACKLIST_TRANSFER_SCHEMA_VERSION,
-    authors,
-    tags,
+    ...collections,
   };
+}
+
+function parseTransferCollections(
+  value: Record<string, unknown>,
+): Pick<BlacklistTransferEnvelopeV2, "authors" | "tags" | "posts"> | null {
+  const authors =
+    value.formatVersion === 1
+      ? parseLegacyAuthors(value.authors)
+      : parseTransferAuthors(value.authors);
+  const tags = parseTransferTags(value.tags);
+  const posts = value.formatVersion === 1 ? [] : parseTransferPosts(value.posts);
+  if (!authors || !tags || !posts || !validateTransferPostReferences(authors, posts)) return null;
+  const tagIds = validateTags(tags);
+  return tagIds && validateAuthors(authors, tagIds) ? { authors, tags, posts } : null;
+}
+
+function parseLegacyAuthors(value: unknown): readonly BlacklistTransferAuthorDto[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = [];
+  for (const author of value) {
+    if (!isBlacklistTransferRecord(author) || "sourcePostId" in author) return null;
+    normalized.push({ ...author, sourcePostId: null });
+  }
+  return parseTransferAuthors(normalized);
+}
+
+export function validateTransferPostReferences(
+  authors: readonly BlacklistTransferAuthorDto[],
+  posts: readonly SourcePost[],
+): boolean {
+  const platforms = new Map(posts.map((post) => [post.postId, post.platformId]));
+  return authors.every(
+    (author) =>
+      author.sourcePostId === null || platforms.get(author.sourcePostId) === author.platformId,
+  );
 }
 
 export function transferCollectionBytes(items: readonly unknown[]): number {
@@ -261,7 +315,13 @@ export function transferCollectionBytes(items: readonly unknown[]): number {
 export function canonicalTransferBytes(
   metadata: Pick<
     BlacklistTransferFileMetadataDto,
-    "product" | "formatVersion" | "exportedAt" | "schemaVersion" | "authorsBytes" | "tagsBytes"
+    | "product"
+    | "formatVersion"
+    | "exportedAt"
+    | "schemaVersion"
+    | "authorsBytes"
+    | "tagsBytes"
+    | "postsBytes"
   >,
 ): number {
   const empty = blacklistTransferJsonBytes({
@@ -271,17 +331,20 @@ export function canonicalTransferBytes(
     schemaVersion: metadata.schemaVersion,
     authors: [],
     tags: [],
+    posts: [],
   });
   if (empty === null) throw new Error("Transfer metadata is not serializable.");
-  return empty - 4 + metadata.authorsBytes + metadata.tagsBytes;
+  return empty - 6 + metadata.authorsBytes + metadata.tagsBytes + metadata.postsBytes;
 }
 
 export function createBlacklistTransferFileMetadata(
-  transfer: BlacklistTransferEnvelopeV1,
+  transfer: BlacklistTransferEnvelopeV2,
   sourceBytes: number,
+  sourceFormatVersion: 1 | 2 = 2,
 ): BlacklistTransferFileMetadataDto {
   const authorsBytes = transferCollectionBytes(transfer.authors);
   const tagsBytes = transferCollectionBytes(transfer.tags);
+  const postsBytes = transferCollectionBytes(transfer.posts);
   const base = {
     product: transfer.product,
     formatVersion: transfer.formatVersion,
@@ -289,16 +352,46 @@ export function createBlacklistTransferFileMetadata(
     schemaVersion: transfer.schemaVersion,
     authorsBytes,
     tagsBytes,
+    postsBytes,
   };
   return {
     ...base,
     sourceBytes,
+    sourceFormatVersion,
     canonicalBytes: canonicalTransferBytes(base),
     authorCount: transfer.authors.length,
     tagCount: transfer.tags.length,
+    postCount: transfer.posts.length,
     authorChunkCount: Math.ceil(transfer.authors.length / BLACKLIST_TRANSFER_AUTHOR_CHUNK_SIZE),
     tagChunkCount: Math.ceil(transfer.tags.length / BLACKLIST_TRANSFER_TAG_CHUNK_SIZE),
+    postChunkCount: Math.ceil(transfer.posts.length / BLACKLIST_TRANSFER_POST_CHUNK_SIZE),
   };
+}
+
+// Smallest valid legacy author: fixed keys plus shortest permitted ASCII field values.
+const MIN_LEGACY_AUTHOR_BYTES = JSON.stringify({
+  platformId: "a",
+  userId: "a",
+  memberHashId: null,
+  authorNameAtCapture: "",
+  tagId: "a",
+  blacklistedAt: null,
+  blockSource: "direct",
+}).length;
+
+export function isWithinBlacklistTransferSourceLimit(
+  metadata: Pick<
+    BlacklistTransferFileMetadataDto,
+    "sourceFormatVersion" | "sourceBytes" | "canonicalBytes" | "authorCount" | "postCount"
+  >,
+): boolean {
+  if (metadata.sourceBytes > BLACKLIST_TRANSFER_FILE_BYTES) return false;
+  if (metadata.sourceFormatVersion === 2) return metadata.canonicalBytes <= metadata.sourceBytes;
+  if (metadata.sourceFormatVersion !== 1 || metadata.postCount !== 0) return false;
+  // Bound claimed counts by source bytes before they can grant normalization headroom.
+  if (metadata.authorCount > Math.floor(metadata.sourceBytes / MIN_LEGACY_AUTHOR_BYTES))
+    return false;
+  return metadata.canonicalBytes <= metadata.sourceBytes + metadata.authorCount * 20 + 11;
 }
 
 export function parseBlacklistTransferFileJson(json: string): BlacklistTransferFileParseResult {
@@ -310,16 +403,17 @@ export function parseBlacklistTransferFileJson(json: string): BlacklistTransferF
   } catch {
     return { status: "invalid" };
   }
-  const transfer = parseBlacklistTransferEnvelopeV1(parsedJson);
+  const transfer = parseBlacklistTransferEnvelope(parsedJson);
   if (!transfer) return { status: "invalid" };
-  const metadata = createBlacklistTransferFileMetadata(transfer, sourceBytes);
-  return metadata.canonicalBytes <= BLACKLIST_TRANSFER_FILE_BYTES
+  const sourceFormatVersion = (parsedJson as { formatVersion: 1 | 2 }).formatVersion;
+  const metadata = createBlacklistTransferFileMetadata(transfer, sourceBytes, sourceFormatVersion);
+  return isWithinBlacklistTransferSourceLimit(metadata)
     ? { status: "valid", transfer, metadata }
     : { status: "too-large" };
 }
 
-export function serializeBlacklistTransferFile(value: BlacklistTransferEnvelopeV1): string | null {
-  const transfer = parseBlacklistTransferEnvelopeV1(value);
+export function serializeBlacklistTransferFile(value: BlacklistTransferEnvelopeV2): string | null {
+  const transfer = parseBlacklistTransferEnvelope(value);
   if (!transfer) return null;
   const json = JSON.stringify(transfer);
   return blacklistTransferTextBytes(json) <= BLACKLIST_TRANSFER_FILE_BYTES ? json : null;

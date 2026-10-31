@@ -23,6 +23,7 @@ function author(userId: string, memberHashId: string | null = null) {
     tagId: "default",
     blacklistedAt: TIMESTAMP,
     blockSource: "direct" as const,
+    sourcePostId: null,
   };
 }
 

@@ -1,3 +1,4 @@
+import type { SourcePost } from "../core/source-post.ts";
 import type { AuthorMutationResult } from "../background/blacklist-repository-types.ts";
 import {
   ZHIHU_PLATFORM_ID,
@@ -27,6 +28,10 @@ export interface CommitControllerDependencies<TCard, TButton> {
   readonly resolveAuthorIdentity: (
     target: DrawerTarget<TCard, TButton>,
   ) => Promise<ProvenAuthorIdentity | null>;
+  readonly resolveSourcePost: (target: DrawerTarget<TCard, TButton>) => SourcePost | null;
+  readonly ensurePost: (
+    post: SourcePost,
+  ) => Promise<{ readonly post: SourcePost; readonly revision: number }>;
   readonly now: () => Date;
   readonly commitAuthor: (input: CommitInput) => Promise<AuthorMutationResult>;
   readonly requestFailureFocus: (button: TButton) => void;
@@ -46,7 +51,12 @@ export function createCommitController<TCard, TButton>(
         const identity = await dependencies.resolveAuthorIdentity(task.target);
         if (!identity) throw new Error("Unable to resolve a stable author ID.");
         const userId = normalizeMemberHashId(identity.userId) ?? identity.userId;
+        const sourcePost = dependencies.resolveSourcePost(task.target);
+        const sourcePostId = sourcePost
+          ? (await dependencies.ensurePost(sourcePost)).post.postId
+          : null;
         const result = await dependencies.commitAuthor({
+          sourcePostId,
           platformId: ZHIHU_PLATFORM_ID,
           userId,
           memberHashId: normalizeMemberHashId(identity.memberHashId),

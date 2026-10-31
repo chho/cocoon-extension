@@ -55,6 +55,7 @@ function createHarness(
         authorNameAtCapture: `Existing ${userId}`,
         tagId: "default",
         blacklistedAt: "2026-08-13T12:34:56.789Z",
+        sourcePostId: null,
         blockSource: "direct" as const,
       })),
   };
@@ -104,6 +105,29 @@ function createHarness(
   };
 }
 
+test("POST-002 global storage failure stops remaining scheduling and preserves successes", async () => {
+  const harness = createHarness({
+    voterResult: voters(["one", "two", "three", "four", "five", "six"]),
+    async block(request) {
+      return request.userId === "one"
+        ? { status: "failed", reason: "storage-global" }
+        : { status: "success", persistedUpvoter: true };
+    },
+  });
+  const result = await runBatch(harness);
+  strictEqual(result.phase, "failed");
+  strictEqual(harness.requests.length, 3);
+  strictEqual(result.failed, 1);
+  strictEqual(result.success, 2);
+  strictEqual(result.unprocessed, 3);
+  strictEqual(
+    harness.requests.every(
+      (request) => request.source === "upvoter" && request.sourcePostId === "zhihu:answer:2",
+    ),
+    true,
+  );
+});
+
 const source = { kind: "answer", questionId: "1", contentId: "2" } as const;
 
 async function runBatch(
@@ -114,6 +138,7 @@ async function runBatch(
     source,
     tagId: "default",
     directAuthorUserId: "direct-author",
+    sourcePostId: "zhihu:answer:2",
     isStopped,
   });
 }
@@ -129,6 +154,7 @@ test("VOTER-014 runs without CSRF authorization or a Zhihu blocked-user relation
   deepStrictEqual(harness.requests, [
     {
       source: "upvoter",
+      sourcePostId: "zhihu:answer:2",
       userId: "already-blocked-at-zhihu",
       authorName: "Name already-blocked-at-zhihu",
       tagId: "default",
@@ -179,6 +205,7 @@ test("PLATFORM-001 non-Zhihu records do not enter Zhihu voter dedupe sets", asyn
         authorNameAtCapture: "YouTube shared",
         tagId: "default",
         blacklistedAt: "2026-08-13T12:34:56.789Z",
+        sourcePostId: null,
         blockSource: "direct",
       },
       {
@@ -188,6 +215,7 @@ test("PLATFORM-001 non-Zhihu records do not enter Zhihu voter dedupe sets", asyn
         authorNameAtCapture: "Zhihu blocked",
         tagId: "default",
         blacklistedAt: "2026-08-13T12:34:56.789Z",
+        sourcePostId: null,
         blockSource: "direct",
       },
     ],

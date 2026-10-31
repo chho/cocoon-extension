@@ -34,6 +34,7 @@ function originalAuthor(scenario: Scenario): BlacklistedAuthor | null {
         tagId: "original-tag",
         blacklistedAt: "2026-01-01T00:00:00.000Z",
         blockSource: "upvoter",
+        sourcePostId: null,
       };
 }
 
@@ -302,6 +303,7 @@ for (const scenario of ["new", "existing", "conflict"] as const) {
           tagId: "default",
           blacklistedAt: NOW,
           blockSource: "direct",
+          sourcePostId: null,
         };
     deepStrictEqual(after.state.authors, [expected]);
     strictEqual(h.element("#same-author-card").classList.contains("cocoon-blacklisted"), true);
@@ -331,3 +333,52 @@ for (const scenario of ["new", "existing", "conflict"] as const) {
     );
   });
 }
+
+async function openFreshPostHover(h: Awaited<ReturnType<typeof mountHarness>>) {
+  h.element(".hover-root").remove();
+  const content = h.element("#same-author-card .ContentItem");
+  content.insertAdjacentHTML(
+    "afterbegin",
+    '<h2 class="ContentItem-title"><a href="https://zhuanlan.zhihu.com/p/123">Synthetic post</a></h2>',
+  );
+  await h.flush();
+  h.element<HTMLAnchorElement>("#same-author-card .AuthorInfo-name").focus();
+  h.dom.window.document.body.insertAdjacentHTML("beforeend", memberHoverMarkup());
+  await h.flush();
+}
+
+test("POST-006 hover captures a shared post before DOM removal without enabling voters", async (t) => {
+  const h = await mountHarness(t, "new");
+  await openFreshPostHover(h);
+  await submitFromHover(h);
+  const after = await h.read();
+  strictEqual(after.state.authors[0]?.sourcePostId, "zhihu:article:123");
+  deepStrictEqual(after.state.posts, [
+    {
+      postId: "zhihu:article:123",
+      platformId: "zhihu",
+      kind: "article",
+      contentId: "123",
+      title: "Synthetic post",
+      url: "https://zhuanlan.zhihu.com/p/123",
+    },
+  ]);
+  strictEqual(h.errors.length, 0);
+  strictEqual(h.requests.filter((r) => /voters|upvoters/.test(r.url)).length, 0);
+  strictEqual(h.requests.filter((r) => r.method === "POST").length, 1);
+});
+
+test("POST-006 cancelling a provenance-bearing hover drawer writes no post or author", async (t) => {
+  const h = await mountHarness(t, "new");
+  await openFreshPostHover(h);
+  const before = await h.read();
+  h.element<HTMLButtonElement>(".cocoon-hover-block-button").click();
+  await h.flush();
+  h.dom.window.document.dispatchEvent(
+    new h.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  await h.flush();
+  deepStrictEqual(await h.read(), before);
+  strictEqual(h.commits.length, 0);
+  strictEqual(h.requests.filter((r) => r.method === "POST").length, 0);
+});

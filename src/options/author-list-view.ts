@@ -22,7 +22,7 @@ export interface AuthorListRenderResult {
   readonly virtualized: boolean;
 }
 
-type ControlRole = "checkbox" | "profile" | "remove";
+type ControlRole = "checkbox" | "profile" | "post" | "remove";
 
 interface FocusDescriptor {
   readonly platformId: string;
@@ -64,6 +64,7 @@ function sameRelevantItems(
 function controlRole(active: HTMLElement): ControlRole | null {
   if (active.matches("input[type='checkbox']")) return "checkbox";
   if (active.matches("a.author-name")) return "profile";
+  if (active.matches("a.source-post")) return "post";
   return active.matches("button") ? "remove" : null;
 }
 
@@ -85,6 +86,7 @@ function controlForRole(row: HTMLElement | undefined, role: ControlRole): HTMLEl
   if (!row) return null;
   if (role === "checkbox") return row.querySelector("input[type='checkbox']");
   if (role === "profile") return row.querySelector("a.author-name");
+  if (role === "post") return row.querySelector("a.source-post");
   return row.querySelector("button");
 }
 

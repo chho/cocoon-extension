@@ -14,6 +14,12 @@ import * as backgroundTransferContract from "../core/blacklist-transfer-rpc-cont
 // @ts-expect-error Vite resolves the background-only copy during bundling.
 import * as backgroundTransferValues from "../core/blacklist-transfer-values.ts?background-copy";
 
+import type * as SourcePostModule from "../core/source-post.ts";
+import type { SourcePost } from "../core/source-post.ts";
+// @ts-expect-error Vite resolves the background-only copy during bundling.
+import * as backgroundSourcePost from "../core/source-post.ts?background-copy";
+const { parseSourcePost } = backgroundSourcePost as typeof SourcePostModule;
+
 const { parseBlacklistImportSessionDto, parseBlacklistTransferFileMetadata } =
   backgroundTransferContract as typeof TransferContractModule;
 const {
@@ -46,9 +52,14 @@ export interface StoredImportTag extends BlacklistTransferTagDto {
   readonly nameKey: string;
 }
 
+export interface StoredImportPost extends SourcePost {
+  readonly sessionId: string;
+  readonly index: number;
+}
+
 export interface StoredImportChunk {
   readonly sessionId: string;
-  readonly kind: "authors" | "tags";
+  readonly kind: "authors" | "tags" | "posts";
   readonly chunkIndex: number;
   readonly startIndex: number;
   readonly itemCount: number;
@@ -78,7 +89,7 @@ export function createStoredImportSession(
     createdAt,
     updatedAt: createdAt,
     expiresAt,
-    received: { authors: emptyProgress, tags: emptyProgress },
+    received: { authors: emptyProgress, tags: emptyProgress, posts: emptyProgress },
   };
 }
 
@@ -108,6 +119,7 @@ export function parseStoredImportAuthor(value: unknown): StoredImportAuthor | nu
       "tagId",
       "blacklistedAt",
       "blockSource",
+      "sourcePostId",
     ]) ||
     !isImportSessionId(value.sessionId) ||
     !isNonNegativeInteger(value.index)
@@ -122,6 +134,7 @@ export function parseStoredImportAuthor(value: unknown): StoredImportAuthor | nu
     tagId: value.tagId,
     blacklistedAt: value.blacklistedAt,
     blockSource: value.blockSource,
+    sourcePostId: value.sourcePostId,
   });
   return author ? { sessionId: value.sessionId, index: value.index, ...author } : null;
 }
@@ -184,6 +197,26 @@ export function parseStoredImportTag(value: unknown): StoredImportTag | null {
   return { sessionId: value.sessionId, index: value.index, ...tag, nameKey: value.nameKey };
 }
 
+export function createStoredImportPost(
+  sessionId: string,
+  index: number,
+  post: SourcePost,
+): StoredImportPost {
+  return { sessionId, index, ...post };
+}
+
+export function parseStoredImportPost(value: unknown): StoredImportPost | null {
+  if (
+    !isBlacklistTransferRecord(value) ||
+    !isImportSessionId(value.sessionId) ||
+    !isNonNegativeInteger(value.index)
+  )
+    return null;
+  const { sessionId, index, ...candidate } = value;
+  const post = parseSourcePost(candidate);
+  return post ? { sessionId, index, ...post } : null;
+}
+
 function parseChunkPayload(
   value: Pick<StoredImportChunk, "kind" | "payloadJson" | "itemCount">,
 ): boolean {
@@ -197,7 +230,9 @@ function parseChunkPayload(
   const values =
     value.kind === "authors"
       ? parsed.map(parseBlacklistTransferAuthorDto)
-      : parsed.map(parseBlacklistTransferTagDto);
+      : value.kind === "posts"
+        ? parsed.map(parseSourcePost)
+        : parsed.map(parseBlacklistTransferTagDto);
   return values.every((item) => item !== null) && JSON.stringify(values) === value.payloadJson;
 }
 
@@ -224,7 +259,7 @@ const IMPORT_CHUNK_KEYS = [
 
 function hasStoredImportChunkValues(value: Record<string, unknown>): boolean {
   if (!isImportSessionId(value.sessionId)) return false;
-  if (value.kind !== "authors" && value.kind !== "tags") return false;
+  if (!["authors", "tags", "posts"].includes(value.kind as string)) return false;
   if (!isNonNegativeInteger(value.chunkIndex) || !isNonNegativeInteger(value.startIndex)) {
     return false;
   }

@@ -62,6 +62,7 @@ function author(userId: string, overrides: Partial<BlacklistedAuthor> = {}): Bla
   return {
     platformId: ZHIHU_PLATFORM_ID,
     userId,
+    sourcePostId: null,
     memberHashId: null,
     authorNameAtCapture: `Synthetic ${userId}`,
     tagId: DEFAULT_TAG_ID,
@@ -79,6 +80,7 @@ function legacyState(version: 1 | 2 | 3 | 4 | 5): unknown {
     authors: [{ ...current }],
   };
   const legacyAuthor = (value.authors as Array<Record<string, unknown>>)[0]!;
+  delete legacyAuthor.sourcePostId;
   if (version < 5) delete legacyAuthor.platformId;
   if (version < 4) delete legacyAuthor.memberHashId;
   if (version < 3) delete legacyAuthor.blockSource;
@@ -136,6 +138,200 @@ async function readStoreValues(databaseName: string, storeName: string): Promise
     database.close();
   }
 }
+
+test("POST-002 shares one immutable post across 1000 independent user transactions", async () => {
+  const harness = createHarness("shared-post");
+  const post = {
+    postId: "zhihu:answer:23",
+    platformId: "zhihu" as const,
+    kind: "answer" as const,
+    contentId: "23",
+    title: "First title",
+    url: "https://www.zhihu.com/question/12/answer/23",
+  };
+  const [first, repeated] = await Promise.all([
+    harness.repository.ensurePost(post),
+    harness.repository.ensurePost({ ...post, title: "Later title" }),
+  ]);
+  deepStrictEqual(first, repeated);
+  const input = {
+    platformId: "zhihu",
+    userId: "",
+    authorNameAtCapture: "Synthetic",
+    tagId: DEFAULT_TAG_ID,
+    blacklistedAt: TIMESTAMP,
+    sourcePostId: post.postId,
+  };
+  for (let index = 0; index < 1000; index += 1) {
+    if (index === 500) {
+      strictEqual(
+        (
+          await harness.repository.commitUpvoter({
+            ...input,
+            userId: "invalid",
+            blacklistedAt: "invalid",
+          })
+        ).status,
+        "invalid",
+      );
+    }
+    strictEqual(
+      (await harness.repository.commitUpvoter({ ...input, userId: `user-${index}` })).status,
+      "persisted",
+    );
+  }
+  strictEqual(
+    (await harness.repository.commitUpvoter({ ...input, userId: "user-0", sourcePostId: null }))
+      .status,
+    "duplicate",
+  );
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  strictEqual(stored.state.authors.length, 1000);
+  strictEqual(
+    stored.state.authors.every((item) => item.sourcePostId === post.postId),
+    true,
+  );
+  deepStrictEqual(stored.state.posts, [post]);
+  const removed = await harness.repository.removeAuthor({ platformId: "zhihu", userId: "user-0" });
+  strictEqual(removed.removed?.sourcePostId, post.postId);
+  strictEqual((await harness.repository.restoreAuthor(removed.removed!)).status, "persisted");
+  await storeLogicalState(
+    indexedDB,
+    harness.databaseName,
+    createInitialState(),
+    stored.revision + 2,
+  );
+  strictEqual((await harness.repository.restoreAuthor(removed.removed!)).status, "invalid");
+  await rejects(harness.repository.commitUpvoter({ ...input, userId: "late" }), {
+    name: "SourcePostUnavailableError",
+  });
+  strictEqual((await harness.repository.querySummary()).authorCount, 0);
+});
+
+test("POST-002 a failed author transaction preserves the shared post and earlier users", async () => {
+  const harness = createHarness("isolated-author-error");
+  const post = {
+    postId: "zhihu:article:7",
+    platformId: "zhihu" as const,
+    kind: "article" as const,
+    contentId: "7",
+    title: "Synthetic",
+    url: "https://zhuanlan.zhihu.com/p/7",
+  };
+  await harness.repository.ensurePost(post);
+  const input = {
+    platformId: "zhihu",
+    userId: "before",
+    authorNameAtCapture: "Synthetic",
+    tagId: DEFAULT_TAG_ID,
+    blacklistedAt: TIMESTAMP,
+    sourcePostId: post.postId,
+  };
+  strictEqual((await harness.repository.commitUpvoter(input)).status, "persisted");
+  const original = IDBObjectStore.prototype.add;
+  IDBObjectStore.prototype.add = function (...args: Parameters<IDBObjectStore["add"]>) {
+    if (this.name === BLACKLIST_STORE_NAMES.authors)
+      throw new DOMException("Synthetic per-user constraint", "ConstraintError");
+    return original.apply(this, args);
+  };
+  try {
+    await rejects(harness.repository.commitUpvoter({ ...input, userId: "failed" }), {
+      name: "ConstraintError",
+    });
+  } finally {
+    IDBObjectStore.prototype.add = original;
+  }
+  strictEqual(
+    (await harness.repository.commitUpvoter({ ...input, userId: "after" })).status,
+    "persisted",
+  );
+  const stored = await readLogicalState(indexedDB, harness.databaseName);
+  deepStrictEqual(
+    stored.state.authors.map((item) => item.userId),
+    ["before", "after"],
+  );
+  deepStrictEqual(stored.state.posts, [post]);
+});
+
+test("POST-004 duplicate direct commits backfill aliases without replacing first provenance", async () => {
+  const harness = createHarness("direct-provenance");
+  const firstPost = {
+    postId: "zhihu:article:8",
+    platformId: "zhihu" as const,
+    kind: "article" as const,
+    contentId: "8",
+    title: "First",
+    url: "https://zhuanlan.zhihu.com/p/8",
+  };
+  const nextPost = {
+    ...firstPost,
+    postId: "zhihu:article:9",
+    contentId: "9",
+    title: "Next",
+    url: "https://zhuanlan.zhihu.com/p/9",
+  };
+  await harness.repository.ensurePost(firstPost);
+  await harness.repository.ensurePost(nextPost);
+  const input = {
+    platformId: "zhihu",
+    userId: "direct",
+    memberHashId: null,
+    authorNameAtCapture: "First name",
+    tag: { tagId: DEFAULT_TAG_ID, name: "default" },
+    isNewTag: false,
+    blacklistedAt: TIMESTAMP,
+    sourcePostId: firstPost.postId,
+  };
+  strictEqual((await harness.repository.commitAuthor(input)).status, "persisted");
+  const duplicate = await harness.repository.commitAuthor({
+    ...input,
+    memberHashId: HASH_A,
+    sourcePostId: nextPost.postId,
+    authorNameAtCapture: "Ignored",
+  });
+  strictEqual(duplicate.status, "duplicate");
+  strictEqual(duplicate.author?.sourcePostId, firstPost.postId);
+  strictEqual(duplicate.author?.memberHashId, HASH_A);
+  strictEqual(duplicate.author?.authorNameAtCapture, "First name");
+  strictEqual(
+    (
+      await harness.repository.restoreAuthor({
+        ...author("other"),
+        platformId: "other",
+        sourcePostId: firstPost.postId,
+      })
+    ).status,
+    "invalid",
+  );
+});
+
+test("POST-002 failed post persistence writes no authors and preserves quota classification", async () => {
+  const harness = createHarness("post-quota");
+  await harness.repository.querySummary();
+  const original = IDBObjectStore.prototype.add;
+  IDBObjectStore.prototype.add = function (...args: Parameters<IDBObjectStore["add"]>) {
+    if (this.name === BLACKLIST_STORE_NAMES.posts)
+      throw new DOMException("Synthetic quota", "QuotaExceededError");
+    return original.apply(this, args);
+  };
+  try {
+    await rejects(
+      harness.repository.ensurePost({
+        postId: "zhihu:article:9",
+        platformId: "zhihu",
+        kind: "article",
+        contentId: "9",
+        title: "Synthetic",
+        url: "https://zhuanlan.zhihu.com/p/9",
+      }),
+      { name: "QuotaExceededError" },
+    );
+  } finally {
+    IDBObjectStore.prototype.add = original;
+  }
+  strictEqual((await harness.repository.querySummary()).authorCount, 0);
+  deepStrictEqual(await readStoreValues(harness.databaseName, BLACKLIST_STORE_NAMES.posts), []);
+});
 
 test("AC-093 migrates each valid v1-v5 state once into normalized stores", async () => {
   for (const version of [1, 2, 3, 4, 5] as const) {
@@ -247,6 +443,7 @@ test("AC-093 revision publication failure never rolls back durable data and is r
   await harness.repository.querySummary();
 
   const committed = await harness.repository.commitAuthor({
+    sourcePostId: null,
     platformId: ZHIHU_PLATFORM_ID,
     userId: "durable-author",
     memberHashId: null,
@@ -344,6 +541,7 @@ test("AC-094 targeted author operations never enumerate or replace the author co
 
   try {
     const direct = await harness.repository.commitAuthor({
+      sourcePostId: null,
       platformId: ZHIHU_PLATFORM_ID,
       userId: "new-direct",
       memberHashId: HASH_A,
@@ -356,6 +554,7 @@ test("AC-094 targeted author operations never enumerate or replace the author co
     strictEqual(
       (
         await harness.repository.commitAuthor({
+          sourcePostId: null,
           platformId: ZHIHU_PLATFORM_ID,
           userId: "new-direct",
           memberHashId: HASH_A,
@@ -379,6 +578,7 @@ test("AC-094 targeted author operations never enumerate or replace the author co
     strictEqual(
       (
         await harness.repository.commitUpvoter({
+          sourcePostId: null,
           platformId: ZHIHU_PLATFORM_ID,
           userId: "new-upvoter",
           authorNameAtCapture: "New upvoter",
@@ -407,6 +607,7 @@ test("AC-094 duplicate author commit ignores a tag deleted after the drawer open
   const harness = createHarness("duplicate-deleted-tag");
   await harness.repository.querySummary();
   const first = await harness.repository.commitAuthor({
+    sourcePostId: null,
     platformId: ZHIHU_PLATFORM_ID,
     userId: "existing-direct",
     memberHashId: null,
@@ -418,6 +619,7 @@ test("AC-094 duplicate author commit ignores a tag deleted after the drawer open
   strictEqual(first.status, "persisted");
 
   const duplicate = await harness.repository.commitAuthor({
+    sourcePostId: null,
     platformId: ZHIHU_PLATFORM_ID,
     userId: "existing-direct",
     memberHashId: null,
@@ -438,6 +640,7 @@ test("AC-094 targeted transactions enforce same-platform cross-field uniqueness 
   strictEqual(
     (
       await harness.repository.commitAuthor({
+        sourcePostId: null,
         platformId: ZHIHU_PLATFORM_ID,
         userId: "primary",
         memberHashId: HASH_A,
@@ -453,6 +656,7 @@ test("AC-094 targeted transactions enforce same-platform cross-field uniqueness 
   strictEqual(
     (
       await harness.repository.commitUpvoter({
+        sourcePostId: null,
         platformId: ZHIHU_PLATFORM_ID,
         userId: HASH_A,
         authorNameAtCapture: "Collision",
@@ -465,6 +669,7 @@ test("AC-094 targeted transactions enforce same-platform cross-field uniqueness 
   strictEqual(
     (
       await harness.repository.commitUpvoter({
+        sourcePostId: null,
         platformId: "youtube",
         userId: HASH_A,
         authorNameAtCapture: "Other platform",
@@ -478,7 +683,8 @@ test("AC-094 targeted transactions enforce same-platform cross-field uniqueness 
     indexedDB,
     harness.databaseName,
     {
-      schemaVersion: 5,
+      schemaVersion: 6,
+      posts: [],
       tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
       authors: [
         author("primary", { memberHashId: HASH_A }),
@@ -500,6 +706,7 @@ test("AC-094 repository rejects out-of-scope and oversized targeted writes", asy
   const direct = {
     platformId: ZHIHU_PLATFORM_ID,
     userId: "valid-user",
+    sourcePostId: null,
     memberHashId: null,
     authorNameAtCapture: "Valid author",
     tag: { tagId: DEFAULT_TAG_ID, name: "default" },
@@ -523,6 +730,7 @@ test("AC-094 repository rejects out-of-scope and oversized targeted writes", asy
   strictEqual(
     (
       await harness.repository.commitUpvoter({
+        sourcePostId: null,
         platformId: "youtube",
         userId: "other-platform",
         authorNameAtCapture: "Other platform",
@@ -553,7 +761,8 @@ test("AC-096 management mutations remain atomic on normalized records", async ()
   const first = author("first", { tagId: reading.tagId });
   const second = author("second");
   await storeLogicalState(indexedDB, harness.databaseName, {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }, reading],
     authors: [first, second],
   });
@@ -580,15 +789,16 @@ test("AC-096 management mutations remain atomic on normalized records", async ()
   strictEqual(stored.state.tags[1]?.name, "Research");
 });
 
-test("BUG-016/AC-099 physical storage uses the atomic v2 schema", () => {
-  strictEqual(BLACKLIST_DATABASE_VERSION, 2);
+test("POST-004 physical storage uses the atomic v3 schema", () => {
+  strictEqual(BLACKLIST_DATABASE_VERSION, 3);
 });
 
 test("AC-094 tag deletion reads only authors referencing that tag", async () => {
   const harness = createHarness("delete-tag");
   await harness.repository.querySummary();
   const state: BlacklistState = {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [
       { tagId: DEFAULT_TAG_ID, name: "default" },
       { tagId: "reading", name: "Reading" },

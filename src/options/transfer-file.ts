@@ -4,20 +4,22 @@ import {
 } from "../core/blacklist-transfer-rpc-contract.ts";
 import {
   BLACKLIST_TRANSFER_AUTHOR_CHUNK_SIZE,
+  BLACKLIST_TRANSFER_POST_CHUNK_SIZE,
   BLACKLIST_TRANSFER_FILE_BYTES,
   BLACKLIST_TRANSFER_RPC_BYTES,
   BLACKLIST_TRANSFER_TAG_CHUNK_SIZE,
   blacklistTransferJsonBytes,
-  createBlacklistTransferFileMetadata,
   parseBlacklistTransferFileJson,
   type BlacklistTransferAuthorDto,
   type BlacklistTransferFileMetadataDto,
   type BlacklistTransferTagDto,
 } from "../core/blacklist-transfer-values.ts";
 
+import type { SourcePost } from "../core/source-post.ts";
+
 const SESSION_ID_SIZE_PLACEHOLDER = "0".repeat(32);
 
-type ImportChunkKind = "authors" | "tags";
+type ImportChunkKind = "authors" | "tags" | "posts";
 
 export interface PreparedTransferChunk<Item> {
   readonly chunkIndex: number;
@@ -29,6 +31,7 @@ export interface PreparedBlacklistImport {
   readonly metadata: BlacklistTransferFileMetadataDto;
   readonly authorChunks: readonly PreparedTransferChunk<BlacklistTransferAuthorDto>[];
   readonly tagChunks: readonly PreparedTransferChunk<BlacklistTransferTagDto>[];
+  readonly postChunks: readonly PreparedTransferChunk<SourcePost>[];
 }
 
 export type PreparedBlacklistImportResult =
@@ -46,7 +49,7 @@ function importChunkRequestBytes(
   startIndex: number,
   items: readonly unknown[],
 ): number {
-  const operation = kind === "authors" ? "import-authors-chunk" : "import-tags-chunk";
+  const operation = `import-${kind}-chunk`;
   const input = {
     sessionId: SESSION_ID_SIZE_PLACEHOLDER,
     chunkIndex,
@@ -110,12 +113,18 @@ export function prepareBlacklistTransferJson(json: string): PreparedBlacklistImp
       parsed.transfer.tags,
       BLACKLIST_TRANSFER_TAG_CHUNK_SIZE,
     );
+    const postChunks = splitImportChunks(
+      "posts",
+      parsed.transfer.posts,
+      BLACKLIST_TRANSFER_POST_CHUNK_SIZE,
+    );
     const metadata = {
-      ...createBlacklistTransferFileMetadata(parsed.transfer, parsed.metadata.sourceBytes),
+      ...parsed.metadata,
       authorChunkCount: authorChunks.length,
       tagChunkCount: tagChunks.length,
+      postChunkCount: postChunks.length,
     };
-    return { status: "valid", prepared: { metadata, authorChunks, tagChunks } };
+    return { status: "valid", prepared: { metadata, authorChunks, tagChunks, postChunks } };
   } catch {
     return { status: "invalid" };
   }

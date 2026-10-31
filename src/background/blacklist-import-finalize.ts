@@ -24,6 +24,7 @@ import {
   transactionDone,
   type StoredBlacklistMetadata,
 } from "./blacklist-idb-schema.ts";
+import { importStagedPosts, verifyImportedAuthorPost } from "./blacklist-import-posts.ts";
 import { deleteImportSessionRecords, storedSessionFrom } from "./blacklist-import-staging.ts";
 import {
   ImportSessionExpiredError,
@@ -68,7 +69,7 @@ async function metadataFrom(transaction: IDBTransaction): Promise<StoredBlacklis
   return metadata;
 }
 
-function chunkRange(sessionId: string, kind: "authors" | "tags"): IDBKeyRange {
+function chunkRange(sessionId: string, kind: "authors" | "tags" | "posts"): IDBKeyRange {
   return IDBKeyRange.bound([sessionId, kind, 0], [sessionId, kind, Number.MAX_SAFE_INTEGER]);
 }
 
@@ -81,12 +82,13 @@ interface ChunkSequenceState {
 function requireCompleteChunkSequence(
   state: ChunkSequenceState,
   session: StoredImportSession,
-  kind: "authors" | "tags",
+  kind: "authors" | "tags" | "posts",
 ): void {
   const metadata = session.metadata;
-  const expectedChunks = kind === "authors" ? metadata.authorChunkCount : metadata.tagChunkCount;
-  const expectedCount = kind === "authors" ? metadata.authorCount : metadata.tagCount;
-  const expectedBytes = kind === "authors" ? metadata.authorsBytes : metadata.tagsBytes;
+  const prefix = { authors: "author", tags: "tag", posts: "post" } as const;
+  const expectedChunks = metadata[`${prefix[kind]}ChunkCount`];
+  const expectedCount = metadata[`${prefix[kind]}Count`];
+  const expectedBytes = metadata[`${kind}Bytes`];
   if (state.expectedChunk !== expectedChunks) throw new IncompleteBlacklistImportError();
   if (state.expectedStart !== expectedCount) throw new IncompleteBlacklistImportError();
   if (state.bytes !== expectedBytes) throw new IncompleteBlacklistImportError();
@@ -96,7 +98,7 @@ function advanceChunkSequence(
   state: ChunkSequenceState,
   cursor: IDBCursorWithValue,
   session: StoredImportSession,
-  kind: "authors" | "tags",
+  kind: "authors" | "tags" | "posts",
 ): void {
   const chunk = parseStoredImportChunk(cursor.value);
   if (!chunk || chunk.sessionId !== session.sessionId || chunk.kind !== kind) {
@@ -113,7 +115,7 @@ function advanceChunkSequence(
 function validateChunkSequence(
   transaction: IDBTransaction,
   session: StoredImportSession,
-  kind: "authors" | "tags",
+  kind: "authors" | "tags" | "posts",
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const state: ChunkSequenceState = { expectedChunk: 0, expectedStart: 0, bytes: 2 };
@@ -175,6 +177,7 @@ function logicalAuthor(author: StoredImportAuthor, tagId = author.tagId): Blackl
     tagId,
     blacklistedAt: author.blacklistedAt,
     blockSource: author.blockSource,
+    sourcePostId: author.sourcePostId,
   };
 }
 
@@ -229,11 +232,15 @@ async function visitStagedAuthorCursor(
     throw new IncompleteBlacklistImportError();
   }
   if (author.index !== state.expectedIndex) throw new IncompleteBlacklistImportError();
+  if (options.session.metadata.sourceFormatVersion === 1 && author.sourcePostId !== null) {
+    throw new IncompleteBlacklistImportError();
+  }
   state.identifierCount += await verifyStagedIdentifiers(
     options.transaction,
     options.session.sessionId,
     author,
   );
+  await verifyImportedAuthorPost(options.transaction, author);
   await options.visit(author);
   state.expectedIndex += 1;
 }
@@ -293,7 +300,7 @@ function replaceMetadata(
   return {
     key: BLACKLIST_METADATA_KEY,
     migrationComplete: true,
-    logicalSchemaVersion: 5,
+    logicalSchemaVersion: 6,
     revision: current.revision + 1,
     authorCount,
     tagCount,
@@ -480,6 +487,8 @@ export async function finalizeImport(options: {
     );
     await validateChunkSequence(transaction, session, "authors");
     await validateChunkSequence(transaction, session, "tags");
+    await validateChunkSequence(transaction, session, "posts");
+    await importStagedPosts(transaction, session, options.mode);
     const tags = await stagedTags(transaction, session);
     const current = await metadataFrom(transaction);
     const next =

@@ -38,6 +38,8 @@ function item(userId: string, tagId = "default"): BlacklistAuthorListItemDto {
       tagId,
       blacklistedAt: TIME,
       source: "direct",
+      sourcePostId: null,
+      sourcePost: null,
     },
     tag: {
       tagId,

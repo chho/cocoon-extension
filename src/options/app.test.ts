@@ -26,7 +26,7 @@ import {
 import {
   BLACKLIST_TRANSFER_FILE_BYTES,
   blacklistTransferTextBytes,
-  type BlacklistTransferEnvelopeV1,
+  type BlacklistTransferEnvelopeV2,
 } from "../core/blacklist-transfer-values.ts";
 import { createBlacklistRpcClient, type StrictBlacklistRpcClient } from "../ui/background-rpc.ts";
 import type { BlacklistTransferRpcClient } from "../ui/blacklist-transfer-rpc.ts";
@@ -48,6 +48,7 @@ function unusedTransferRpc(): BlacklistTransferRpcClient {
     beginImport: unexpected,
     stageAuthorsChunk: unexpected,
     stageTagsChunk: unexpected,
+    stagePostsChunk: unexpected,
     inspectImport: unexpected,
     finalizeImport: unexpected,
     abortImport: unexpected,
@@ -86,6 +87,8 @@ function selectionState(authorCount: number): TestBlacklistState {
       tagId: "default",
       blacklistedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
       source: "direct",
+      sourcePostId: null,
+      sourcePost: null,
     })),
     tags: [{ tagId: "default", name: "default", isDefault: true }],
   };
@@ -101,6 +104,8 @@ const TEST_STATE: TestBlacklistState = {
       tagId: "tag-one",
       blacklistedAt: "2026-08-21T10:00:00.000Z",
       source: "direct",
+      sourcePostId: null,
+      sourcePost: null,
     },
   ],
   tags: [
@@ -137,11 +142,12 @@ function deleteTagDelta(
   });
 }
 
-const TRANSFER: BlacklistTransferEnvelopeV1 = {
+const TRANSFER: BlacklistTransferEnvelopeV2 = {
   product: "cocoon-blacklist",
-  formatVersion: 1,
+  formatVersion: 2,
   exportedAt: "2026-08-22T10:00:00.000Z",
-  schemaVersion: 5,
+  schemaVersion: 6,
+  posts: [],
   authors: [
     {
       platformId: "zhihu",
@@ -151,6 +157,7 @@ const TRANSFER: BlacklistTransferEnvelopeV1 = {
       tagId: "default",
       blacklistedAt: "2026-08-21T10:00:00.000Z",
       blockSource: "direct",
+      sourcePostId: null,
     },
     {
       platformId: "youtube",
@@ -160,6 +167,7 @@ const TRANSFER: BlacklistTransferEnvelopeV1 = {
       tagId: "reading",
       blacklistedAt: "2026-08-20T10:00:00.000Z",
       blockSource: "upvoter",
+      sourcePostId: null,
     },
   ],
   tags: [
@@ -249,6 +257,11 @@ function transferSession(
     updatedAt: 1,
     expiresAt: 2,
     received: {
+      posts: {
+        chunks: complete ? metadata.postChunkCount : 0,
+        count: complete ? metadata.postCount : 0,
+        bytes: complete ? metadata.postsBytes : 2,
+      },
       authors: {
         chunks: complete ? metadata.authorChunkCount : 0,
         count: complete ? metadata.authorCount : 0,
@@ -1304,6 +1317,8 @@ function profileFilterSnapshots() {
         tagId: internalTagId,
         blacklistedAt: "2026-08-21T10:00:00.000Z",
         source: "direct",
+        sourcePostId: null,
+        sourcePost: null,
       },
       {
         platformId: "zhihu",
@@ -1313,6 +1328,8 @@ function profileFilterSnapshots() {
         tagId: otherTagId,
         blacklistedAt: "2026-08-20T10:00:00.000Z",
         source: "upvoter",
+        sourcePostId: null,
+        sourcePost: null,
       },
     ],
     tags: [
@@ -1429,6 +1446,8 @@ function platformFilterSnapshots() {
         authorName: "Video Older",
         blacklistedAt: "2026-08-20T09:00:00.000Z",
         source: "upvoter",
+        sourcePostId: null,
+        sourcePost: null,
       },
       {
         ...TEST_STATE.authors[0]!,
@@ -1438,6 +1457,8 @@ function platformFilterSnapshots() {
         authorName: "Video Newer",
         blacklistedAt: "2026-08-22T09:00:00.000Z",
         source: "direct",
+        sourcePostId: null,
+        sourcePost: null,
       },
       {
         ...TEST_STATE.authors[0]!,
@@ -1748,7 +1769,7 @@ test("MANAGE-004/AC-089 strict merge pipeline guards pending work and reloads bo
   strictEqual(readFile, file);
   strictEqual(
     dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已校验 2 位作者和 2 个标签；单个导入文件上限为 32 MiB。",
+    "已校验 2 位作者、2 个标签和 0 条关联帖子；单个导入文件上限为 32 MiB。",
   );
   strictEqual(
     dom.window.document.querySelector<HTMLInputElement>("input[name='import-mode'][value='merge']")
@@ -1783,7 +1804,7 @@ test("MANAGE-004/AC-089 strict merge pipeline guards pending work and reloads bo
   await settle();
   strictEqual(
     dom.window.document.querySelector("#transfer-status")?.textContent,
-    "合并完成；文件包含 2 位作者和 2 个标签。",
+    "合并完成；文件包含 2 位作者、2 个标签和 0 条关联帖子。",
   );
   strictEqual(dom.window.document.activeElement?.id, "transfer-status");
   strictEqual(importButton.disabled, true);
@@ -1837,7 +1858,7 @@ test("MANAGE-004/AC-089 strict replace confirms exact counts once and restores f
   strictEqual(dialog.open, true);
   strictEqual(
     dom.window.document.querySelector("#replace-dialog-description")?.textContent,
-    "将用文件中的 2 位作者和 2 个标签替换当前列表。现有设置会保留。",
+    "将用文件中的 2 位作者、2 个标签和 0 条关联帖子替换当前全部作者、标签和帖子。现有设置会保留。",
   );
   strictEqual(dom.window.document.activeElement, cancel);
   deepStrictEqual(transfer.calls, []);
@@ -1857,7 +1878,7 @@ test("MANAGE-004/AC-089 strict replace confirms exact counts once and restores f
   );
   strictEqual(
     dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已替换为 2 位作者和 2 个标签。",
+    "已替换为 2 位作者、2 个标签和 0 条关联帖子。",
   );
   strictEqual(dom.window.document.activeElement?.id, "transfer-status");
   strictEqual(rpc.queryRequests.length, 8);
@@ -1896,7 +1917,7 @@ test("MANAGE-004/AC-089 accepts exact 32 MiB files and rejects over-limit or unr
   strictEqual(reads, 1);
   strictEqual(
     dom.window.document.querySelector("#transfer-status")?.textContent,
-    "已校验 2 位作者和 2 个标签；单个导入文件上限为 32 MiB。",
+    "已校验 2 位作者、2 个标签和 0 条关联帖子；单个导入文件上限为 32 MiB。",
   );
   strictEqual(
     dom.window.document.querySelector<HTMLButtonElement>("#import-data")?.disabled,
@@ -2065,6 +2086,7 @@ function sequencedExportRpc(firstBegin: Promise<ExportBeginResponse>) {
       return createBlacklistTransferResponse("export-authors-page", true, {
         revision: 2,
         items: TRANSFER.authors,
+        posts: [],
         nextCursor: null,
       });
     },
@@ -2094,6 +2116,7 @@ function boundaryExportRpc(extraBytes: number) {
     schemaVersion: TRANSFER.schemaVersion,
     authors: [],
     tags: TRANSFER.tags,
+    posts: [],
   });
   const exportedAt = "x".repeat(
     BLACKLIST_TRANSFER_FILE_BYTES - blacklistTransferTextBytes(shell) + extraBytes,
@@ -2116,6 +2139,7 @@ function boundaryExportRpc(extraBytes: number) {
       return createBlacklistTransferResponse("export-authors-page", true, {
         revision: 9,
         items: [],
+        posts: [],
         nextCursor: null,
       });
     },

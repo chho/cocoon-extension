@@ -4,6 +4,8 @@ import {
   isContractRecord,
 } from "./blacklist-contract-validation.ts";
 
+import { isSourcePostId, parseSourcePost, type SourcePost } from "./source-post.ts";
+
 const MAX_PLATFORM_ID_ASCII_LENGTH = 64;
 const MAX_STABLE_ID_CODE_POINTS = 512;
 const MAX_AUTHOR_NAME_CODE_POINTS = 500;
@@ -26,6 +28,8 @@ export interface BlacklistAuthorDto extends BlacklistAuthorIdentityDto {
   readonly tagId: string;
   readonly blacklistedAt: string | null;
   readonly source: "direct" | "upvoter";
+  readonly sourcePostId: string | null;
+  readonly sourcePost: SourcePost | null;
 }
 
 export interface BlacklistTagDto {
@@ -98,6 +102,20 @@ export function parseBlacklistAuthorIdentityDto(value: unknown): BlacklistAuthor
   return { platformId: value.platformId, userId: value.userId };
 }
 
+function hasValidAuthorPostId(value: Record<string, unknown>): boolean {
+  if (value.sourcePostId === null) return true;
+  return value.platformId === ZHIHU_PLATFORM_ID && isSourcePostId(value.sourcePostId);
+}
+
+function parseAuthorPost(value: Record<string, unknown>): SourcePost | null | undefined {
+  if (!hasValidAuthorPostId(value)) return undefined;
+  if (value.sourcePost === null) return null;
+  const post = parseSourcePost(value.sourcePost);
+  if (!post || post.postId !== value.sourcePostId || post.platformId !== value.platformId)
+    return undefined;
+  return post;
+}
+
 export function parseBlacklistAuthorDto(value: unknown): BlacklistAuthorDto | null {
   if (!isContractRecord(value)) return null;
   if (
@@ -109,6 +127,8 @@ export function parseBlacklistAuthorDto(value: unknown): BlacklistAuthorDto | nu
       "tagId",
       "blacklistedAt",
       "source",
+      "sourcePostId",
+      "sourcePost",
     ])
   ) {
     return null;
@@ -119,6 +139,8 @@ export function parseBlacklistAuthorDto(value: unknown): BlacklistAuthorDto | nu
   if (!isValidMemberHash(value.platformId, value.userId, value.memberHashId)) return null;
   if (!hasValidAuthorText(value)) return null;
   if (!hasValidAuthorSource(value)) return null;
+  const sourcePost = parseAuthorPost(value);
+  if (sourcePost === undefined) return null;
   return {
     platformId: value.platformId,
     userId: value.userId,
@@ -127,6 +149,8 @@ export function parseBlacklistAuthorDto(value: unknown): BlacklistAuthorDto | nu
     tagId: value.tagId as string,
     blacklistedAt: value.blacklistedAt as string | null,
     source: value.source as "direct" | "upvoter",
+    sourcePostId: value.sourcePostId as string | null,
+    sourcePost,
   };
 }
 

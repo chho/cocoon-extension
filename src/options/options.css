@@ -36,6 +36,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 .author-name:focus-visible,
+.source-post:focus-visible,
 .author-viewport:focus-visible {
   outline: 2px solid #63766a;
   outline-offset: 2px;
@@ -347,7 +348,8 @@ select {
 }
 
 .author-name,
-.tag-name {
+.tag-name,
+.source-post {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -372,6 +374,23 @@ a.author-name {
   border: 1px solid #d9ded9;
   border-radius: 999px;
   background: #f3f5f2;
+}
+
+.source-details {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: #68716b;
+}
+
+.source-post {
+  min-width: 0;
+  color: inherit;
+  font-size: 11px;
+}
+
+a.source-post {
+  text-underline-offset: 3px;
 }
 
 .author-row time,
@@ -681,7 +700,7 @@ dialog p {
   .author-list:not(.virtual-list) .platform-name {
     grid-area: platform;
   }
-  .author-list:not(.virtual-list) .source-name {
+  .author-list:not(.virtual-list) .source-details {
     grid-area: source;
   }
   .author-list:not(.virtual-list) .author-row time {

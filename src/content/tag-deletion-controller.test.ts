@@ -30,6 +30,7 @@ function populatedState(): BlacklistState {
         tagId: "remove",
         blacklistedAt: TIMESTAMP,
         blockSource: "direct",
+        sourcePostId: null,
       },
       {
         platformId: "zhihu",
@@ -39,6 +40,7 @@ function populatedState(): BlacklistState {
         tagId: "keep",
         blacklistedAt: null,
         blockSource: "direct",
+        sourcePostId: null,
       },
     ],
   };
@@ -125,6 +127,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
               tagId: "remove",
               blacklistedAt: TIMESTAMP,
               blockSource: "direct",
+              sourcePostId: null,
             },
           ],
         };
@@ -163,6 +166,7 @@ test("TAG-014/015 deletion is one latest-state write and preserves author data",
       tagId: DEFAULT_TAG_ID,
       blacklistedAt: TIMESTAMP,
       blockSource: "direct",
+      sourcePostId: null,
     },
   ]);
   strictEqual(runtime, stored);
@@ -222,7 +226,7 @@ test("default is protected by controller logic without any storage write", async
   strictEqual(applies, 0);
 });
 
-test("deleting from v1 atomically migrates schema v5, platform, source, hash, and null timestamps", async () => {
+test("deleting from v1 atomically migrates schema v6, platform, source, hash, and null timestamps", async () => {
   let stored: unknown = {
     schemaVersion: 1,
     tags: [
@@ -254,7 +258,8 @@ test("deleting from v1 atomically migrates schema v5, platform, source, hash, an
   const result = await controller.deleteTag("remove", event.value);
   strictEqual(result.status, "persisted");
   deepStrictEqual(stored, {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    posts: [],
     tags: [{ tagId: DEFAULT_TAG_ID, name: "default" }],
     authors: [
       {
@@ -265,6 +270,7 @@ test("deleting from v1 atomically migrates schema v5, platform, source, hash, an
         tagId: DEFAULT_TAG_ID,
         blacklistedAt: null,
         blockSource: "direct",
+        sourcePostId: null,
       },
     ],
   });

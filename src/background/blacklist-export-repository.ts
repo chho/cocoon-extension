@@ -37,6 +37,17 @@ import {
 } from "./blacklist-idb-schema.ts";
 import { StaleBlacklistExportError } from "./blacklist-transfer-repository-errors.ts";
 
+import type * as SourcePostModule from "../core/source-post.ts";
+import type { SourcePost } from "../core/source-post.ts";
+// @ts-expect-error Vite resolves the background-only copy during bundling.
+import * as backgroundSourcePost from "../core/source-post.ts?background-copy";
+const { parseSourcePost } = backgroundSourcePost as typeof SourcePostModule;
+
+interface ExportAuthor {
+  readonly author: BlacklistTransferAuthorDto;
+  readonly post: SourcePost | null;
+}
+
 interface ExportCursor {
   readonly version: 1;
   readonly operation: "export-authors" | "export-tags";
@@ -169,7 +180,8 @@ function pageRange(cursor: ExportCursor | null): IDBKeyRange | null {
 async function exportAuthorFrom(
   value: unknown,
   tags: IDBObjectStore,
-): Promise<{ readonly item: BlacklistTransferAuthorDto; readonly order: number }> {
+  posts: IDBObjectStore,
+): Promise<{ readonly item: ExportAuthor; readonly order: number }> {
   if (!isBlacklistTransferRecord(value) || typeof value.tagId !== "string") {
     throw new Error("IndexedDB export author is unreadable.");
   }
@@ -177,16 +189,27 @@ async function exportAuthorFrom(
   const tag = parseStoredTag(rawTag);
   const author = tag ? parseStoredAuthor(value, { tagId: tag.tagId, name: tag.name }) : null;
   if (!author) throw new Error("IndexedDB export author is unreadable.");
+  const post =
+    author.sourcePostId === null
+      ? null
+      : parseSourcePost(await requestResult(posts.get(author.sourcePostId)));
+  if (author.sourcePostId !== null && (!post || post.platformId !== author.platformId)) {
+    throw new Error("IndexedDB export source post is unreadable.");
+  }
   return {
     order: author.order,
     item: {
-      platformId: author.platformId,
-      userId: author.userId,
-      memberHashId: author.memberHashId,
-      authorNameAtCapture: author.authorNameAtCapture,
-      tagId: author.tagId,
-      blacklistedAt: author.blacklistedAt,
-      blockSource: author.blockSource,
+      post,
+      author: {
+        platformId: author.platformId,
+        userId: author.userId,
+        memberHashId: author.memberHashId,
+        authorNameAtCapture: author.authorNameAtCapture,
+        tagId: author.tagId,
+        blacklistedAt: author.blacklistedAt,
+        blockSource: author.blockSource,
+        sourcePostId: author.sourcePostId,
+      },
     },
   };
 }
@@ -217,7 +240,12 @@ export async function exportBlacklistAuthorsPage(
 ): Promise<BlacklistExportAuthorsPageDto> {
   const input = parsePageInput(untrustedInput);
   const transaction = database.transaction(
-    [BLACKLIST_STORE_NAMES.authors, BLACKLIST_STORE_NAMES.tags, BLACKLIST_STORE_NAMES.metadata],
+    [
+      BLACKLIST_STORE_NAMES.authors,
+      BLACKLIST_STORE_NAMES.tags,
+      BLACKLIST_STORE_NAMES.posts,
+      BLACKLIST_STORE_NAMES.metadata,
+    ],
     "readonly",
   );
   const done = transactionDone(transaction);
@@ -225,16 +253,22 @@ export async function exportBlacklistAuthorsPage(
   requireRevision(metadata, input.revision);
   const cursor = parseCursor(input.cursor, "export-authors", input.revision);
   const tags = transaction.objectStore(BLACKLIST_STORE_NAMES.tags);
-  const scan = await scanExportItems<BlacklistTransferAuthorDto>({
+  const posts = transaction.objectStore(BLACKLIST_STORE_NAMES.posts);
+  const scan = await scanExportItems<ExportAuthor>({
     index: transaction.objectStore(BLACKLIST_STORE_NAMES.authors).index("by-order"),
     range: pageRange(cursor),
     limit: input.limit,
-    parse: (value) => exportAuthorFrom(value, tags),
+    parse: (value) => exportAuthorFrom(value, tags, posts),
   });
   await done;
   return {
     revision: metadata.revision,
-    items: scan.items,
+    items: scan.items.map(({ author }) => author),
+    posts: [
+      ...new Map(
+        scan.items.flatMap(({ post }) => (post ? [[post.postId, post] as const] : [])),
+      ).values(),
+    ],
     nextCursor:
       scan.hasMore && scan.lastOrder !== null
         ? encodeCursor({
