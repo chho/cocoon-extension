@@ -20,17 +20,14 @@ import { createBackgroundBlacklistGateway } from "../../content/background-black
 import { BLACKLIST_REVISION_STORAGE_KEY } from "../../content/background-blacklist-client.ts";
 import { createDrawerView } from "../../content/drawer-view.ts";
 import { createDrawerCommitHandler } from "./drawer-commit.ts";
+import { createDrawerSubmitter } from "./drawer-submission.ts";
 import {
   installDevDiagnostics,
   recordDrawerObservation,
   startVoterDiagnostics,
 } from "../../diagnostics/content.ts";
 import { createMeasuredCommitController } from "../../content/commit-performance.ts";
-import {
-  createDrawerController,
-  type DrawerTarget,
-  type TagSelection,
-} from "../../content/drawer-controller.ts";
+import { createDrawerController, type DrawerTarget } from "../../content/drawer-controller.ts";
 import {
   createDrawerVisibilityController,
   getDrawerMotionContract,
@@ -483,7 +480,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     getRemoteAuthorization(target) {
       return remoteOptionsView.getAuthorization(target.voterSource !== null);
     },
-    commit: (task, signal) => handleDrawerCommit(task, signal),
+    commit: (task, signal, point) => handleDrawerCommit(task, signal, point),
   });
 
   function positionDrawer(): void {
@@ -514,18 +511,17 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     getTags: () => currentTags,
     getStatus: () => drawerController.getState().status,
     onLayoutChange: positionDrawer,
-    selectTag: (tag) => void submitDrawerSelection({ tag, isNewTag: false }),
+    selectTag: (tag, event) => void submitDrawerSelection({ tag, isNewTag: false }, event),
     deleteTag: (tagId, event) => void tagDeletionController.deleteTag(tagId, event),
   });
   function renderTagChoices(): void {
     tagListController.render();
   }
 
-  async function submitDrawerSelection(selection: TagSelection): Promise<void> {
-    await runAfterRemotePreferencesReady(remotePreferencesReady, () => {
-      drawerController.submit(selection);
-    });
-  }
+  const submitDrawerSelection = createDrawerSubmitter(
+    remotePreferencesReady,
+    () => drawerController,
+  );
 
   window.addEventListener("resize", positionDrawer);
 
@@ -845,6 +841,7 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     cardRoots: (identifiers) => filterController.getMatchingRoots(identifiers),
     commentRoots: (identifiers) => commentFilterController.getMatchingRoots(identifiers),
     readCardIdentifiers: getDirectCardAuthorIds,
+    settleComment: commentFilterController.waitForSettled,
   });
 
   const tagDeletionController = createTagDeletionController({

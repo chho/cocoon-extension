@@ -176,11 +176,17 @@ function runtimeTransport(backend: Awaited<ReturnType<typeof createBackend>>) {
   };
 }
 
-async function mountHarness(t: TestContext, scenario: Scenario) {
+async function mountHarness(
+  t: TestContext,
+  scenario: Scenario,
+  memberResponse?: () => Promise<Response>,
+) {
   t.mock.timers.enable({ apis: ["Date"], now: new Date(NOW) });
   t.mock.method(console, "info", () => {});
   const errors: unknown[] = [];
+  const warnings: unknown[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => errors.push(args));
+  t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
   const backend = await createBackend(t, scenario);
   const dom = createDom(t);
   const transport = runtimeTransport(backend);
@@ -198,6 +204,7 @@ async function mountHarness(t: TestContext, scenario: Scenario) {
     },
     async fetch(url: string, init?: RequestInit) {
       requests.push({ url, method: init?.method ?? "GET" });
+      if (memberResponse && url === `/api/v4/members/${HOVER_MEMBER_HASH}`) return memberResponse();
       return new Response("{}", { status: init?.method === "POST" ? 200 : 403 });
     },
   });
@@ -243,6 +250,7 @@ async function mountHarness(t: TestContext, scenario: Scenario) {
     element,
     requests,
     errors,
+    warnings,
     hiddenCount: () => hiddenCount,
   };
 }
@@ -276,6 +284,75 @@ async function submitFromHover(
   await h.flush();
   strictEqual(drawer.getAttribute("aria-busy"), "false");
 }
+
+test("BUG-022 token-only submission waits for exposed hash comment and nested reply before releasing", async (t) => {
+  let resolveMember!: (response: Response) => void;
+  const member = new Promise<Response>((resolve) => {
+    resolveMember = resolve;
+  });
+  const h = await mountHarness(t, "new", () => member);
+  h.element("#same-author-card").remove();
+  h.element("#token-comment").remove();
+  for (const link of h.dom.window.document.querySelectorAll<HTMLAnchorElement>(".NumberBoard-item"))
+    link.href = link.href.replace(HOVER_MEMBER_HASH, "synthetic-author");
+  const parent = h.element("#hash-comment");
+  parent.insertAdjacentHTML(
+    "beforeend",
+    `<div data-id="nested-reply"><a href="/people/${"b".repeat(32)}">Reply</a></div>`,
+  );
+  const reply = h.element('[data-id="nested-reply"]');
+  await h.flush();
+  h.element<HTMLButtonElement>(".cocoon-hover-block-button").click();
+  await h.flush();
+  h.element(".hover-root").remove();
+  const choice = h.element<HTMLButtonElement>(".cocoon-tag-choice");
+  const drawer = h.element(".cocoon-tag-drawer");
+  Object.defineProperty(h.dom.window.document, "elementsFromPoint", {
+    value(x: number, y: number) {
+      deepStrictEqual([x, y], [380, 500]);
+      return [choice, drawer, reply.querySelector("a")!, reply, parent];
+    },
+  });
+  choice.dispatchEvent(
+    new h.dom.window.MouseEvent("click", {
+      bubbles: true,
+      detail: 1,
+      clientX: 380,
+      clientY: 500,
+    }),
+  );
+  await h.flushBackend();
+  strictEqual((await h.read()).state.authors[0]?.memberHashId, null);
+  strictEqual(
+    drawer.getAttribute("aria-busy"),
+    "true",
+    "zero author matches must not release the covered comment",
+  );
+  strictEqual(drawer.inert, false);
+  await h.flush();
+  strictEqual(drawer.getAttribute("aria-busy"), "true", "related alias is still pending after RAF");
+  resolveMember(new Response(JSON.stringify({ url_token: "synthetic-author" })));
+  await h.flushBackend();
+  strictEqual(parent.classList.contains(COMMENT_HIDDEN_CLASS), false);
+  strictEqual(drawer.inert, false, "alias completion alone is not a DOM acknowledgement");
+  await h.flush();
+  strictEqual(parent.classList.contains(COMMENT_HIDDEN_CLASS), true);
+  strictEqual(reply.closest(`.${COMMENT_HIDDEN_CLASS}`), parent);
+  strictEqual(drawer.getAttribute("aria-busy"), "false");
+  strictEqual(drawer.inert, true);
+  deepStrictEqual(
+    h.warnings,
+    [],
+    "hidden ancestor confirms safety even if the reply lookup failed",
+  );
+  strictEqual(
+    (await h.read()).state.authors.length,
+    1,
+    "reply author is not independently blocked",
+  );
+  strictEqual(h.requests.filter((r) => r.url === `/api/v4/members/${HOVER_MEMBER_HASH}`).length, 1);
+  strictEqual(h.requests.filter((r) => r.method === "POST").length, 1);
+});
 
 for (const scenario of ["new", "existing", "conflict"] as const) {
   test(`BUG-020 production hover→RPC→IDB→comment filtering: ${scenario}`, async (t) => {

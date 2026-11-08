@@ -1,6 +1,6 @@
 {
   "name": "cocoon-extension",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Local-first Chrome extension for quiet, plugin-based control over content feeds.",
   "keywords": [
     "browser-extension",

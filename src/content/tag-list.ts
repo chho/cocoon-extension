@@ -1,7 +1,7 @@
 import { DEFAULT_TAG_ID, type CocoonTag } from "./blacklist-state.ts";
 
 export interface TagListActions {
-  readonly selectTag: (tag: CocoonTag) => void;
+  readonly selectTag: (tag: CocoonTag, event: MouseEvent) => void;
   readonly deleteTag: (tagId: string, event: MouseEvent) => void;
 }
 
@@ -17,7 +17,7 @@ function createTagItem(document: Document, tag: CocoonTag, actions: TagListActio
   choice.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    actions.selectTag(tag);
+    actions.selectTag(tag, event);
   });
   item.append(choice);
   if (tag.tagId === DEFAULT_TAG_ID) return item;

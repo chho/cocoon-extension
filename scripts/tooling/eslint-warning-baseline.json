@@ -485,8 +485,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (819). Maximum allowed is 500.",
-      "sourceLine": "onActivate(activation) {",
+      "message": "File has too many lines (816). Maximum allowed is 500.",
+      "sourceLine": "requestAnimationFrame(callback);",
       "count": 1
     },
     {

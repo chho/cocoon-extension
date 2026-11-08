@@ -3,8 +3,8 @@ import { isMemberHashId, normalizeMemberHashId } from "./blacklist-state.ts";
 import type { IdentityMatchStatus } from "./identity-batch-matcher.ts";
 import { parseZhihuUserId } from "./parse-zhihu-user-id.ts";
 
-const COMMENTS_CONTAINER_SELECTOR = ".Comments-container, .Modal-content";
-const COMMENT_ROOT_SELECTOR = "div[data-id]";
+export const COMMENTS_CONTAINER_SELECTOR = ".Comments-container, .Modal-content";
+export const COMMENT_ROOT_SELECTOR = "div[data-id]";
 export const COMMENT_HIDDEN_CLASS = "cocoon-comment-blacklisted";
 
 interface ProfileEvidence {
@@ -65,10 +65,38 @@ export interface CommentFilterControllerDependencies {
   readonly batchSize?: number;
 }
 
+// UI completion only: this snapshot must never establish identity or alias evidence.
+export interface CommentFilterContext {
+  readonly root: HTMLElement;
+  readonly identifier: string;
+  readonly dataId: string | null;
+}
+
+export type CommentSettlement =
+  "hidden" | "visible" | "detached" | "changed" | "unavailable" | "aborted";
+
+interface CommentDecision {
+  identifier: string | null;
+  dataId: string | null;
+  status: "visible" | "unavailable";
+}
+
+export function readCommentContextDisposition(
+  context: CommentFilterContext,
+): "hidden" | "detached" | "changed" | null {
+  const { root, identifier, dataId } = context;
+  if (!root.isConnected) return "detached";
+  if (root.getAttribute("data-id") !== dataId || resolveCommentAuthorUserId(root) !== identifier) {
+    return "changed";
+  }
+  return root.closest(`.${COMMENT_HIDDEN_CLASS}, .cocoon-blacklisted`) ? "hidden" : null;
+}
+
 export interface CommentFilterController {
   scan(root: Node): void;
   reevaluateAll(): void;
   getMatchingRoots(identifiers: ReadonlySet<string>): readonly HTMLElement[];
+  waitForSettled(context: CommentFilterContext, signal: AbortSignal): Promise<CommentSettlement>;
   destroy(): void;
 }
 
@@ -83,6 +111,8 @@ class CommentFilterControllerImpl implements CommentFilterController {
   private readonly pending = new Map<HTMLElement, object>();
   private readonly currentEvaluations = new WeakMap<HTMLElement, object>();
   private readonly filtering = new WeakSet<HTMLElement>();
+  private readonly latestDecisions = new WeakMap<HTMLElement, CommentDecision>();
+  private readonly settlementListeners = new Set<() => void>();
   private readonly inFlightAliases = new Map<
     string,
     Promise<AuthorAliasPersistenceResult | void>
@@ -128,9 +158,72 @@ class CommentFilterControllerImpl implements CommentFilterController {
     );
   }
 
+  private readSettlement(
+    context: CommentFilterContext,
+    signal: AbortSignal,
+  ): CommentSettlement | null {
+    if (signal.aborted || this.destroyed) return "aborted";
+    const terminal = readCommentContextDisposition(context);
+    if (terminal) return terminal;
+    const { root, identifier, dataId } = context;
+    if (
+      this.pending.has(root) ||
+      this.filtering.has(root) ||
+      this.inFlightAliases.has(identifier)
+    ) {
+      return null;
+    }
+    const decision = this.latestDecisions.get(root);
+    if (decision?.identifier !== identifier || decision.dataId !== dataId) return "unavailable";
+    return decision.status;
+  }
+
+  waitForSettled(context: CommentFilterContext, signal: AbortSignal): Promise<CommentSettlement> {
+    const immediate = this.readSettlement(context, signal);
+    if (immediate) return Promise.resolve(immediate);
+    const Observer = context.root.ownerDocument.defaultView?.MutationObserver;
+    if (!Observer) return Promise.resolve("unavailable");
+    return new Promise((resolve) => {
+      let settled = false;
+      const check = (): void => {
+        if (settled) return;
+        let result: CommentSettlement | null;
+        try {
+          result = this.readSettlement(context, signal);
+        } catch {
+          result = "unavailable";
+        }
+        if (!result) return;
+        settled = true;
+        observer.disconnect();
+        signal.removeEventListener("abort", check);
+        this.settlementListeners.delete(check);
+        resolve(result);
+      };
+      const observer = new Observer(check);
+      observer.observe(context.root.ownerDocument, { subtree: true, childList: true });
+      observer.observe(context.root, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "data-id", "href"],
+        characterData: true,
+      });
+      for (let ancestor = context.root.parentElement; ancestor; ancestor = ancestor.parentElement)
+        observer.observe(ancestor, { attributes: true, attributeFilter: ["class"] });
+      signal.addEventListener("abort", check, { once: true });
+      this.settlementListeners.add(check);
+      check();
+    });
+  }
+
+  private notifySettlements(): void {
+    for (const check of this.settlementListeners) check();
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.notifySettlements();
     this.cancelFrame?.();
     this.cancelFrame = null;
     this.frameRequested = false;
@@ -152,6 +245,7 @@ class CommentFilterControllerImpl implements CommentFilterController {
   private supersedeEvaluation(commentRoot: HTMLElement): object {
     const evaluation = Object.freeze({});
     this.currentEvaluations.set(commentRoot, evaluation);
+    this.latestDecisions.delete(commentRoot);
     this.pending.set(commentRoot, evaluation);
     return evaluation;
   }
@@ -172,6 +266,8 @@ class CommentFilterControllerImpl implements CommentFilterController {
       this.rootsEverObservedHidden.add(commentRoot);
     }
     commentRoot.classList.remove(COMMENT_HIDDEN_CLASS);
+    this.latestDecisions.delete(commentRoot);
+    this.notifySettlements();
   }
 
   private forgetDetachedRoots(): void {
@@ -229,6 +325,7 @@ class CommentFilterControllerImpl implements CommentFilterController {
     this.inFlightAliases.delete(memberHashId);
     if (this.destroyed) return;
     this.reenqueueAliasRoots(memberHashId, result === undefined || result.status === "failed");
+    this.notifySettlements();
   }
 
   private applyHiddenState(commentRoot: HTMLElement, hidden: boolean, evaluation: object): void {
@@ -262,8 +359,14 @@ class CommentFilterControllerImpl implements CommentFilterController {
   }
 
   private async filter(commentRoot: HTMLElement, evaluation: object): Promise<void> {
+    const decision: CommentDecision = {
+      identifier: null,
+      dataId: commentRoot.getAttribute("data-id"),
+      status: "unavailable",
+    };
     try {
       const userId = resolveCommentAuthorUserId(commentRoot);
+      decision.identifier = userId;
       if (!this.isCurrentEvaluation(commentRoot, evaluation)) return;
       if (userId === null) {
         this.applyHiddenState(commentRoot, false, evaluation);
@@ -271,12 +374,18 @@ class CommentFilterControllerImpl implements CommentFilterController {
       }
       const match = this.dependencies.matchStableIdentifiers(new Set([userId]));
       const status = typeof match === "string" ? match : await match;
+      const aliasFailed = this.skipAliasOnce.get(commentRoot) === userId;
       this.applyMatchResult(commentRoot, evaluation, userId, status);
+      if (status === "unmatched" && !aliasFailed) decision.status = "visible";
     } catch {
       this.applyHiddenState(commentRoot, false, evaluation);
     } finally {
+      if (this.isCurrentEvaluation(commentRoot, evaluation)) {
+        this.latestDecisions.set(commentRoot, decision);
+      }
       this.filtering.delete(commentRoot);
       if (this.pending.has(commentRoot)) this.requestFrame();
+      this.notifySettlements();
     }
   }
 
@@ -329,5 +438,6 @@ export function createCommentFilterController(
     reevaluateAll: () => controller.reevaluateAll(),
     destroy: () => controller.destroy(),
     getMatchingRoots: (identifiers) => controller.getMatchingRoots(identifiers),
+    waitForSettled: (context, signal) => controller.waitForSettled(context, signal),
   };
 }

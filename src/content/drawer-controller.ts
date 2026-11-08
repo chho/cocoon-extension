@@ -30,6 +30,11 @@ export interface RemoteAuthorization {
   readonly blockContentVoters: boolean;
 }
 
+export interface SubmissionPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface TagSelection {
   readonly tag: CocoonTag;
   readonly isNewTag: boolean;
@@ -78,6 +83,7 @@ export interface DrawerControllerDependencies<TCard, TButton> {
   readonly commit: (
     task: CommitTask<TCard, TButton>,
     signal: AbortSignal,
+    point?: SubmissionPoint,
   ) => Promise<DrawerCommitOutcome>;
 }
 
@@ -85,7 +91,7 @@ export interface DrawerController<TCard, TButton> {
   open(target: DrawerTarget<TCard, TButton>): void;
   setDraft(value: string): void;
   cancel(interaction?: CancelInteraction): void;
-  submit(selection: TagSelection): void;
+  submit(selection: TagSelection, point?: SubmissionPoint): void;
   dismiss(): void;
   getState(): DrawerState;
   getTarget(): DrawerTarget<TCard, TButton> | null;
@@ -141,7 +147,7 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
     this.close(true);
   }
 
-  submit(selection: TagSelection): void {
+  submit(selection: TagSelection, point?: SubmissionPoint): void {
     if (this.state.status !== "open" || !this.target) return;
     const task = {
       target: this.target,
@@ -154,12 +160,13 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
     if (import.meta.env?.MODE !== "production") {
       observeSubmission(this.dependencies, { phase: "start", signal: this.pending.signal, task });
     }
-    void this.finishSubmission(task, this.pending);
+    void this.finishSubmission(task, this.pending, point);
   }
 
   private async finishSubmission(
     task: CommitTask<TCard, TButton>,
     run: AbortController,
+    point?: SubmissionPoint,
   ): Promise<void> {
     let interrupt: () => void = () => {};
     const interrupted = new Promise<DrawerCommitOutcome>((resolve) => {
@@ -170,7 +177,10 @@ class DrawerControllerImpl<TCard, TButton> implements DrawerController<TCard, TB
     let outcome: DrawerCommitOutcome;
     try {
       // Cancelling UI ownership never cancels an already-dispatched database transaction.
-      outcome = await Promise.race([this.dependencies.commit(task, run.signal), interrupted]);
+      outcome = await Promise.race([
+        this.dependencies.commit(task, run.signal, point),
+        interrupted,
+      ]);
     } catch {
       outcome = "incomplete";
     } finally {
