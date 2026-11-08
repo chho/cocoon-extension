@@ -1,6 +1,6 @@
-# Chrome Web Store preparation — Cocoon
+# Chrome Web Store — Cocoon
 
-Last updated: 2026-11-01. **Draft; this task does not submit or publish an extension.**
+Last updated: 2026-11-08. **0.7.4 submitted; Pending review. Automatic publication after approval is enabled.**
 
 ## Distribution boundary
 
@@ -9,7 +9,9 @@ Last updated: 2026-11-01. **Draft; this task does not submit or publish an exten
 - Production build guards reject included diagnostic modules and protocol/storage markers. Never upload `dist-dev/`, local diagnostics, browser data, `.git/`, dependencies, source docs or credentials as the store package.
 - Use the same numeric version, 0.7.4. Dev has a separate version label and installation/data; it is not a second store listing in this task.
 
-## Listing draft
+## Listing reference
+
+The existing English and Simplified Chinese store descriptions were retained, with small additions for drawer tag ordering, first-block post references and backup contents. Both saved descriptions were reloaded and compared exactly before submission; the following is a concise reference, not the full submitted copy.
 
 **Name:** Cocoon
 
@@ -27,12 +29,12 @@ Cocoon has no developer-operated server, analytics or automatic telemetry. Read 
 
 **Single purpose:** Author-based filtering and local blocklist management for the Zhihu home feed.
 
-**Category / primary listing language / visibility / regions:** Publisher confirmation required before submission. English and Simplified Chinese extension metadata exist; the extension UI is currently Chinese.
+**Category / listing languages / visibility / regions:** Tools; English (default) and Simplified Chinese; Public; all available regions. Free of charge. Existing distribution settings were checked and retained; the extension UI remains Chinese.
 
 ## Assets
 
 - Existing local PNG icons: `icons/icon-16.png`, `icon-32.png`, `icon-48.png`, `icon-128.png`.
-- Store screenshots (1280×800 or 640×400): not prepared or verified in this task. Use synthetic data only.
+- Retained the three previously approved screenshots and two promotional tiles. Existing screenshot thumbnails were inspected and all six store images, including the icon, loaded successfully; no replacement images or new personal screenshots were uploaded.
 - Dev does not require new icons.
 
 ## Permission and page-scope justification
@@ -53,22 +55,22 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 - Submitted feed-card blocks and reliably associated hover-card blocks can retain shared post titles, content identifiers and permanent links; related authors/voters reference them. Backups include referenced posts, while unreferenced local posts are retained until replacement or uninstall.
 - Local backups contain personal records. There is no developer-operated upload service, advertising or analytics.
 - Dev-only diagnostics can retain real author identities, related interaction times and geometry; they are local, bounded and not automatically uploaded. They must not be confused with the store production data flow.
-- The publisher must review current store disclosure categories against the final production package before submission. No disclosure form has been submitted in this task.
+- Existing Personally identifiable information, Authentication information and Website content disclosures, the three limited-use certifications and the No remote code selection were checked and retained for submission. No new legal or data-use certification was added.
 
-**Privacy-policy URL:** A public, reachable URL must be confirmed before submission; this task updates the local policy but does not verify hosting.
+**Privacy-policy URL:** https://github.com/chho/cocoon-extension/blob/main/PRIVACY.md — opened successfully before submission and checked for post data, credentials, retention and production diagnostic exclusions. Its version note remains 0.7.3; 0.7.4 does not change the disclosed production data practices.
 
 ## Publisher details
 
-- Publisher name/contact email: must be supplied/confirmed by the publisher; do not infer private account details.
+- Existing publisher/contact settings were retained; no legal/account fields were changed or private account details copied here.
 - Source/homepage: https://github.com/chho/cocoon-extension
 - Support: https://github.com/chho/cocoon-extension/issues
-- Remote availability, store account and store listing status were not checked in this task.
+- Existing developer dashboard was accessible. The final submission confirmation had automatic publication enabled; Google acknowledged submission and the Status page showed Pending review.
 
 ## Version history and readiness
 
 | Version | Status | Change |
 | --- | --- | --- |
-| 0.7.4 | Reviewed, not submitted | Keep the drawer pending while filtering finishes for comments exposed beneath a mouse submission, without guessing author identities or delaying on unrelated comments. |
+| 0.7.4 | Submitted 2026-11-08; Pending review; auto-publish enabled | Keep the drawer pending while filtering finishes for comments exposed beneath a mouse submission, without guessing author identities or delaying on unrelated comments. |
 | 0.7.3 | Reviewed, not submitted | Fix article voter pagination stopping after the first page when Zhihu returns an HTTP next link; requests remain HTTPS-only. |
 | 0.7.2 | Reviewed, not submitted | Complete Dev voter-batch diagnostics with bounded page evidence and count reconciliation; production excludes the recorder. |
 | 0.7.1 | Reviewed, not submitted | Complete 0.7 post provenance for reliably associated author hover cards; voter operations remain disabled for hover entries. |
@@ -78,4 +80,6 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 | 0.6.0 | Draft, not submitted | Custom-tag drawer sorting with locally remembered order; default remains fixed. |
 | 0.5.0 | Draft, not submitted | Separate production and local Dev builds; bounded local diagnostics only in Dev. |
 
-Known issue: intermittent native Zhihu hover-card recurrence is still under investigation (BUG-022). Diagnostic delivery does not establish that it is fixed. Real-browser acceptance and store submission review remain separate steps.
+Release evidence: production artifact from [CI run 42441260600](https://github.com/chho/cocoon-extension/actions/runs/42441260600), commit `840503ec77db03d60b9cc877cd69bd4f6d23043f`. Uploaded the original 122,398-byte ZIP after verifying SHA-256 `3ec19f2ce32e74cf9e7ee3b7e7fbf985bada38be64e362fe8d96de31418e9fcd`, CRC, 17 runtime files, MV3/version, locales, resource references, permissions/page scope and diagnostic-marker exclusions. The previously published package remains 0.4.3 while 0.7.4 is pending review; submission is not publication.
+
+Browser acceptance: BUG-022's supported mouse-submission path has an automated fix in 0.7.4, but real-browser geometry and intermittent native hover behavior remain user acceptance boundaries. Unknown/keyboard contexts retain their fallback behavior; this release does not claim to eliminate every native hover recurrence. No product version bump was needed for publishing the existing 0.7.4.
