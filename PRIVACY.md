@@ -1,10 +1,10 @@
 # Cocoon Privacy Policy / 隐私政策
 
-Last updated / 最后更新：2026-10-30
+Last updated / 最后更新：2026-11-01
 
-This policy describes Cocoon 0.7.1 and the separately built Cocoon Dev variant. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
+This policy describes Cocoon 0.7.3 and the separately built Cocoon Dev variant. Cocoon is a local-first author-based content filtering tool. The current version supports only the Zhihu home feed at `https://www.zhihu.com/`; support for other websites is not implied.
 
-本政策适用于 Cocoon 0.7.1 及独立构建的 Cocoon Dev 版本。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
+本政策适用于 Cocoon 0.7.3 及独立构建的 Cocoon Dev 版本。Cocoon 是以本地存储为主、按作者过滤内容的工具。当前版本仅支持知乎首页 `https://www.zhihu.com/`，不代表已支持其他网站。
 
 ## 1. Data processed / 处理的数据
 
@@ -53,6 +53,10 @@ Cocoon may write local diagnostic errors, counts, and timing information to the 
 Cocoon Dev additionally records local submission/filtering/hover timing and geometry, including relevant real author names, identifiers, aliases and profile links. It does not record credentials, cookies, unrelated content or input text, HTML dumps, or network payloads. In-memory history is bounded to five minutes and 1,000 events. Suspected incidents or explicit developer-console saves retain at most three fragments of up to 128 KiB each in Dev's local extension storage. They expire after seven days and are pruned on diagnostic startup or requests, not by a guaranteed deletion timer. An isolated-world debugging handle can inspect current history, save a fragment or clear diagnostics; see the README. Production builds exclude this additional recorder. No automatic diagnostic upload or cross-version data sharing is provided; real diagnostic records must not be posted publicly.
 
 Cocoon Dev 额外记录本机的提交、过滤、名片时序与几何状态，可以包含相关真实作者名、标识、别名和资料链接。不记录凭据、Cookie、无关正文或输入、HTML dump、网络载荷。内存保留最近 5 分钟、最多 1,000 条事件；疑似异常或通过开发者控制台显式保存时，Dev 本地存储保留最多 3 份、每份最多 128 KiB 的片段。片段 7 天后失效，在诊断启动或请求时清理，不保证定时删除。隔离世界调试句柄支持查看当前历史、保留片段及清除诊断，具体方法见 README。正式构建不含这套额外记录器；无自动上传或两版本数据共享，不应公开真实诊断记录。
+
+Dev also automatically saves voter-batch start/progress/end summaries and bounded page-attempt metadata: counters, timing, HTTP status, fixed outcome categories and locally generated batch IDs. These batch fragments do not contain voter identities/lists, post titles/full URLs, request/response bodies or raw errors. They share the existing three-fragment, 128-KiB-per-fragment and seven-day limits; checkpoints are coalesced rather than written per user. Saving on page departure is best effort and an absent completion does not establish why work stopped. These records are separate from blacklist backups and are excluded from production builds.
+
+Dev 还会自动保存点赞者批次的开始/进度/结束摘要和有界分页尝试元数据，包括数量、耗时、HTTP 状态、固定结果分类及本地生成的批次 ID。这些批次片段不包含点赞者身份/名单、帖子标题/完整 URL、请求响应正文或错误原文；与原诊断共用最多 3 片段、每片段 128 KiB、保留 7 天的限制，检查点合并保存而非逐用户写入。页面离开时尽力保存，缺少结束事件不能证明具体中断原因。它们不进入黑名单备份，也不在正式版启用。
 
 ## 4. Retention, deletion, and backups / 保留、删除与备份
 

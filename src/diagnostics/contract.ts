@@ -1,3 +1,10 @@
+import {
+  parseVoterSummary,
+  parseVoterPageObservation,
+  type VoterSummary,
+} from "./voter-summary.ts";
+import type { VoterPageObservation } from "../content/voter-observation.ts";
+
 export const DIAGNOSTIC_CHANNEL = "cocoon-dev-diagnostics";
 export const DIAGNOSTIC_STORAGE_KEY = "cocoonDevDiagnostics";
 export const MAX_EVENTS = 1_000;
@@ -18,6 +25,8 @@ const KINDS = [
   "pointer",
   "hidden",
   "lifecycle",
+  "voter-page",
+  "voter-summary",
 ] as const;
 const REASONS = [
   "completed",
@@ -61,6 +70,7 @@ export type DiagnosticEvent = {
   memberHashId?: string;
   authorName?: string;
   profileUrl?: string;
+  voter?: VoterSummary | VoterPageObservation;
 } & Partial<Record<NumericField, number>>;
 
 export interface DiagnosticIncident {
@@ -68,7 +78,8 @@ export interface DiagnosticIncident {
   pageId: string;
   id: string;
   savedAt: number;
-  reason: "suspected-hover" | "manual";
+  reason: "suspected-hover" | "manual" | "voter-batch";
+  sequence?: number;
   truncated: number;
   events: DiagnosticEvent[];
 }
@@ -117,8 +128,21 @@ function validIdentityField(key: string, value: unknown): boolean {
   return false;
 }
 
+function parseVoterEvent(
+  input: Record<string, unknown>,
+  kind: "voter-page" | "voter-summary",
+): DiagnosticEvent | null {
+  if (!exactKeys(input, ["at", "kind", "voter"]) || !nonnegativeNumber(input.at)) return null;
+  const voter =
+    kind === "voter-page" ? parseVoterPageObservation(input.voter) : parseVoterSummary(input.voter);
+  return voter ? { at: input.at, kind, voter } : null;
+}
+
 export function parseDiagnosticEvent(input: unknown): DiagnosticEvent | null {
   if (!isRecord(input) || !Object.hasOwn(input, "at") || !Object.hasOwn(input, "kind")) return null;
+  if (input.kind === "voter-page" || input.kind === "voter-summary") {
+    return parseVoterEvent(input, input.kind);
+  }
   if (!Object.entries(input).every(([key, value]) => validEventField(key, value))) return null;
   return { ...input } as DiagnosticEvent;
 }
@@ -144,25 +168,54 @@ function validIncidentMetadata(
 ): input is Record<string, unknown> & Omit<DiagnosticIncident, "events"> {
   if (input.schemaVersion !== 1 || !incidentId(input.pageId) || !incidentId(input.id)) return false;
   if (!nonnegativeNumber(input.savedAt) || !count(input.truncated)) return false;
-  return input.reason === "suspected-hover" || input.reason === "manual";
+  return (
+    input.reason === "suspected-hover" ||
+    input.reason === "manual" ||
+    (input.reason === "voter-batch" && count(input.sequence))
+  );
+}
+
+function parseIncidentEvents(
+  input: unknown,
+  reason: DiagnosticIncident["reason"],
+): DiagnosticEvent[] | null {
+  if (!Array.isArray(input) || input.length > MAX_EVENTS) return null;
+  const events: DiagnosticEvent[] = [];
+  for (const value of input) {
+    const event = parseDiagnosticEvent(value);
+    if (!event) return null;
+    events.push(event);
+  }
+  if (
+    reason === "voter-batch" &&
+    (events.at(-1)?.kind !== "voter-summary" ||
+      !events.slice(0, -1).every((event) => event.kind === "voter-page"))
+  )
+    return null;
+  return events;
 }
 
 export function parseDiagnosticIncident(input: unknown): DiagnosticIncident | null {
   if (
     !isRecord(input) ||
-    !exactKeys(input, ["schemaVersion", "pageId", "id", "savedAt", "reason", "truncated", "events"])
+    !exactKeys(input, [
+      "schemaVersion",
+      "pageId",
+      "id",
+      "savedAt",
+      "reason",
+      "truncated",
+      "events",
+      ...(input.reason === "voter-batch" ? ["sequence"] : []),
+    ])
   )
     return null;
   if (!validIncidentMetadata(input)) return null;
-  if (!Array.isArray(input.events) || input.events.length > MAX_EVENTS) return null;
-  const events: DiagnosticEvent[] = [];
-  for (const value of input.events) {
-    const event = parseDiagnosticEvent(value);
-    if (!event) return null;
-    events.push(event);
-  }
+  const events = parseIncidentEvents(input.events, input.reason);
+  if (!events) return null;
   const incident: DiagnosticIncident = {
     schemaVersion: 1,
+    ...(input.reason === "voter-batch" ? { sequence: input.sequence } : {}),
     pageId: input.pageId,
     id: input.id,
     savedAt: input.savedAt,

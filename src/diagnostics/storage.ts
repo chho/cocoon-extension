@@ -44,14 +44,17 @@ function retained(input: unknown, now: number): Contract.DiagnosticIncident[] {
     .map((value: unknown) => parseDiagnosticIncident(value))
     .filter((value): value is Contract.DiagnosticIncident => value !== null && fresh(value, now))
     .sort((a, b) => b.savedAt - a.savedAt);
-  const unique: Contract.DiagnosticIncident[] = [];
+  const unique = new Map<string, Contract.DiagnosticIncident>();
   for (const incident of incidents) {
-    if (unique.some((other) => other.pageId === incident.pageId && other.id === incident.id))
-      continue;
-    unique.push(incident);
-    if (unique.length === MAX_INCIDENTS) break;
+    const key = `${incident.pageId}:${incident.id}`;
+    const previous = unique.get(key);
+    const newerBatch =
+      previous?.reason === "voter-batch" &&
+      incident.reason === "voter-batch" &&
+      incident.sequence! > previous.sequence!;
+    if (!previous || newerBatch) unique.set(key, incident);
   }
-  return unique;
+  return [...unique.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, MAX_INCIDENTS);
 }
 
 export function createDiagnosticStore(dependencies: StoreDependencies): DiagnosticStore {

@@ -16,7 +16,7 @@ export interface RecorderDependencies {
   readonly nextId: () => string;
 }
 
-function boundIncident(incident: DiagnosticIncident): DiagnosticIncident {
+export function boundIncident(incident: DiagnosticIncident): DiagnosticIncident {
   // Keep the newest evidence; binary search avoids repeatedly encoding 1,000-event logs.
   let low = 0;
   let high = incident.events.length;

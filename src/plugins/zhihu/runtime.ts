@@ -20,7 +20,11 @@ import { createBackgroundBlacklistGateway } from "../../content/background-black
 import { BLACKLIST_REVISION_STORAGE_KEY } from "../../content/background-blacklist-client.ts";
 import { createDrawerView } from "../../content/drawer-view.ts";
 import { createDrawerCommitHandler } from "./drawer-commit.ts";
-import { installDevDiagnostics, recordDrawerObservation } from "../../diagnostics/content.ts";
+import {
+  installDevDiagnostics,
+  recordDrawerObservation,
+  startVoterDiagnostics,
+} from "../../diagnostics/content.ts";
 import { createMeasuredCommitController } from "../../content/commit-performance.ts";
 import {
   createDrawerController,
@@ -59,12 +63,8 @@ import {
   createHoverCardController,
   type HoverAuthorActivation,
 } from "../../content/hover-card-controller.ts";
-import { createVoterBatchController } from "../../content/voter-batch-controller.ts";
-import {
-  blockZhihuUser,
-  fetchCurrentZhihuUser,
-  fetchZhihuVoters,
-} from "../../content/zhihu-remote-api.ts";
+import { blockZhihuUser } from "../../content/zhihu-remote-api.ts";
+import { createZhihuVoterBatch } from "./voter-runtime.ts";
 import { createZhihuBlacklistIdentityRuntime } from "./blacklist-identity-runtime.ts";
 import { getCardContentSource, getCardSourcePost } from "./card-content-source.ts";
 import { createHoverPostTracker } from "./hover-post-tracker.ts";
@@ -818,16 +818,9 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       );
     },
     async blockVoters(task, committed, voterSource) {
-      const voterBatchController = createVoterBatchController({
-        fetchCurrentUser: async (isStopped) => fetchCurrentZhihuUser(fetch, { isStopped }),
-        fetchVoters: async (source, isStopped, onProgress) =>
-          fetchZhihuVoters(fetch, source, {
-            isStopped,
-            onProgress,
-          }),
-        coordinator: remoteBlockCoordinator,
-        reportProgress() {},
-      });
+      const observer =
+        import.meta.env?.MODE === "diagnostic" ? startVoterDiagnostics(document, task) : undefined;
+      const voterBatchController = createZhihuVoterBatch(remoteBlockCoordinator, fetch, observer);
       return voterBatchController.run({
         source: voterSource,
         tagId: task.selection.tag.tagId,

@@ -114,9 +114,13 @@ Load `dist-dev/` instead of `dist/` for daily testing. Keep its install path unc
 
 Dev automatically keeps a five-minute/1,000-event in-memory history of drawer submissions, local filtering and related native hover activity. It can include real author names, IDs, member aliases and profile links, but not cookies, credentials, input text, unrelated content, HTML or network payloads. Suspected hover incidents save an immediate fragment and a best-effort five-second follow-up locally; each fragment is at most 128 KiB and only the newest three incidents are retained. Seven-day expiry is cleaned on diagnostic startup or requests, not by a guaranteed timer while Chrome is closed. Nothing is automatically uploaded.
 
+Voter batches also save an automatic start, coalesced five-second checkpoints when progress changes, and a final summary. Each batch updates one fragment and shares the same three-fragment/128-KiB/seven-day storage limits with hover diagnostics. Per-page traces retain at most five minutes/1,000 events; truncation is reported and cumulative batch counts survive trace truncation. Summaries distinguish API rows, duplicate/invalid entries, unique users, self/direct-author exclusions, existing/concurrent skips, additions, failures, undispatched users and unconfirmed in-flight work. Page vote totals currently remain **unknown** because no verified DOM counter is used; compare them manually, without assuming displayed votes equal enumerable users. Checkpoint saving is best effort: missing completion means unknown/possibly interrupted, not proof of a crash or of no database write. Page departure ends observation; BFCache restoration does not imply the old task resumed. No voter names, identifiers, post titles/URLs, response bodies or raw errors are added to these batch fragments.
+
 There is no diagnostic management UI. Through the existing Chrome CDP connection, select **Cocoon Dev's isolated-world execution context** on the supported page (not the website's MAIN world):
 
 - `globalThis.__cocoonDevDiagnostics.snapshot()`: current in-memory history and active/save status.
+- `globalThis.__cocoonDevDiagnostics.batches()`: up to three current-page batch fragments, Chinese count/phase analysis, truncation and save-acknowledgement status.
+- `globalThis.__cocoonDevDiagnostics.analyzeBatch(fragment)`: validate and explain a saved `reason: "voter-batch"` fragment; `null` means it is not a valid batch fragment.
 - `await globalThis.__cocoonDevDiagnostics.save()`: explicitly retain a bounded local fragment; `false` means no confirmation, not guaranteed rollback.
 - `await globalThis.__cocoonDevDiagnostics.clear()`: clear saved diagnostic fragments and, on success, this page's memory history.
 

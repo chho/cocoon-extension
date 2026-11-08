@@ -154,10 +154,6 @@
       "sha256": "c069ac29ec4859db2f3f1ca5210e1b9d68bfd64b0abdbd5d95bcc1dda622d89d"
     },
     {
-      "path": "src/content/zhihu-remote-api.ts",
-      "sha256": "cb4a0a2f101e541e34fb1b9871526438bb59463e0a916aa5a3e9e0802e5e77a9"
-    },
-    {
       "path": "src/core/badge-message-contract.ts",
       "sha256": "5ddb8a77ece7194b698a48367ee29a1480b87b96db0a524a0de3abcb5a4f27e8"
     },

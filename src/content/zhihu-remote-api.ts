@@ -1,15 +1,31 @@
 import type { ZhihuContentSource } from "./zhihu-content-source.ts";
+import {
+  MAX_RETRIES,
+  defaultDelay,
+  retryDelay,
+  canRetryNetworkError,
+  isAuthenticationStatus,
+  fetchWithRetry,
+  getJsonRequestInit,
+  readJson,
+  responseReason,
+  type PageObserver,
+} from "./zhihu-request.ts";
+import type { RemoteFetch, RetryOptions, RetriedFetchResult } from "./zhihu-request.ts";
+import { observeVoters as safeObserve } from "./voter-observation.ts";
+import type { VoterObserver, VoterPageReason } from "./voter-observation.ts";
 
-const ZHIHU_ORIGIN = "https://www.zhihu.com";
-export const VOTER_PAGE_SIZE = 50;
+import {
+  ZHIHU_ORIGIN,
+  VOTER_PAGE_SIZE,
+  validateAndNormalizeNextUrl,
+} from "./zhihu-pagination-url.ts";
+export { VOTER_PAGE_SIZE, validateAndNormalizeNextUrl } from "./zhihu-pagination-url.ts";
 export const MAX_PAGES_PER_VOTER_ORDER = 100;
-export const MAX_UNIQUE_VOTERS =
-  VOTER_PAGE_SIZE * MAX_PAGES_PER_VOTER_ORDER * 2;
-const MAX_RETRIES = 3;
+export const MAX_UNIQUE_VOTERS = VOTER_PAGE_SIZE * MAX_PAGES_PER_VOTER_ORDER * 2;
 const MAX_RELATION_PAGES = 100;
 
-export type RemoteFetch = typeof fetch;
-export type Delay = (milliseconds: number) => Promise<void>;
+export type { RemoteFetch, Delay } from "./zhihu-request.ts";
 
 export interface ZhihuVoter {
   readonly userId: string;
@@ -44,11 +60,7 @@ export type CurrentUserResult =
   | { readonly status: "success"; readonly userId: string }
   | {
       readonly status: "failed";
-      readonly reason:
-        | FatalRemoteReason
-        | "network"
-        | "http"
-        | "invalid-response";
+      readonly reason: FatalRemoteReason | "network" | "http" | "invalid-response";
     };
 
 export type RemoteBlockResult =
@@ -56,23 +68,14 @@ export type RemoteBlockResult =
   | { readonly status: "stopped" }
   | {
       readonly status: "failed";
-      readonly reason:
-        | FatalRemoteReason
-        | "csrf"
-        | "network"
-        | "http";
+      readonly reason: FatalRemoteReason | "csrf" | "network" | "http";
     };
 
-interface RetryOptions {
-  readonly isStopped?: () => boolean;
-  readonly delay?: Delay;
+interface VoterFetchOptions extends RetryOptions {
+  readonly onProgress?: (progress: VoterFetchProgress) => void;
+  readonly observer?: VoterObserver;
+  readonly now?: () => number;
 }
-
-type RetriedFetchResult =
-  | { readonly status: "response"; readonly response: Response }
-  | { readonly status: "stopped" }
-  | { readonly status: "network-failure" }
-  | { readonly status: "rate-limit" };
 
 interface ParsedPage<T> {
   readonly data: readonly T[];
@@ -82,22 +85,6 @@ interface ParsedPage<T> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function isAuthenticationStatus(status: number): boolean {
-  return status === 401 || status === 403;
-}
-
-function defaultDelay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-function retryDelay(attempt: number): number {
-  return Math.min(250 * 2 ** attempt, 2_000);
-}
-
-function isTransientNetworkError(error: unknown): boolean {
-  return error instanceof TypeError;
 }
 
 function normalizeUserId(value: unknown): string | null {
@@ -117,35 +104,6 @@ function normalizeUserId(value: unknown): string | null {
   return userId;
 }
 
-async function fetchWithRetry(
-  fetchImpl: RemoteFetch,
-  input: string,
-  init: RequestInit,
-  options: RetryOptions = {},
-): Promise<RetriedFetchResult> {
-  const wait = options.delay ?? defaultDelay;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
-    if (options.isStopped?.()) {
-      return { status: "stopped" };
-    }
-    try {
-      const response = await fetchImpl(input, init);
-      if (response.status !== 429) {
-        return { status: "response", response };
-      }
-      if (attempt === MAX_RETRIES) {
-        return { status: "rate-limit" };
-      }
-    } catch (error) {
-      if (!isTransientNetworkError(error) || attempt === MAX_RETRIES) {
-        return { status: "network-failure" };
-      }
-    }
-    await wait(retryDelay(attempt));
-  }
-  return { status: "network-failure" };
-}
-
 function parsePaging(value: unknown): { isEnd: boolean; next: string | null } | null {
   if (!isRecord(value) || typeof value.is_end !== "boolean") {
     return null;
@@ -153,24 +111,14 @@ function parsePaging(value: unknown): { isEnd: boolean; next: string | null } | 
   if (value.next !== null && value.next !== undefined && typeof value.next !== "string") {
     return null;
   }
-  const next = typeof value.next === "string" && value.next.length > 0
-    ? value.next
-    : null;
+  const next = typeof value.next === "string" && value.next.length > 0 ? value.next : null;
   if (!value.is_end && next === null) {
     return null;
   }
   return { isEnd: value.is_end, next };
 }
 
-function parseVoterPage(value: unknown): ParsedPage<unknown> | null {
-  if (!isRecord(value) || !Array.isArray(value.data) || value.data.length > VOTER_PAGE_SIZE) {
-    return null;
-  }
-  const paging = parsePaging(value.paging);
-  return paging ? { data: value.data, ...paging } : null;
-}
-
-function parseBlockedUsersPage(value: unknown): ParsedPage<unknown> | null {
+function parseMemberPage(value: unknown): ParsedPage<unknown> | null {
   if (!isRecord(value) || !Array.isArray(value.data) || value.data.length > VOTER_PAGE_SIZE) {
     return null;
   }
@@ -196,57 +144,12 @@ function voterPath(source: ZhihuContentSource): string {
     : `/api/v4/articles/${source.contentId}/likers`;
 }
 
-function createVoterPageUrl(
-  source: ZhihuContentSource,
-  order: "default" | "newest",
-): string {
+function createVoterPageUrl(source: ZhihuContentSource, order: "default" | "newest"): string {
   const url = new URL(voterPath(source), ZHIHU_ORIGIN);
   url.searchParams.set("order", order);
   url.searchParams.set("limit", String(VOTER_PAGE_SIZE));
   url.searchParams.set("offset", "0");
   return url.toString();
-}
-
-export function validateAndNormalizeNextUrl(
-  next: string,
-  expectedPath: string,
-  expectedOrder: "default" | "newest" | null,
-): string | null {
-  try {
-    const url = new URL(next, `${ZHIHU_ORIGIN}/`);
-    if (url.origin !== ZHIHU_ORIGIN || url.pathname !== expectedPath) {
-      return null;
-    }
-    if (
-      expectedOrder !== null &&
-      url.searchParams.get("order") !== expectedOrder
-    ) {
-      return null;
-    }
-    url.searchParams.set("limit", String(VOTER_PAGE_SIZE));
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-function getJsonRequestInit(): RequestInit {
-  return {
-    credentials: "same-origin",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "X-Requested-With": "XMLHttpRequest",
-    },
-  };
-}
-
-async function readJson(response: Response): Promise<unknown | null> {
-  try {
-    return await response.json() as unknown;
-  } catch {
-    return null;
-  }
 }
 
 export function readXsrfToken(cookie: string): string | null {
@@ -297,9 +200,7 @@ export async function fetchCurrentZhihuUser(
   }
   const value = await readJson(result.response);
   const userId = isRecord(value) ? normalizeUserId(value.url_token) : null;
-  return userId
-    ? { status: "success", userId }
-    : { status: "failed", reason: "invalid-response" };
+  return userId ? { status: "success", userId } : { status: "failed", reason: "invalid-response" };
 }
 
 export async function fetchZhihuBlockedUserIds(
@@ -323,12 +224,7 @@ export async function fetchZhihuBlockedUserIds(
       break;
     }
     visited.add(nextUrl);
-    const result = await fetchWithRetry(
-      fetchImpl,
-      nextUrl,
-      getJsonRequestInit(),
-      options,
-    );
+    const result = await fetchWithRetry(fetchImpl, nextUrl, getJsonRequestInit(), options);
     if (result.status === "rate-limit") {
       return { userIds, complete: false, fatalReason: "rate-limit" };
     }
@@ -341,7 +237,7 @@ export async function fetchZhihuBlockedUserIds(
     if (!result.response.ok) {
       break;
     }
-    const parsed = parseBlockedUsersPage(await readJson(result.response));
+    const parsed = parseMemberPage(await readJson(result.response));
     if (!parsed) {
       break;
     }
@@ -357,134 +253,223 @@ export async function fetchZhihuBlockedUserIds(
       complete = true;
       nextUrl = null;
     } else {
-      nextUrl = parsed.next
-        ? validateAndNormalizeNextUrl(parsed.next, path, null)
-        : null;
+      nextUrl = parsed.next ? validateAndNormalizeNextUrl(parsed.next, path, null) : null;
     }
   }
 
   return { userIds, complete, fatalReason: null };
 }
 
+interface VoterFetchState {
+  readonly users: Map<string, ZhihuVoter>;
+  fetched: number;
+  invalid: number;
+  duplicates: number;
+  requestFailures: number;
+  fatalReason: FatalRemoteReason | null;
+  safetyLimitReached: boolean;
+}
+
+function voterRequestFailure(
+  result: RetriedFetchResult,
+  state: VoterFetchState,
+): VoterPageReason | null {
+  if (result.status === "rate-limit") {
+    state.fatalReason = "rate-limit";
+    return "rate-limit";
+  }
+  if (state.safetyLimitReached) return "user-limit";
+  if (result.status === "stopped") return state.fatalReason ?? "stopped";
+  if (result.status === "network-failure") {
+    state.requestFailures += 1;
+    return "network";
+  }
+  const reason = responseReason(result.response);
+  if (reason === "authentication") state.fatalReason = reason;
+  else if (reason) state.requestFailures += 1;
+  return reason;
+}
+
+function collectVoterRows(data: readonly unknown[], state: VoterFetchState) {
+  let invalid = 0;
+  let duplicates = 0;
+  let added = 0;
+  for (const item of data) {
+    state.fetched += 1;
+    const voter = parseVoter(item);
+    if (!voter) {
+      invalid += 1;
+      continue;
+    }
+    if (state.users.has(voter.userId)) {
+      duplicates += 1;
+      continue;
+    }
+    state.users.set(voter.userId, voter);
+    added += 1;
+    if (state.users.size >= MAX_UNIQUE_VOTERS) {
+      state.safetyLimitReached = true;
+      break;
+    }
+  }
+  state.invalid += invalid;
+  state.duplicates += duplicates;
+  return { rows: data.length, invalid, duplicates, added, unique: state.users.size };
+}
+
+function voterNextPage(
+  parsed: ParsedPage<unknown>,
+  path: string,
+  order: "default" | "newest",
+): { next: string | null; reason: VoterPageReason } {
+  if (parsed.isEnd) return { next: null, reason: "end" };
+  const next = parsed.next ? validateAndNormalizeNextUrl(parsed.next, path, order) : null;
+  return { next, reason: next ? "next" : "invalid-next" };
+}
+
+interface VoterOrderContext {
+  readonly fetchImpl: RemoteFetch;
+  readonly source: ZhihuContentSource;
+  readonly options: VoterFetchOptions;
+}
+
+function voterOrderStop(options: RetryOptions, state: VoterFetchState): VoterPageReason | null {
+  if (options.isStopped?.()) return "stopped";
+  if (state.fatalReason) return state.fatalReason;
+  return state.safetyLimitReached ? "user-limit" : null;
+}
+
+function acceptVoterPage(
+  parsed: ParsedPage<unknown>,
+  state: VoterFetchState,
+  { source, options }: VoterOrderContext,
+  observation: PageObserver,
+): string | null {
+  const counts = collectVoterRows(parsed.data, state);
+  options.onProgress?.({ fetched: state.fetched, unique: state.users.size, complete: false });
+  const next = voterNextPage(parsed, voterPath(source), observation.order);
+  if (next.reason === "invalid-next") state.requestFailures += 1;
+  let reason = next.reason;
+  if (reason !== "invalid-next" && state.safetyLimitReached) reason = "user-limit";
+  else if (reason === "next" && observation.page === MAX_PAGES_PER_VOTER_ORDER)
+    reason = "page-limit";
+  safeObserve(options.observer, {
+    kind: "page",
+    order: observation.order,
+    page: observation.page,
+    stage: "end",
+    ...counts,
+    reason,
+    isEnd: parsed.isEnd,
+    hasNext: next.next !== null,
+  });
+  return next.next;
+}
+
+function observeRejectedVoterPage(
+  observation: PageObserver,
+  unique: number,
+  reason: VoterPageReason,
+  rows?: number,
+): void {
+  safeObserve(observation.observer, {
+    kind: "page",
+    order: observation.order,
+    page: observation.page,
+    stage: "end",
+    reason,
+    ...(rows === undefined ? {} : { rows }),
+    invalid: 0,
+    duplicates: 0,
+    added: 0,
+    unique,
+  });
+}
+
+function rawPageRows(input: unknown): number | undefined {
+  return isRecord(input) && Array.isArray(input.data) ? input.data.length : undefined;
+}
+
+async function fetchVoterOrder(
+  order: "default" | "newest",
+  state: VoterFetchState,
+  context: VoterOrderContext,
+): Promise<boolean> {
+  const { fetchImpl, source, options } = context;
+  let nextUrl: string | null = createVoterPageUrl(source, order);
+  const visited = new Set<string>();
+  for (let page = 1; page <= MAX_PAGES_PER_VOTER_ORDER && nextUrl; page += 1) {
+    const observation = { observer: options.observer, now: options.now, order, page };
+    safeObserve(options.observer, { kind: "page", order, page, stage: "start" });
+    const stop = voterOrderStop(options, state);
+    if (stop) {
+      observeRejectedVoterPage(observation, state.users.size, stop, 0);
+      return false;
+    }
+    if (visited.has(nextUrl)) {
+      state.requestFailures += 1;
+      observeRejectedVoterPage(observation, state.users.size, "repeated-next", 0);
+      return false;
+    }
+    visited.add(nextUrl);
+    const result = await fetchWithRetry(fetchImpl, nextUrl, getJsonRequestInit(), {
+      delay: options.delay,
+      isStopped: () => options.isStopped?.() === true || state.fatalReason !== null,
+      observation,
+    });
+    const failure = voterRequestFailure(result, state);
+    if (failure) {
+      observeRejectedVoterPage(observation, state.users.size, failure);
+      return false;
+    }
+    if (result.status !== "response") return false;
+    const input = await readJson(result.response);
+    const parsed = parseMemberPage(input);
+    if (!parsed) {
+      state.requestFailures += 1;
+      const rows = rawPageRows(input);
+      observeRejectedVoterPage(observation, state.users.size, "invalid-response", rows);
+      return false;
+    }
+    nextUrl = acceptVoterPage(parsed, state, context, observation);
+    if (parsed.isEnd) return true;
+  }
+  return false;
+}
+
 export async function fetchZhihuVoters(
   fetchImpl: RemoteFetch,
   source: ZhihuContentSource,
-  options: RetryOptions & {
-    readonly onProgress?: (progress: VoterFetchProgress) => void;
-  } = {},
+  options: VoterFetchOptions = {},
 ): Promise<VoterFetchResult> {
-  const users = new Map<string, ZhihuVoter>();
-  const path = voterPath(source);
-  let fetched = 0;
-  let invalid = 0;
-  let duplicates = 0;
-  let requestFailures = 0;
-  let fatalReason: FatalRemoteReason | null = null;
-  let safetyLimitReached = false;
-
-  async function fetchOrder(order: "default" | "newest"): Promise<boolean> {
-    let nextUrl: string | null = createVoterPageUrl(source, order);
-    const visited = new Set<string>();
-    for (
-      let page = 0;
-      page < MAX_PAGES_PER_VOTER_ORDER && nextUrl;
-      page += 1
-    ) {
-      if (options.isStopped?.() || fatalReason !== null || safetyLimitReached) {
-        return false;
-      }
-      if (visited.has(nextUrl)) {
-        requestFailures += 1;
-        return false;
-      }
-      visited.add(nextUrl);
-      const result = await fetchWithRetry(
-        fetchImpl,
-        nextUrl,
-        getJsonRequestInit(),
-        {
-          delay: options.delay,
-          isStopped: () =>
-            options.isStopped?.() === true || fatalReason !== null,
-        },
-      );
-      if (result.status === "rate-limit") {
-        fatalReason = "rate-limit";
-        return false;
-      }
-      if (safetyLimitReached) {
-        return false;
-      }
-      if (result.status !== "response") {
-        if (result.status !== "stopped") {
-          requestFailures += 1;
-        }
-        return false;
-      }
-      if (isAuthenticationStatus(result.response.status)) {
-        fatalReason = "authentication";
-        return false;
-      }
-      if (!result.response.ok) {
-        requestFailures += 1;
-        return false;
-      }
-      const parsed = parseVoterPage(await readJson(result.response));
-      if (!parsed) {
-        requestFailures += 1;
-        return false;
-      }
-      for (const item of parsed.data) {
-        fetched += 1;
-        const voter = parseVoter(item);
-        if (!voter) {
-          invalid += 1;
-          continue;
-        }
-        if (users.has(voter.userId)) {
-          duplicates += 1;
-          continue;
-        }
-        users.set(voter.userId, voter);
-        if (users.size >= MAX_UNIQUE_VOTERS) {
-          safetyLimitReached = true;
-          break;
-        }
-      }
-      options.onProgress?.({ fetched, unique: users.size, complete: false });
-      if (parsed.isEnd) {
-        return true;
-      }
-      const validatedNext = parsed.next
-        ? validateAndNormalizeNextUrl(parsed.next, path, order)
-        : null;
-      if (!validatedNext) {
-        requestFailures += 1;
-        return false;
-      }
-      nextUrl = validatedNext;
-    }
-    return false;
-  }
-
+  const state: VoterFetchState = {
+    users: new Map(),
+    fetched: 0,
+    invalid: 0,
+    duplicates: 0,
+    requestFailures: 0,
+    fatalReason: null,
+    safetyLimitReached: false,
+  };
+  const context = { fetchImpl, source, options };
   const completedOrders = await Promise.all([
-    fetchOrder("default"),
-    fetchOrder("newest"),
+    fetchVoterOrder("default", state, context),
+    fetchVoterOrder("newest", state, context),
   ]);
   const complete =
     completedOrders.every(Boolean) &&
-    fatalReason === null &&
-    !safetyLimitReached &&
+    state.fatalReason === null &&
+    !state.safetyLimitReached &&
     options.isStopped?.() !== true;
-  options.onProgress?.({ fetched, unique: users.size, complete });
+  options.onProgress?.({ fetched: state.fetched, unique: state.users.size, complete });
   return {
-    users: [...users.values()],
-    fetched,
-    invalid,
-    duplicates,
+    users: [...state.users.values()],
+    fetched: state.fetched,
+    invalid: state.invalid,
+    duplicates: state.duplicates,
     complete,
-    fatalReason,
-    requestFailures,
+    fatalReason: state.fatalReason,
+    requestFailures: state.requestFailures,
   };
 }
 
@@ -533,10 +518,7 @@ export async function blockZhihuUser(
       if (fallback.ok) {
         return { status: "success", endpoint: "fallback" };
       }
-      if (
-        isAuthenticationStatus(primary.status) ||
-        isAuthenticationStatus(fallback.status)
-      ) {
+      if (isAuthenticationStatus(primary.status) || isAuthenticationStatus(fallback.status)) {
         return { status: "failed", reason: "authentication" };
       }
       if (primary.status !== 429 && fallback.status !== 429) {
@@ -546,7 +528,7 @@ export async function blockZhihuUser(
         return { status: "failed", reason: "rate-limit" };
       }
     } catch (error) {
-      if (!isTransientNetworkError(error) || attempt === MAX_RETRIES) {
+      if (!canRetryNetworkError(error, attempt)) {
         return { status: "failed", reason: "network" };
       }
     }

@@ -1,13 +1,13 @@
 # Chrome Web Store preparation — Cocoon
 
-Last updated: 2026-10-30. **Draft; this task does not submit or publish an extension.**
+Last updated: 2026-11-01. **Draft; this task does not submit or publish an extension.**
 
 ## Distribution boundary
 
 - Store candidate: production `npm run build` output in `dist/` only.
 - Local testing: `npm run build:dev` output in `dist-dev/`, named **Cocoon Dev**, same icon.
 - Production build guards reject included diagnostic modules and protocol/storage markers. Never upload `dist-dev/`, local diagnostics, browser data, `.git/`, dependencies, source docs or credentials as the store package.
-- Use the same numeric version, 0.7.1. Dev has a separate version label and installation/data; it is not a second store listing in this task.
+- Use the same numeric version, 0.7.2. Dev has a separate version label and installation/data; it is not a second store listing in this task.
 
 ## Listing draft
 
@@ -68,6 +68,7 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 
 | Version | Status | Change |
 | --- | --- | --- |
+| 0.7.2 | Reviewed, not submitted | Complete Dev voter-batch diagnostics with bounded page evidence and count reconciliation; production excludes the recorder. |
 | 0.7.1 | Reviewed, not submitted | Complete 0.7 post provenance for reliably associated author hover cards; voter operations remain disabled for hover entries. |
 | 0.7.0 | Reviewed, not submitted | Shared first-block post references; management links, schema v6 and versioned backup migration. |
 | 0.6.2 | Draft, not submitted | Restore continuous tag rows with full-width wrapping and protected default drag boundaries. |

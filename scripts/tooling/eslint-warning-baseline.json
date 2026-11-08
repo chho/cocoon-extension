@@ -341,24 +341,8 @@
       "path": "src/content/zhihu-remote-api.ts",
       "ruleId": "complexity",
       "messageId": "complex",
-      "message": "Async function 'blockZhihuUser' has a complexity of 20. Maximum allowed is 10.",
+      "message": "Async function 'blockZhihuUser' has a complexity of 19. Maximum allowed is 10.",
       "sourceLine": "export async function blockZhihuUser(",
-      "count": 1
-    },
-    {
-      "path": "src/content/zhihu-remote-api.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async function 'fetchOrder' has a complexity of 23. Maximum allowed is 10.",
-      "sourceLine": "async function fetchOrder(order: \"default\" | \"newest\"): Promise<boolean> {",
-      "count": 1
-    },
-    {
-      "path": "src/content/zhihu-remote-api.ts",
-      "ruleId": "complexity",
-      "messageId": "complex",
-      "message": "Async function 'fetchWithRetry' has a complexity of 11. Maximum allowed is 10.",
-      "sourceLine": "async function fetchWithRetry(",
       "count": 1
     },
     {
@@ -381,7 +365,7 @@
       "path": "src/content/zhihu-remote-api.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async function 'blockZhihuUser' has too many lines (63). Maximum allowed is 50.",
+      "message": "Async function 'blockZhihuUser' has too many lines (60). Maximum allowed is 50.",
       "sourceLine": "export async function blockZhihuUser(",
       "count": 1
     },
@@ -389,32 +373,8 @@
       "path": "src/content/zhihu-remote-api.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Async function 'fetchOrder' has too many lines (84). Maximum allowed is 50.",
-      "sourceLine": "async function fetchOrder(order: \"default\" | \"newest\"): Promise<boolean> {",
-      "count": 1
-    },
-    {
-      "path": "src/content/zhihu-remote-api.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'fetchZhihuBlockedUserIds' has too many lines (61). Maximum allowed is 50.",
+      "message": "Async function 'fetchZhihuBlockedUserIds' has too many lines (54). Maximum allowed is 50.",
       "sourceLine": "export async function fetchZhihuBlockedUserIds(",
-      "count": 1
-    },
-    {
-      "path": "src/content/zhihu-remote-api.ts",
-      "ruleId": "max-lines-per-function",
-      "messageId": "exceed",
-      "message": "Async function 'fetchZhihuVoters' has too many lines (119). Maximum allowed is 50.",
-      "sourceLine": "export async function fetchZhihuVoters(",
-      "count": 1
-    },
-    {
-      "path": "src/content/zhihu-remote-api.ts",
-      "ruleId": "max-lines",
-      "messageId": "exceed",
-      "message": "File has too many lines (516). Maximum allowed is 500.",
-      "sourceLine": "}",
       "count": 1
     },
     {
@@ -517,7 +477,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (663). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (656). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -525,7 +485,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (826). Maximum allowed is 500.",
+      "message": "File has too many lines (819). Maximum allowed is 500.",
       "sourceLine": "onActivate(activation) {",
       "count": 1
     },

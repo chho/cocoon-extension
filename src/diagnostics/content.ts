@@ -4,6 +4,8 @@ import type { VisibilityObservation } from "../plugins/zhihu/author-visibility.t
 import { DIAGNOSTIC_CHANNEL, type DiagnosticRequest, type DiagnosticIncident } from "./contract.ts";
 import { createDiagnosticRecorder, type DiagnosticInput } from "./recorder.ts";
 import { geometry, observeDiagnosticDom } from "./dom-observer.ts";
+import { createVoterDiagnostics, analyzeSavedVoterBatch } from "./voter-session.ts";
+import type { VoterObserver } from "../content/voter-observation.ts";
 
 interface SessionDependencies {
   now(): number;
@@ -17,10 +19,12 @@ const HANDLE = "__cocoonDevDiagnostics";
 
 class DiagnosticSession {
   private readonly recorder;
+  private readonly voters;
   private readonly document: Document;
   private readonly dependencies: SessionDependencies;
   private readonly nodes = new WeakMap<Element, number>();
   private readonly operations = new WeakMap<AbortSignal, { id: number; startedAt: number }>();
+  private readonly taskOperations = new WeakMap<object, number>();
   private nextNode = 0;
   private nextOperation = 0;
   private active = false;
@@ -33,13 +37,21 @@ class DiagnosticSession {
   readonly handle = {
     snapshot: () => ({ active: this.active, lastSave: this.lastSave, ...this.recorder.snapshot() }),
     save: () => this.saveManual(),
+    batches: () => this.voters.snapshot(),
+    analyzeBatch: analyzeSavedVoterBatch,
     clear: () => this.clear(),
   };
 
   constructor(document: Document, dependencies: SessionDependencies) {
     this.document = document;
     this.dependencies = dependencies;
-    this.recorder = createDiagnosticRecorder({ ...dependencies, pageId: dependencies.nextId() });
+    const pageId = dependencies.nextId();
+    this.recorder = createDiagnosticRecorder({ ...dependencies, pageId });
+    this.voters = createVoterDiagnostics({
+      ...dependencies,
+      pageId,
+      request: (request) => this.request(request),
+    });
   }
 
   start(): void {
@@ -52,6 +64,7 @@ class DiagnosticSession {
     if (this.active) return;
     this.active = true;
     this.lifecycle = new AbortController();
+    this.voters.resume();
     this.record({ kind: "lifecycle", reason: "pageshow" });
     this.observer = observeDiagnosticDom(this.document, {
       record: (event) => this.record(event),
@@ -68,6 +81,7 @@ class DiagnosticSession {
 
   private readonly pagehide = (event: PageTransitionEvent): void => {
     this.record({ kind: "lifecycle", reason: "pagehide" });
+    this.voters.pause();
     if (this.pendingIncident) this.finishCapture();
     this.active = false;
     this.observer?.stop();
@@ -98,6 +112,7 @@ class DiagnosticSession {
   submission(event: SubmissionObservation<HTMLElement, HTMLButtonElement>): void {
     if (event.phase === "start") {
       const operation = ++this.nextOperation;
+      this.taskOperations.set(event.task, operation);
       this.operations.set(event.signal, { id: operation, startedAt: this.dependencies.now() });
       const target = event.task.target;
       this.record({
@@ -120,6 +135,10 @@ class DiagnosticSession {
       ...(drawer ? geometry(drawer) : {}),
     });
     this.observer?.refresh();
+  }
+
+  startVoters(task: object): VoterObserver {
+    return this.voters.start(this.taskOperations.get(task) ?? null);
   }
 
   operation(signal: AbortSignal, event: DiagnosticInput): void {
@@ -158,6 +177,7 @@ class DiagnosticSession {
 
   private async clear(): Promise<boolean> {
     if (!this.active) return false;
+    this.voters.clear();
     this.cancelCapture?.();
     this.cancelCapture = null;
     this.pendingIncident = null;
@@ -224,6 +244,14 @@ export function installDevDiagnostics(
     return session.handle;
   } catch {
     return null;
+  }
+}
+
+export function startVoterDiagnostics(document: Document, task: object): VoterObserver | undefined {
+  try {
+    return sessions.get(document)?.startVoters(task);
+  } catch {
+    return undefined;
   }
 }
 
