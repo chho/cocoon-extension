@@ -456,6 +456,11 @@ export async function fetchZhihuVoters(
     fetchVoterOrder("default", state, context),
     fetchVoterOrder("newest", state, context),
   ]);
+  // Live read-only checks (2026-11-01): an answer with >5,000 reported votes ended at
+  // 2,000 rows for both sorts and with order omitted; rows need not be unique users.
+  // This is observed API behavior, not a guaranteed cap for all answers or articles.
+  // Do not impose a 2,000-user client limit: follow validated pagination as usual.
+  // "complete" means API pagination ended, not that every reported voter was returned.
   const complete =
     completedOrders.every(Boolean) &&
     state.fatalReason === null &&
