@@ -93,6 +93,7 @@ function createHarness() {
       async preflightDirect() {
         throw new Error("Unexpected remote preflight");
       },
+      preflightUpvoter: () => Promise.reject(new Error("Unexpected voter preflight")),
     },
     applyTags(tags) {
       appliedTags.push(tags);

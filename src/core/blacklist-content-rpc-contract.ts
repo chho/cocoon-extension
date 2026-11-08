@@ -33,6 +33,7 @@ export type BlacklistContentOperation =
   | "backfill-member-hash"
   | "commit-upvoter"
   | "preflight-direct"
+  | "preflight-upvoter"
   | "delete-tag";
 
 export interface BlacklistContentTagPageInput {
@@ -59,6 +60,10 @@ export type BlacklistContentRequest =
   | ContentRequest<"commit-upvoter", { readonly input: UpvoterCommitInput }>
   | ContentRequest<
       "preflight-direct",
+      { readonly identity: AuthorIdentity; readonly expectedBlacklistedAt: string }
+    >
+  | ContentRequest<
+      "preflight-upvoter",
       { readonly identity: AuthorIdentity; readonly expectedBlacklistedAt: string }
     >
   | ContentRequest<"delete-tag", { readonly tagId: string }>;
@@ -298,7 +303,10 @@ function parseUpvoterCommit(input: Record<string, unknown>): BlacklistContentReq
     : null;
 }
 
-function parseDirectPreflight(input: Record<string, unknown>): BlacklistContentRequest | null {
+function parseAuthorPreflight(
+  input: Record<string, unknown>,
+  operation: "preflight-direct" | "preflight-upvoter",
+): BlacklistContentRequest | null {
   if (
     !hasExactKeys(input, ["expectedBlacklistedAt", "identity"]) ||
     !isIdentity(input.identity) ||
@@ -306,7 +314,7 @@ function parseDirectPreflight(input: Record<string, unknown>): BlacklistContentR
   ) {
     return null;
   }
-  return createBlacklistContentRequest("preflight-direct", {
+  return createBlacklistContentRequest(operation, {
     identity: input.identity,
     expectedBlacklistedAt: input.expectedBlacklistedAt,
   });
@@ -334,7 +342,8 @@ function parseContentOperation(
     case "commit-upvoter":
       return parseUpvoterCommit(input);
     case "preflight-direct":
-      return parseDirectPreflight(input);
+    case "preflight-upvoter":
+      return parseAuthorPreflight(input, operation);
     case "delete-tag":
       return hasExactKeys(input, ["tagId"]) &&
         isTrimmedWithin(input.tagId, MAX_STABLE_ID_CODE_POINTS)

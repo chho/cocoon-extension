@@ -477,7 +477,7 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines-per-function",
       "messageId": "exceed",
-      "message": "Function 'mountZhihuPlugin' has too many lines (656). Maximum allowed is 50.",
+      "message": "Function 'mountZhihuPlugin' has too many lines (650). Maximum allowed is 50.",
       "sourceLine": "export function mountZhihuPlugin(context: SitePluginMountContext): void {",
       "count": 1
     },
@@ -485,8 +485,8 @@
       "path": "src/plugins/zhihu/runtime.ts",
       "ruleId": "max-lines",
       "messageId": "exceed",
-      "message": "File has too many lines (816). Maximum allowed is 500.",
-      "sourceLine": "requestAnimationFrame(callback);",
+      "message": "File has too many lines (806). Maximum allowed is 500.",
+      "sourceLine": "});",
       "count": 1
     },
     {

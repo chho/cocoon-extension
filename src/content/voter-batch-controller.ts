@@ -1,4 +1,8 @@
-import type { RemoteBlockCoordinator, UserBlockRequest } from "./remote-block-coordinator.ts";
+import type {
+  RemoteBlockCoordinator,
+  UserBlockRequest,
+  VoterRemoteBatch,
+} from "./remote-block-coordinator.ts";
 import { observeVoters, type VoterObserver } from "./voter-observation.ts";
 import type {
   CurrentUserResult,
@@ -20,6 +24,7 @@ export interface VoterBatchProgress {
   readonly skipped: number;
   readonly unprocessed: number;
   readonly dataComplete: boolean;
+  readonly remoteStopReason?: NonNullable<VoterRemoteBatch["stopReason"]>;
 }
 
 export interface VoterBatchRequest {
@@ -27,6 +32,7 @@ export interface VoterBatchRequest {
   readonly tagId: string;
   readonly directAuthorUserId: string;
   readonly sourcePostId: string | null;
+  readonly blockOnPlatform?: boolean;
   readonly isStopped: () => boolean;
 }
 
@@ -67,6 +73,7 @@ interface PersistenceProgress {
 function createUpvoterRequest(
   request: VoterBatchRequest,
   voter: VoterFetchResult["users"][number],
+  remoteBatch: VoterRemoteBatch,
 ): UserBlockRequest {
   return {
     source: "upvoter",
@@ -74,6 +81,7 @@ function createUpvoterRequest(
     authorName: voter.authorName,
     tagId: request.tagId,
     sourcePostId: request.sourcePostId,
+    ...(request.blockOnPlatform === true ? { blockOnPlatform: true, remoteBatch } : {}),
   };
 }
 
@@ -84,6 +92,7 @@ async function persistVoterQueue(
   progress: PersistenceProgress,
 ): Promise<void> {
   const counts = { success: 0, failed: 0, skipped: progress.skipped };
+  const remoteBatch: VoterRemoteBatch = { stopReason: null };
   const { report, observer } = progress;
   let globalFailure = false;
   const isStopped = () => globalFailure || request.isStopped();
@@ -99,7 +108,10 @@ async function persistVoterQueue(
       const voter = queue[index];
       report({ unprocessed: queue.length - nextIndex });
       observeVoters(observer, { kind: "dispatch" });
-      const result = await coordinator.block(createUpvoterRequest(request, voter), isStopped);
+      const result = await coordinator.block(
+        createUpvoterRequest(request, voter, remoteBatch),
+        isStopped,
+      );
       observeVoters(observer, {
         kind: "result",
         status: result.status,
@@ -119,11 +131,10 @@ async function persistVoterQueue(
     }
   }
 
-  await Promise.all(
-    Array.from({ length: Math.min(PERSIST_CONCURRENCY, queue.length) }, async () => worker()),
-  );
+  await Promise.all(Array.from({ length: Math.min(PERSIST_CONCURRENCY, queue.length) }, worker));
   const unprocessed = queue.length - nextIndex + stoppedAfterStart;
   const phase = globalFailure ? "failed" : request.isStopped() ? "stopped" : "complete";
+  if (remoteBatch.stopReason) report({ remoteStopReason: remoteBatch.stopReason });
   report({ phase, ...counts, unprocessed });
 }
 

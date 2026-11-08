@@ -1,11 +1,102 @@
 import { strictEqual, ok } from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { createZhihuVoterBatch } from "./voter-runtime.ts";
+import { createZhihuVoterBatch, readVoterPlatformBlockPreference } from "./voter-runtime.ts";
+import { PLATFORM_BLOCK_PREFERENCE_KEY } from "../../core/platform-block-preference.ts";
 import { createVoterDiagnostics } from "../../diagnostics/voter-session.ts";
 import { createDiagnosticStore } from "../../diagnostics/storage.ts";
 import { DIAGNOSTIC_STORAGE_KEY, type DiagnosticIncident } from "../../diagnostics/contract.ts";
 import { parseVoterSummary } from "../../diagnostics/voter-summary.ts";
+
+test("VOTER-015 captures the global setting once, defaults closed, and contains read failure", async () => {
+  for (const value of [
+    undefined,
+    true,
+    { version: 1, blockVotersOnPlatform: true },
+    { version: 1, blockVotersOnPlatform: false },
+  ]) {
+    let reads = 0;
+    const captured = await readVoterPlatformBlockPreference({
+      async get(key) {
+        strictEqual(key, PLATFORM_BLOCK_PREFERENCE_KEY);
+        reads++;
+        return { [key]: value };
+      },
+    });
+    strictEqual(captured, typeof value === "object" && value.blockVotersOnPlatform);
+    strictEqual(reads, 1);
+  }
+  strictEqual(
+    await readVoterPlatformBlockPreference({
+      async get() {
+        throw new Error("offline");
+      },
+    }),
+    false,
+  );
+});
+
+test("VOTER-015 a hung preference read times out closed and cannot grant late authorization", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let release!: (value: Record<string, unknown>) => void;
+  const running = readVoterPlatformBlockPreference({
+    get: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  context.mock.timers.tick(5_000);
+  strictEqual(await running, false);
+  release({ [PLATFORM_BLOCK_PREFERENCE_KEY]: { version: 1, blockVotersOnPlatform: true } });
+  strictEqual(await running, false);
+});
+
+test("VOTER-015 setting changes affect only a later batch and current-user/direct exclusions remain", async () => {
+  let enabled = true;
+  let reads = 0;
+  const authorizations: boolean[] = [];
+  const storage = {
+    async get(key: string) {
+      reads++;
+      return { [key]: { version: 1, blockVotersOnPlatform: enabled } };
+    },
+  };
+  const controller = createZhihuVoterBatch(
+    {
+      async block(request) {
+        strictEqual(request.source, "upvoter");
+        strictEqual(request.userId, "new-voter");
+        authorizations.push(request.source === "upvoter" && request.blockOnPlatform === true);
+        return { status: "success", persistedUpvoter: true };
+      },
+    },
+    async (input) => {
+      enabled = false;
+      if (String(input).endsWith("/api/v4/me")) return Response.json({ url_token: "self" });
+      return Response.json({
+        data: ["self", "direct", "new-voter"].map((url_token) => ({
+          url_token,
+          name: "Synthetic",
+        })),
+        paging: { is_end: true },
+      });
+    },
+  );
+  for (let batch = 0; batch < 2; batch++) {
+    await controller.run({
+      source: { kind: "article", contentId: "1" },
+      tagId: "default",
+      sourcePostId: null,
+      directAuthorUserId: "direct",
+      blockOnPlatform: await readVoterPlatformBlockPreference(storage),
+      isStopped: () => false,
+    });
+  }
+  strictEqual(reads, 2);
+  strictEqual(authorizations.length, 2);
+  strictEqual(authorizations[0], true);
+  strictEqual(authorizations[1], false);
+});
 
 function storageHarness() {
   let stored: Record<string, unknown> = {};

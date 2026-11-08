@@ -46,6 +46,11 @@ export function createBlacklistContentController(
                 ...request.input.identity,
                 expectedBlacklistedAt: request.input.expectedBlacklistedAt,
               });
+            case "preflight-upvoter":
+              return repository.preflightUpvoter({
+                ...request.input.identity,
+                expectedBlacklistedAt: request.input.expectedBlacklistedAt,
+              });
             case "delete-tag":
               return repository.deleteTag(request.input.tagId);
           }

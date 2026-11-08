@@ -53,6 +53,10 @@ export interface BackgroundBlacklistClient {
     identity: AuthorIdentity,
     expectedBlacklistedAt: string,
   ): Promise<{ readonly status: "ready" | "existing" }>;
+  preflightUpvoter(
+    identity: AuthorIdentity,
+    expectedBlacklistedAt: string,
+  ): Promise<{ readonly status: "ready" | "existing" }>;
   deleteTag(tagId: string): Promise<TagDeletionMutationResult>;
   handleRevisionValue(value: unknown): Promise<boolean>;
 }
@@ -200,6 +204,13 @@ class BackgroundBlacklistClientImpl implements BackgroundBlacklistClient {
     expectedBlacklistedAt: string,
   ): Promise<{ readonly status: "ready" | "existing" }> {
     return this.dependencies.gateway.preflightDirect(identity, expectedBlacklistedAt);
+  }
+
+  preflightUpvoter(
+    identity: AuthorIdentity,
+    expectedBlacklistedAt: string,
+  ): Promise<{ readonly status: "ready" | "existing" }> {
+    return this.dependencies.gateway.preflightUpvoter(identity, expectedBlacklistedAt);
   }
 
   readonly deleteTag = (tagId: string): Promise<TagDeletionMutationResult> => {

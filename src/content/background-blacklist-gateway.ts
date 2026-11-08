@@ -71,6 +71,10 @@ export interface BackgroundBlacklistGateway {
     identity: AuthorIdentity,
     expectedBlacklistedAt: string,
   ): Promise<{ readonly status: "ready" | "existing" }>;
+  preflightUpvoter(
+    identity: AuthorIdentity,
+    expectedBlacklistedAt: string,
+  ): Promise<{ readonly status: "ready" | "existing" }>;
   deleteTag(tagId: string): Promise<TagDeletionMutationResult>;
 }
 
@@ -398,6 +402,19 @@ class RuntimeBackgroundBlacklistGateway implements BackgroundBlacklistGateway {
     });
     const result = parsePreflight(await this.request("preflight-direct", message));
     if (!result) throw new Error("Background returned an invalid direct preflight.");
+    return result;
+  }
+
+  async preflightUpvoter(
+    identity: AuthorIdentity,
+    expectedBlacklistedAt: string,
+  ): Promise<{ readonly status: "ready" | "existing" }> {
+    const message = createBlacklistContentRequest("preflight-upvoter", {
+      identity,
+      expectedBlacklistedAt,
+    });
+    const result = parsePreflight(await this.request("preflight-upvoter", message));
+    if (!result) throw new Error("Background returned an invalid upvoter preflight.");
     return result;
   }
 

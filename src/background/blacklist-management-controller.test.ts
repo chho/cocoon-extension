@@ -253,6 +253,10 @@ class MemoryRepository implements BlacklistRepository {
   async preflightDirect(): Promise<never> {
     throw new Error("not used by management tests");
   }
+
+  async preflightUpvoter(): Promise<never> {
+    throw new Error("not used by management tests");
+  }
 }
 
 function createHarness(

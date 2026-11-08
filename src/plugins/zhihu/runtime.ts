@@ -1,6 +1,5 @@
 import type { SitePluginMountContext } from "../../core/plugin/contract.ts";
 import {
-  ZHIHU_PLATFORM_ID,
   createInitialState,
   normalizeMemberHashId,
   validateNewTagLabel,
@@ -49,10 +48,7 @@ import {
   createRemotePreferenceController,
   runAfterRemotePreferencesReady,
 } from "../../content/remote-preference-controller.ts";
-import {
-  createRemoteBlockCoordinator,
-  type CrossContextTryLockResult,
-} from "../../content/remote-block-coordinator.ts";
+import type { CrossContextTryLockResult } from "../../content/remote-block-coordinator.ts";
 import { createRemoteBackgroundRunner } from "../../content/remote-background-runner.ts";
 import { createRemoteOptionsView } from "../../content/remote-options-view.ts";
 import {
@@ -60,8 +56,8 @@ import {
   createHoverCardController,
   type HoverAuthorActivation,
 } from "../../content/hover-card-controller.ts";
-import { blockZhihuUser } from "../../content/zhihu-remote-api.ts";
-import { createZhihuVoterBatch } from "./voter-runtime.ts";
+import { createZhihuRemoteCoordinator } from "./remote-block-runtime.ts";
+import { createZhihuVoterBatch, readVoterPlatformBlockPreference } from "./voter-runtime.ts";
 import { createZhihuBlacklistIdentityRuntime } from "./blacklist-identity-runtime.ts";
 import { getCardContentSource, getCardSourcePost } from "./card-content-source.ts";
 import { createHoverPostTracker } from "./hover-post-tracker.ts";
@@ -182,9 +178,11 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
   let nextTargetId = 1;
   let blockedOutsideClickTarget: EventTarget | null = null;
   let lifecycleEnded = false;
+  let lifecycleEpoch = 0;
 
   window.addEventListener("pagehide", () => {
     lifecycleEnded = true;
+    lifecycleEpoch += 1;
     drawerController.dismiss();
   });
   window.addEventListener("pageshow", () => {
@@ -783,23 +781,12 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
     },
   );
 
-  const remoteBlockCoordinator = createRemoteBlockCoordinator({
+  const remoteBlockCoordinator = createZhihuRemoteCoordinator({
     withCrossContextLock: withRemoteBlockLock,
     tryWithCrossContextUserLock: tryWithRemoteBlockUserLock,
-    preflightDirect(userId, expectedBlacklistedAt) {
-      return blacklistClient.preflightDirect(
-        { platformId: ZHIHU_PLATFORM_ID, userId },
-        expectedBlacklistedAt,
-      );
-    },
-    commitUpvoter: blacklistClient.commitUpvoter,
-    now: () => new Date(),
-    async blockUser(userId, isStopped) {
-      return blockZhihuUser(fetch, userId, document.cookie, { isStopped });
-    },
-    reportStorageFailure() {
-      console.error("[Cocoon] 无法读取或保存屏蔽操作所需的本地状态。");
-    },
+    client: blacklistClient,
+    fetchImpl: fetch,
+    readCookie: () => document.cookie,
   });
 
   const remoteBackgroundRunner = createRemoteBackgroundRunner<HTMLElement, HTMLButtonElement>({
@@ -814,6 +801,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
       );
     },
     async blockVoters(task, committed, voterSource) {
+      const epoch = lifecycleEpoch;
+      const blockOnPlatform = await readVoterPlatformBlockPreference(chrome.storage.local);
       const observer =
         import.meta.env?.MODE === "diagnostic" ? startVoterDiagnostics(document, task) : undefined;
       const voterBatchController = createZhihuVoterBatch(remoteBlockCoordinator, fetch, observer);
@@ -822,7 +811,8 @@ export function mountZhihuPlugin(context: SitePluginMountContext): void {
         tagId: task.selection.tag.tagId,
         directAuthorUserId: committed.userId,
         sourcePostId: committed.author.sourcePostId,
-        isStopped: () => lifecycleEnded,
+        blockOnPlatform,
+        isStopped: () => lifecycleEnded || epoch !== lifecycleEpoch,
       });
     },
     reportFailure(scope) {

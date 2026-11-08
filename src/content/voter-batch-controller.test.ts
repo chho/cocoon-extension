@@ -7,6 +7,7 @@ import type {
   RemoteBlockCoordinator,
   UserBlockRequest,
 } from "./remote-block-coordinator.ts";
+import { createRemoteBlockCoordinator } from "./remote-block-coordinator.ts";
 import type { VoterFetchResult } from "./zhihu-remote-api.ts";
 import { createVoterBatchController, type VoterBatchProgress } from "./voter-batch-controller.ts";
 
@@ -103,6 +104,69 @@ function createHarness(
     requests,
     counts: () => ({ currentUserFetches, voterFetches }),
   };
+}
+
+for (const reason of ["authentication", "rate-limit", "csrf"] as const) {
+  test(`VOTER-015 ${reason} stops remote scheduling but continues and counts local saves`, async () => {
+    let posts = 0;
+    let writes = 0;
+    const coordinator = createRemoteBlockCoordinator({
+      async withCrossContextLock(_name, operation) {
+        return operation();
+      },
+      async tryWithCrossContextUserLock() {
+        throw new Error("Voters must not acquire direct user locks");
+      },
+      async preflightDirect() {
+        throw new Error("Voters must not use direct authorization");
+      },
+      async preflightUpvoter() {
+        return { status: "ready" };
+      },
+      async commitUpvoter(input) {
+        writes++;
+        return {
+          status: "persisted",
+          author: { ...input, memberHashId: null, blockSource: "upvoter" },
+          tag: null,
+          baseRevision: 0,
+          revision: 1,
+          authorCount: writes,
+          tagCount: 1,
+        };
+      },
+      now: () => new Date("2026-08-13T12:34:56.789Z"),
+      async blockUser() {
+        posts++;
+        return { status: "failed", reason };
+      },
+      reportStorageFailure() {},
+    });
+    const harness = createHarness({
+      voterResult: voters(["one", "two", "three", "four", "five", "six"]),
+      block: (request, isStopped) => coordinator.block(request, isStopped),
+    });
+    const result = await harness.controller.run({
+      source,
+      tagId: "default",
+      directAuthorUserId: "direct-author",
+      sourcePostId: null,
+      blockOnPlatform: true,
+      isStopped: () => false,
+    });
+    strictEqual(result.success, 6);
+    strictEqual(result.failed, 0);
+    strictEqual(result.unprocessed, 0);
+    strictEqual(result.remoteStopReason, reason);
+    strictEqual(writes, 6);
+    strictEqual(posts > 0 && posts <= 3, true);
+    strictEqual(
+      harness.requests.every(
+        (request) => request.source === "upvoter" && request.blockOnPlatform === true,
+      ),
+      true,
+    );
+  });
 }
 
 test("POST-002 global storage failure stops remaining scheduling and preserves successes", async () => {

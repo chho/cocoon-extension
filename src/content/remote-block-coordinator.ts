@@ -14,6 +14,10 @@ const MAX_CONCURRENT_REMOTE_BLOCKS = 3;
 const USER_LOCK_PREFIX = "cocoon-remote-block-user";
 const SLOT_LOCK_PREFIX = "cocoon-remote-block-slot";
 
+export interface VoterRemoteBatch {
+  stopReason: "authentication" | "rate-limit" | "csrf" | null;
+}
+
 export type UserBlockRequest =
   | {
       readonly source: "direct";
@@ -26,12 +30,15 @@ export type UserBlockRequest =
       readonly authorName: string;
       readonly tagId: string;
       readonly sourcePostId: string | null;
+      readonly blockOnPlatform?: boolean;
+      readonly remoteBatch?: VoterRemoteBatch;
     };
 
 export type CoordinatedBlockResult =
   | {
       readonly status: "success";
       readonly persistedUpvoter: boolean;
+      readonly remote?: RemoteBlockResult;
     }
   | {
       readonly status: "skipped";
@@ -64,6 +71,10 @@ export interface RemoteBlockCoordinatorDependencies {
     expectedBlacklistedAt: string,
   ) => Promise<{ readonly status: "ready" | "existing" }>;
   readonly commitUpvoter: (input: UpvoterCommitInput) => Promise<AuthorMutationResult>;
+  readonly preflightUpvoter?: (
+    userId: string,
+    expectedBlacklistedAt: string,
+  ) => Promise<{ readonly status: "ready" | "existing" }>;
   readonly now: () => Date;
   readonly blockUser: (userId: string, isStopped: () => boolean) => Promise<RemoteBlockResult>;
   readonly reportStorageFailure: (error: unknown) => void;
@@ -122,11 +133,46 @@ async function persistUpvoter(
     if (result.status === "duplicate") {
       return { status: "skipped", reason: "existing" };
     }
-    return { status: "success", persistedUpvoter: true };
+    return request.blockOnPlatform === true && result.author.blacklistedAt !== null
+      ? blockNewUpvoter(dependencies, request, result.author.blacklistedAt, isStopped)
+      : { status: "success", persistedUpvoter: true };
   } catch (error) {
     dependencies.reportStorageFailure(error);
     return { status: "failed", reason: "storage-global" };
   }
+}
+
+async function blockNewUpvoter(
+  dependencies: RemoteBlockCoordinatorDependencies,
+  request: UpvoterBlockRequest,
+  expectedBlacklistedAt: string,
+  isStopped: () => boolean,
+): Promise<CoordinatedBlockResult> {
+  const remoteStopped = () => isStopped() || request.remoteBatch?.stopReason != null;
+  let remote: RemoteBlockResult;
+  try {
+    // The authoritative commit deduplicates voters; direct user locks remain independently authorized.
+    remote = await dependencies.withCrossContextLock(slotLockName(request.userId), async () => {
+      if (remoteStopped() || !dependencies.preflightUpvoter) return { status: "stopped" };
+      const preflight = await dependencies.preflightUpvoter(request.userId, expectedBlacklistedAt);
+      if (preflight.status !== "ready" || remoteStopped()) return { status: "stopped" };
+      const result = await dependencies.blockUser(request.userId, remoteStopped);
+      if (
+        request.remoteBatch &&
+        result.status === "failed" &&
+        (result.reason === "authentication" ||
+          result.reason === "rate-limit" ||
+          result.reason === "csrf")
+      ) {
+        // Stop queued slots before releasing this one, not after the caller receives its result.
+        request.remoteBatch.stopReason = result.reason;
+      }
+      return result;
+    });
+  } catch {
+    remote = { status: "failed", reason: "network" };
+  }
+  return { status: "success", persistedUpvoter: true, remote };
 }
 
 async function checkPreflight(

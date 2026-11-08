@@ -45,7 +45,7 @@ import {
   backfillMemberHashTarget,
   commitAuthorTarget,
   commitUpvoterTarget,
-  preflightDirectTarget,
+  preflightAuthorTarget,
 } from "./blacklist-repository-targets.ts";
 import type {
   BlacklistRepository,
@@ -315,7 +315,11 @@ class IndexedDbBlacklistRepository {
   }
 
   async preflightDirect(input: Parameters<BlacklistRepository["preflightDirect"]>[0]) {
-    return preflightDirectTarget(await ensureInitialized(this.environment), input);
+    return preflightAuthorTarget(await ensureInitialized(this.environment), input, "direct");
+  }
+
+  async preflightUpvoter(input: Parameters<BlacklistRepository["preflightUpvoter"]>[0]) {
+    return preflightAuthorTarget(await ensureInitialized(this.environment), input, "upvoter");
   }
 
   deleteTag(tagId: string) {

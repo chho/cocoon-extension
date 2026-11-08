@@ -33,13 +33,36 @@
       <section class="authors-panel" aria-labelledby="authors-heading">
         <div class="section-heading">
           <div>
-            <p class="section-index">作者</p>
             <h2 id="authors-heading">屏蔽列表</h2>
           </div>
           <button id="remove-selected" class="danger-text" type="button" disabled>
             解除所选（0）
           </button>
         </div>
+
+        <div class="platform-block-setting">
+          <label class="platform-block-label" for="block-voters-on-platform">
+            <input id="block-voters-on-platform" type="checkbox" disabled />
+            <span>批量拉黑点赞者时，同时在对应平台拉黑</span>
+          </label>
+          <div class="setting-help">
+            <button
+              id="platform-block-help"
+              class="setting-help-button"
+              type="button"
+              aria-label="了解平台拉黑设置"
+              aria-describedby="platform-block-tooltip"
+            >
+              i
+            </button>
+            <p id="platform-block-tooltip" class="setting-tooltip" role="tooltip" hidden>
+              不勾选：只在 Cocoon
+              中屏蔽这些人。勾选后：还会在他们所在的网站上拉黑他们，就像你在那个网站手动拉黑一样。只有支持此功能的网站插件才会执行。如果网站不支持或拉黑失败，Cocoon
+              仍会屏蔽他们。以后在 Cocoon 中取消屏蔽，还需要去对应网站单独解除拉黑。
+            </p>
+          </div>
+        </div>
+        <p id="platform-block-status" class="setting-status" role="status">正在读取设置…</p>
 
         <div class="toolbar" role="search">
           <label>
@@ -85,7 +108,6 @@
       <section class="tags-panel" aria-labelledby="tags-heading">
         <div class="section-heading">
           <div>
-            <p class="section-index">标签</p>
             <h2 id="tags-heading" tabindex="-1">标签维护</h2>
           </div>
           <p id="tag-summary" aria-live="polite">— 个自定义标签</p>
@@ -98,7 +120,6 @@
       <section id="transfer-panel" class="transfer-panel" aria-labelledby="transfer-heading">
         <div class="section-heading transfer-heading-row">
           <div>
-            <p class="section-index">数据</p>
             <h2 id="transfer-heading">导入与导出</h2>
           </div>
           <button id="export-data" class="secondary-action" type="button" disabled>

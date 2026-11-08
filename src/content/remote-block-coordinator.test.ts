@@ -262,6 +262,17 @@ function createHarness(initialState: BlacklistState, options: HarnessOptions = {
       return lockManager.tryWithLock(name, operation);
     },
     preflightDirect: storage.preflightDirect.bind(storage),
+    async preflightUpvoter(userId: string, expectedBlacklistedAt: string) {
+      const author = storage.stored.authors.find(
+        (author) => author.platformId === "zhihu" && author.userId === userId,
+      );
+      return {
+        status:
+          author?.blockSource === "upvoter" && author.blacklistedAt === expectedBlacklistedAt
+            ? ("ready" as const)
+            : ("existing" as const),
+      };
+    },
     commitUpvoter: storage.commitUpvoter.bind(storage),
     now: () => new Date(TIMESTAMP),
     async blockUser(userId: string, isStopped: () => boolean) {
@@ -311,6 +322,154 @@ function upvoterRequest(userId = "voter-user") {
     authorName: `Voter ${userId}`,
     tagId: "default",
   };
+}
+
+test("VOTER-015 opt-in posts only after a new local commit and deduplicates concurrent batches", async () => {
+  const harness = createHarness(createInitialState(), { holdWrite: true });
+  const request = { ...upvoterRequest(), blockOnPlatform: true };
+  const first = harness.coordinator.block(request);
+  await harness.writeStarted;
+  strictEqual(harness.counts().posts, 0);
+  const duplicate = harness.createCoordinator().block(request);
+  harness.releaseWrite();
+  const results = await Promise.all([first, duplicate]);
+  strictEqual(results[0].status, "success");
+  deepStrictEqual(results[1], { status: "skipped", reason: "existing" });
+  strictEqual(harness.counts().posts, 1);
+  strictEqual(harness.counts().writes, 1);
+  deepStrictEqual(await harness.coordinator.block(request), {
+    status: "skipped",
+    reason: "existing",
+  });
+  strictEqual(harness.counts().posts, 1);
+});
+
+for (const reason of ["network", "http", "authentication", "rate-limit", "csrf"] as const) {
+  test(`VOTER-015 remote ${reason} preserves local success and reports remote outcome separately`, async () => {
+    const remote = { status: "failed", reason } as const;
+    const harness = createHarness(createInitialState(), { blockResult: remote });
+    const result = await harness.coordinator.block({ ...upvoterRequest(), blockOnPlatform: true });
+    deepStrictEqual(result, { status: "success", persistedUpvoter: true, remote });
+    strictEqual(harness.state().authors.length, 1);
+    strictEqual(harness.counts().posts, 1);
+  });
+}
+
+test("VOTER-015 lifecycle stop after persistence prevents remote work without losing local success", async () => {
+  let stopped = false;
+  const harness = createHarness(createInitialState(), { holdWrite: true });
+  const running = harness.coordinator.block(
+    { ...upvoterRequest(), blockOnPlatform: true },
+    () => stopped,
+  );
+  await harness.writeStarted;
+  stopped = true;
+  harness.releaseWrite();
+  strictEqual((await running).status, "success");
+  strictEqual(harness.counts().posts, 0);
+  strictEqual(harness.state().authors.length, 1);
+});
+
+test("VOTER-015 a voter waiting for a remote slot cannot suppress an independently authorized direct POST", async () => {
+  const remoteStarted = createSignal();
+  const releaseRemote = createSignal();
+  const harness = createHarness(createInitialState(), {
+    async blockUser() {
+      remoteStarted.resolve();
+      await releaseRemote.promise;
+      return { status: "success", endpoint: "primary" };
+    },
+  });
+  const request = { ...upvoterRequest(), blockOnPlatform: true };
+  const voter = harness.coordinator.block(request);
+  await Promise.race([remoteStarted.promise, voter]);
+  strictEqual(harness.counts().posts, 1);
+  harness.replaceState({ ...harness.state(), authors: [directAuthor(request.userId)] });
+  const direct = harness
+    .createCoordinator()
+    .block({ source: "direct", userId: request.userId, expectedBlacklistedAt: TIMESTAMP });
+  releaseRemote.resolve();
+  strictEqual((await voter).status, "success");
+  strictEqual((await direct).status, "success");
+  strictEqual(harness.counts().posts, 2);
+});
+
+test("VOTER-015 a fatal result closes already queued shared slots but not local persistence", async () => {
+  const [sameSlot] = userIdsBySlot(2);
+  const firstStarted = createSignal();
+  const releaseFirst = createSignal();
+  const remoteBatch = { stopReason: null as "authentication" | null };
+  const harness = createHarness(createInitialState(), {
+    async blockUser() {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      return { status: "failed", reason: "authentication" };
+    },
+  });
+  const first = harness.coordinator.block({
+    ...upvoterRequest(sameSlot[0]),
+    blockOnPlatform: true,
+    remoteBatch,
+  });
+  await firstStarted.promise;
+  const queued = harness.coordinator.block({
+    ...upvoterRequest(sameSlot[1]),
+    blockOnPlatform: true,
+    remoteBatch,
+  });
+  const slot = `cocoon-remote-block-slot-${stableRemoteBlockHash32(sameSlot[0]) % 3}`;
+  await harness.lockManager.waitForRequestCount(slot, 2);
+  releaseFirst.resolve();
+  strictEqual((await first).status, "success");
+  deepStrictEqual(await queued, {
+    status: "success",
+    persistedUpvoter: true,
+    remote: { status: "stopped" },
+  });
+  strictEqual(harness.counts().posts, 1);
+  strictEqual(harness.counts().writes, 2);
+  strictEqual(remoteBatch.stopReason, "authentication");
+});
+
+for (const replace of [false, true]) {
+  test(`VOTER-015 revalidates the persisted voter inside a queued slot after removal/replacement (${replace})`, async () => {
+    const [sameSlot] = userIdsBySlot(2);
+    const held = createSignal();
+    const release = createSignal();
+    const harness = createHarness(createInitialState());
+    const slot = `cocoon-remote-block-slot-${stableRemoteBlockHash32(sameSlot[0]) % 3}`;
+    const holder = harness.lockManager.withLock(slot, async () => {
+      held.resolve();
+      await release.promise;
+    });
+    await held.promise;
+    const running = harness.coordinator.block({
+      ...upvoterRequest(sameSlot[1]),
+      blockOnPlatform: true,
+    });
+    await harness.lockManager.waitForRequestCount(slot, 2);
+    const original = harness.state().authors[0];
+    harness.replaceState({
+      ...harness.state(),
+      authors: replace ? [{ ...original, blacklistedAt: "2026-08-14T12:34:56.789Z" }] : [],
+    });
+    release.resolve();
+    await holder;
+    strictEqual((await running).status, "success");
+    strictEqual(harness.counts().posts, 0);
+  });
+}
+
+for (const failWrite of [false, true]) {
+  test(`VOTER-015 explicit off or failed local save cannot POST (failWrite=${failWrite})`, async () => {
+    const harness = createHarness(createInitialState(), { failWrite });
+    const result = await harness.coordinator.block({
+      ...upvoterRequest(),
+      blockOnPlatform: failWrite,
+    });
+    strictEqual(result.status, failWrite ? "failed" : "success");
+    strictEqual(harness.counts().posts, 0);
+  });
 }
 
 function userIdsBySlot(countPerSlot: number): readonly string[][] {

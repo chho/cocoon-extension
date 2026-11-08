@@ -72,7 +72,7 @@ export type TagRenameResult = MutationContext & {
   readonly tag: CocoonTag | null;
 };
 
-export interface DirectPreflightInput extends AuthorIdentity {
+export interface AuthorPreflightInput extends AuthorIdentity {
   readonly expectedBlacklistedAt: string;
 }
 
@@ -90,7 +90,8 @@ export interface BlacklistRepository {
   commitAuthor(input: CommitInput): Promise<AuthorMutationResult>;
   backfillMemberHash(identity: AuthorIdentity, memberHashId: string): Promise<AliasMutationResult>;
   commitUpvoter(input: UpvoterCommitInput): Promise<AuthorMutationResult>;
-  preflightDirect(input: DirectPreflightInput): Promise<{ readonly status: "ready" | "existing" }>;
+  preflightDirect(input: AuthorPreflightInput): Promise<{ readonly status: "ready" | "existing" }>;
+  preflightUpvoter(input: AuthorPreflightInput): Promise<{ readonly status: "ready" | "existing" }>;
   deleteTag(tagId: string): Promise<TagDeletionMutationResult>;
   removeAuthor(identity: AuthorIdentity): Promise<AuthorRemovalResult>;
   restoreAuthor(author: BlacklistedAuthor): Promise<AuthorRestorationResult>;

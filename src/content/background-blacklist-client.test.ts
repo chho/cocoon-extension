@@ -51,6 +51,9 @@ test("BUG-015/BUG-016 client initialization preserves the sync receiver and load
       async preflightDirect() {
         return unexpected("preflightDirect");
       },
+      async preflightUpvoter() {
+        return unexpected("preflightUpvoter");
+      },
       async deleteTag() {
         return unexpected("deleteTag");
       },
@@ -114,6 +117,9 @@ test("BUG-016 client exposes revision-bound identity matching without full state
       },
       async preflightDirect() {
         return unexpected("preflightDirect");
+      },
+      async preflightUpvoter() {
+        return unexpected("preflightUpvoter");
       },
       async deleteTag() {
         return unexpected("deleteTag");

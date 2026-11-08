@@ -19,6 +19,24 @@ function contentRequest(operation: string, input: unknown) {
   };
 }
 
+test("VOTER-015 upvoter preflight accepts only exact canonical Zhihu identity and timestamp", () => {
+  const input = {
+    identity: { platformId: "zhihu", userId: "synthetic-voter" },
+    expectedBlacklistedAt: TIMESTAMP,
+  };
+  const request = contentRequest("preflight-upvoter", input);
+  deepStrictEqual(parseBlacklistContentRequest(request), request);
+  for (const invalid of [
+    { ...input, extra: true },
+    { ...input, expectedBlacklistedAt: "invalid" },
+    { ...input, identity: { ...input.identity, platformId: "youtube" } },
+    { ...input, identity: { ...input.identity, userId: "A".repeat(32) } },
+    { ...input, identity: { ...input.identity, userId: " voter " } },
+    { ...input, identity: { ...input.identity, extra: true } },
+  ])
+    strictEqual(parseBlacklistContentRequest({ ...request, input: invalid }), null);
+});
+
 test("POST-002 ensure-post and user references are strict, bounded and versioned", () => {
   const post = {
     postId: "zhihu:answer:2",

@@ -36,7 +36,7 @@ import {
 import type {
   AliasMutationResult,
   AuthorMutationResult,
-  DirectPreflightInput,
+  AuthorPreflightInput,
 } from "./blacklist-repository-types.ts";
 
 const {
@@ -427,7 +427,7 @@ export async function commitUpvoterTarget(
   }
 }
 
-function preflightUserId(input: DirectPreflightInput): string | null {
+function preflightUserId(input: AuthorPreflightInput): string | null {
   const valid =
     input.platformId === ZHIHU_PLATFORM_ID &&
     isValidPlatformId(input.platformId) &&
@@ -436,9 +436,10 @@ function preflightUserId(input: DirectPreflightInput): string | null {
   return valid ? input.userId : null;
 }
 
-export async function preflightDirectTarget(
+export async function preflightAuthorTarget(
   database: IDBDatabase,
-  input: DirectPreflightInput,
+  input: AuthorPreflightInput,
+  expectedSource: "direct" | "upvoter",
 ): Promise<{ readonly status: "ready" | "existing" }> {
   const userId = preflightUserId(input);
   if (userId === null || !isValidBlacklistTimestamp(input.expectedBlacklistedAt)) {
@@ -454,7 +455,7 @@ export async function preflightDirectTarget(
     status:
       author.platformId === input.platformId &&
       author.userId === userId &&
-      author.blockSource === "direct" &&
+      author.blockSource === expectedSource &&
       author.blacklistedAt === input.expectedBlacklistedAt
         ? "ready"
         : "existing",

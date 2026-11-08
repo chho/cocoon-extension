@@ -68,10 +68,12 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 The current Zhihu plugin adds two independent options to the tag drawer. Both are off by default and remember their most recently saved state.
 
 - **Block this author on Zhihu** — also sends a same-origin request that changes the signed-in Zhihu account's real block list.
-- **Hide voters of this content** — reads the answer's voters or article's likers and adds eligible users to Cocoon's local blacklist. It does **not** remotely block those voters on Zhihu.
+- **Hide voters of this content** — reads the answer's voters or article's likers and adds eligible users to Cocoon's local blacklist. By default this does **not** block them on the website.
+
+Above the blocklist filters, the management page offers **“批量拉黑点赞者时，同时在对应平台拉黑”** (also block voters on their corresponding platform), a global setting that is **off by default** and remembers your choice. Its small **i** explains the difference on hover or keyboard focus. Supporting site plugins perform the website action; currently only the Zhihu plugin implements it. It applies only to newly started batches and newly added voters, not existing records. Changing the setting sends no blocking requests itself. Website failures do not undo local blocking, and removing a local block does not undo a website block—manage that on the corresponding website.
 
 > [!IMPORTANT]
-> When **Block this author on Zhihu** is enabled, choosing a tag authorizes the account-level block immediately. Cocoon does not show a second confirmation dialog. Review the visible checkbox before choosing a tag.
+> When **Block this author on Zhihu** is enabled, choosing a tag authorizes that author's account-level block. When both voter processing and the global platform-blocking setting are enabled, it also authorizes account-level blocks for newly added voters, independently of the author checkbox. Cocoon does not show a second confirmation dialog. Review your choices before choosing a tag.
 
 ## Supported sites
 

@@ -229,6 +229,11 @@ test("MANAGE-005/AC-092 keeps transfer tools as the final main section", async (
   const sections = [...main.querySelectorAll(":scope > section")];
   strictEqual(sections.at(-1), transfer);
   strictEqual(sections.indexOf(tags) < sections.indexOf(transfer), true);
+  strictEqual(document.querySelector(".section-index"), null);
+  deepStrictEqual(
+    [...document.querySelectorAll("main h2")].map((heading) => heading.textContent),
+    ["屏蔽列表", "标签维护", "导入与导出"],
+  );
 });
 
 function selectImportFile(dom: JSDOM, file: File | null): void {
