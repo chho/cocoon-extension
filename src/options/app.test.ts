@@ -236,6 +236,22 @@ test("MANAGE-005/AC-092 keeps transfer tools as the final main section", async (
   );
 });
 
+test("UI-012 provides a quiet GitHub footer after transfer with a safe new-tab link", async () => {
+  const source = await readFile(new URL("../../options/options.html", import.meta.url), "utf8");
+  const dom = new JSDOM(source);
+  try {
+    const footer = dom.window.document.querySelector("main > footer");
+    strictEqual(footer?.previousElementSibling?.id, "transfer-panel");
+    const link = footer?.querySelector("a");
+    strictEqual(link?.getAttribute("href"), "https://github.com/chho/cocoon-extension");
+    strictEqual(link?.getAttribute("target"), "_blank");
+    strictEqual(link?.getAttribute("rel"), "noopener noreferrer");
+    strictEqual(link?.textContent?.trim(), "GitHub ↗");
+  } finally {
+    dom.window.close();
+  }
+});
+
 function selectImportFile(dom: JSDOM, file: File | null): void {
   const input = dom.window.document.querySelector<HTMLInputElement>("#import-file");
   if (!input) throw new Error("import input missing");

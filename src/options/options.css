@@ -37,6 +37,7 @@ input:focus-visible,
 select:focus-visible,
 .author-name:focus-visible,
 .source-post:focus-visible,
+.page-footer a:focus-visible,
 .author-viewport:focus-visible {
   outline: 2px solid #63766a;
   outline-offset: 2px;
@@ -46,6 +47,22 @@ main {
   width: min(1180px, calc(100% - 48px));
   margin: 0 auto;
   padding: 42px 0 64px;
+}
+
+.page-footer {
+  margin-top: 32px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.page-footer a {
+  color: #68716b;
+  text-decoration: none;
+}
+
+.page-footer a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 p,

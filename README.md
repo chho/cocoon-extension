@@ -62,6 +62,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 - Renames and deletes custom tags in a full-width maintenance list.
 - Imports or exports a strictly validated JSON backup.
 - Supports atomic merge and confirmed replace-all imports.
+- Links to the project's GitHub repository from a small footer below the data tools.
 
 ### Site-specific actions
 
