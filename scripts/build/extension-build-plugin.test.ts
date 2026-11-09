@@ -735,7 +735,16 @@ function modeFixtureConfig(
   watch = false,
 ): InlineConfig {
   const config = createFixtureBuildConfig(fixture, watch);
-  return { ...config, mode, build: { ...config.build, outDir: undefined } };
+  return {
+    ...config,
+    mode,
+    build: {
+      ...config.build,
+      outDir: undefined,
+      // Rapid fixture rewrites can be dropped by native watcher change-event throttling.
+      ...(watch ? { watch: { chokidar: { usePolling: true, interval: 100 } } } : {}),
+    },
+  };
 }
 
 async function assertDiagnosticOutput(outDir: string, enabled: boolean): Promise<void> {
