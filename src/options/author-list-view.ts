@@ -107,10 +107,10 @@ function restoreFocus(
     : undefined;
   const control = controlForRole(row, descriptor.role);
   if (control) {
-    control.focus();
+    control.focus({ preventScroll: true });
     return;
   }
-  (options.focusFallback ?? options.list.parentElement)?.focus();
+  (options.focusFallback ?? options.list.parentElement)?.focus({ preventScroll: true });
 }
 
 function result(loadedCount: number, mountedRowCount: number, virtualized: boolean) {

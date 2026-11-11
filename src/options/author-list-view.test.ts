@@ -279,6 +279,51 @@ test("MANAGE-001 necessary virtual replacements restore equivalent controls or f
   strictEqual(fixture.document.activeElement, fixture.viewport);
 });
 
+for (const scrollTop of [704, 10_000]) {
+  test(`BUG-026 focus restoration preserves scrolling at ${scrollTop}`, (context) => {
+    const fixture = createFocusFixture();
+    const view = fixture.document.defaultView!;
+    try {
+      const options = {
+        list: fixture.list,
+        items: items(250),
+        loadedCount: 250,
+        viewportHeight: 640,
+        createRow: fixture.createRow,
+        focusFallback: fixture.viewport,
+      };
+      renderAuthorListRows({ ...options, scrollTop: 640 });
+      const profile = fixture.list
+        .querySelectorAll<HTMLElement>(".author-row")
+        .item(4)
+        .querySelector<HTMLAnchorElement>("a.author-name")!;
+      profile.focus();
+      const focus = view.HTMLElement.prototype.focus;
+      context.mock.method(
+        view.HTMLElement.prototype,
+        "focus",
+        function (this: HTMLElement, focusOptions?: FocusOptions) {
+          focus.call(this, focusOptions);
+          // jsdom has no layout; model the browser's default focus-induced scrolling.
+          if (!focusOptions?.preventScroll) fixture.viewport.scrollTop = 0;
+        },
+      );
+      fixture.viewport.scrollTop = scrollTop;
+      renderAuthorListRows({ ...options, scrollTop });
+      const restored = fixture.document.activeElement;
+      if (scrollTop === 704) {
+        strictEqual(restored?.tagName, "A");
+        strictEqual(restored?.textContent, profile.textContent);
+      } else {
+        strictEqual(restored, fixture.viewport);
+      }
+      strictEqual(fixture.viewport.scrollTop, scrollTop);
+    } finally {
+      view.close();
+    }
+  });
+}
+
 test("PROFILE-001/AC-086 filtering reset keeps encoded author profile links", () => {
   const fixture = createFocusFixture();
   const original = items(250, "Visible");
