@@ -45,7 +45,25 @@ test("TAG-013/014 renders compact sibling controls with isolated actions", () =>
   deepStrictEqual(selected, ["reading"]);
   deepStrictEqual(deleted, []);
 
-  items[1]?.querySelector<HTMLButtonElement>(".cocoon-tag-delete")?.click();
+  const remove = items[1]?.querySelector<HTMLButtonElement>(".cocoon-tag-delete");
+  ok(remove);
+  const prompts: string[] = [];
+  let confirmed = false;
+  dom.window.confirm = (message) => {
+    prompts.push(message ?? "");
+    return confirmed;
+  };
+  remove.focus();
+  remove.click();
+  deepStrictEqual(deleted, []);
+  strictEqual(dom.window.document.activeElement, remove);
+  strictEqual(outsideClicks, 0);
+  confirmed = true;
+  remove.click();
+  deepStrictEqual(
+    prompts,
+    Array(2).fill("删除标签“Reading”？\n该标签下的账号将移至 default，仍保持屏蔽。"),
+  );
   deepStrictEqual(selected, ["reading"]);
   deepStrictEqual(deleted, ["reading"]);
   strictEqual(outsideClicks, 0);

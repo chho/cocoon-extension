@@ -207,6 +207,7 @@ function fixture(): JSDOM {
       url: "chrome-extension://runtime/options/options.html",
     },
   );
+  dom.window.confirm = () => true;
   for (const dialog of dom.window.document.querySelectorAll<HTMLDialogElement>("dialog")) {
     dialog.showModal = () => {
       dialog.open = true;
@@ -848,6 +849,52 @@ test("MANAGE production bootstrap rolls failed rename back and enters read-only 
   strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "—");
   strictEqual(rpc.requestCounts.get("rename-tag"), 1);
   strictEqual(rpc.requestCounts.get("remove-one"), 1);
+});
+
+test("TAG-021 tag deletion requires confirmation with its name and migration consequence", async () => {
+  const dom = fixture();
+  const rpc = new RpcQueue();
+  rpc.pushState(TEST_STATE);
+  const defaultOnly = {
+    authors: TEST_STATE.authors.map((author) => ({ ...author, tagId: "default" })),
+    tags: TEST_STATE.tags.filter((tag) => tag.isDefault),
+  };
+  rpc.push("delete-tag", deleteTagDelta(defaultOnly, "tag-one", 1));
+  bootstrapOptions({
+    document: dom.window.document,
+    rpc,
+    storageChanges: { addListener() {} },
+    requestFrame(callback) {
+      callback();
+      return 1;
+    },
+  });
+  await settle();
+  const remove = dom.window.document.querySelector<HTMLButtonElement>(
+    "button[aria-label='删除标签 Persisted']",
+  )!;
+  let confirmed = false;
+  let prompts = 0;
+  dom.window.confirm = (message) => {
+    strictEqual(message, "删除标签“Persisted”？\n该标签下的账号将移至 default，仍保持屏蔽。");
+    prompts++;
+    return confirmed;
+  };
+  remove.focus();
+  remove.click();
+  await settle();
+  strictEqual(rpc.requestCounts.get("delete-tag") ?? 0, 0);
+  strictEqual(dom.window.document.activeElement, remove);
+  strictEqual(dom.window.document.querySelector(".tag-display-name")?.textContent, "Persisted");
+  strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "1");
+  confirmed = true;
+  remove.click();
+  await settle();
+  strictEqual(prompts, 2);
+  strictEqual(rpc.requestCounts.get("delete-tag"), 1);
+  strictEqual(dom.window.document.querySelector("#author-total")?.textContent, "1");
+  strictEqual(dom.window.document.querySelector("button[aria-label='删除标签 Persisted']"), null);
+  dom.window.close();
 });
 
 test("MANAGE-003/AC-087 failed delete rolls back and restores the equivalent action", async () => {

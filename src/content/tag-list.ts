@@ -31,6 +31,12 @@ function createTagItem(document: Document, tag: CocoonTag, actions: TagListActio
   remove.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (
+      !document.defaultView?.confirm(
+        `删除标签“${tag.name}”？\n该标签下的账号将移至 default，仍保持屏蔽。`,
+      )
+    )
+      return;
     actions.deleteTag(tag.tagId, event);
   });
   item.append(remove);

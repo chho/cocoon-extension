@@ -252,7 +252,7 @@ class OptionsApplication implements OptionsApp {
       writesEnabled: this.writesEnabled,
       pendingTagIds: this.pendingTagIds,
       onRename: (tag, name) => void this.renameTag(tag, name),
-      onDelete: (tag) => void this.deleteTag(tag),
+      onDelete: (tag) => this.confirmDeleteTag(tag),
     });
     restoreTagMaintenanceFocus(this.elements.tagList, focus, focusFallback);
   }
@@ -423,6 +423,17 @@ class OptionsApplication implements OptionsApp {
     } finally {
       this.endTagMutation(tag.tagId);
     }
+  }
+
+  private confirmDeleteTag(tag: BlacklistTagDto): void {
+    if (!this.writesEnabled || this.pendingTagIds.has(tag.tagId)) return;
+    if (
+      !this.dependencies.document.defaultView?.confirm(
+        `删除标签“${tag.name}”？\n该标签下的账号将移至 default，仍保持屏蔽。`,
+      )
+    )
+      return;
+    void this.deleteTag(tag);
   }
 
   private async deleteTag(tag: BlacklistTagDto): Promise<void> {

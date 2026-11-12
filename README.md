@@ -43,6 +43,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 - Adds a minimal `×` control to cards supported by the active site plugin.
 - Opens a compact tag drawer before taking action.
+- Asks for confirmation before deleting a tag, both in the drawer and management page. Its accounts move to `default` and remain blocked.
 - Hides current and newly inserted cards from locally blocked authors.
 - Hides comments and replies from the same authors.
 - Adds the same blocking entry point to supported author surfaces.
