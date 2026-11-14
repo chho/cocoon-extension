@@ -1,9 +1,8 @@
 import { PopupQueryError, type PopupQueryData } from "./popup-query-client.ts";
 
 interface PopupRevisionCoordinatorDependencies {
-  readonly getQuery: () => string;
   readonly hasData: () => boolean;
-  readonly load: (query: string, minimumRevision: number) => Promise<PopupQueryData>;
+  readonly load: (minimumRevision: number) => Promise<PopupQueryData>;
   readonly apply: (data: PopupQueryData) => void;
   readonly fail: () => void;
 }
@@ -15,7 +14,6 @@ export interface PopupRevisionCoordinator {
 
 interface RefreshAttempt {
   readonly generation: number;
-  readonly query: string;
   readonly minimumRevision: number;
 }
 
@@ -46,13 +44,12 @@ class PopupRevisionCoordinatorImpl implements PopupRevisionCoordinator {
   private currentAttempt(): RefreshAttempt {
     return {
       generation: this.generation,
-      query: this.dependencies.getQuery(),
       minimumRevision: this.revisionFloor,
     };
   }
 
   private isCurrent(attempt: RefreshAttempt): boolean {
-    return attempt.generation === this.generation && attempt.query === this.dependencies.getQuery();
+    return attempt.generation === this.generation;
   }
 
   private shouldFail(error: unknown): boolean {
@@ -64,7 +61,7 @@ class PopupRevisionCoordinatorImpl implements PopupRevisionCoordinator {
 
   private async runAttempt(attempt: RefreshAttempt): Promise<void> {
     try {
-      const data = await this.dependencies.load(attempt.query, attempt.minimumRevision);
+      const data = await this.dependencies.load(attempt.minimumRevision);
       if (this.isCurrent(attempt)) this.dependencies.apply(data);
     } catch (error) {
       if (this.isCurrent(attempt) && this.shouldFail(error)) this.dependencies.fail();

@@ -2,10 +2,6 @@
   "version": 1,
   "files": [
     {
-      "path": "popup/popup.html",
-      "sha256": "e8fa6ab6c56550fac19ab5641f8c807954429c7af68210f9f9517424d6617d20"
-    },
-    {
       "path": "scripts/build/extension-build-plugin.ts",
       "sha256": "7a3a15ec2411cc1c8ba416f1b4ae0ebbe3a6d1cc049dbffc7f9666e9ec219ff2"
     },
@@ -200,10 +196,6 @@
     {
       "path": "src/popup/main.ts",
       "sha256": "7ad625ea6c1f3794018913fbef27b5ab71aa83d8e6054caeca388e8b5d9c55e5"
-    },
-    {
-      "path": "src/popup/popup.css",
-      "sha256": "94ce8fbefb3aecad4a0ce24d07b4c52ab11a87fda10d5b2d3ade185f4786ffc4"
     },
     {
       "path": "src/ui/latest-refresh-controller.test.ts",

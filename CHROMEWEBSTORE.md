@@ -68,6 +68,12 @@ Source of truth: [PRIVACY.md](PRIVACY.md). Do not claim that no personal data is
 - Support: https://github.com/chho/cocoon-extension/issues
 - Existing developer dashboard was accessible. The final submission confirmation had automatic publication enabled; Google acknowledged submission and the Status page showed Pending review.
 
+## Next local release — 0.8.3 (not submitted)
+
+Popup quick search is removed. The popup retains page status, exact hidden count, local totals, the five most recent blocks, removal/undo and the management entry. Search and filters remain on the full management page. Initial and successful-undo focus moves to the management entry.
+
+Before a future store submission, update both listing languages to remove claims that the toolbar popup offers quick search. The existing 0.8.2 submission and its descriptions above are unchanged; this local change has not been uploaded or published.
+
 ## Version history and readiness
 
 | Version | Status | Change |

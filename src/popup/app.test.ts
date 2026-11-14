@@ -47,7 +47,7 @@ function fixture(): JSDOM {
     </p><strong id="count"></strong><span id="count-inline"></span>
     <p id="connection-error" hidden>Cocoon 无法连接当前页面。</p>
     <strong id="author-total"></strong><strong id="tag-total"></strong>
-    <h2 id="records-title"></h2><input id="search"><p id="data-message"></p><ul id="records"></ul>
+    <h2 id="records-title">最近屏蔽</h2><p id="data-message"></p><ul id="records"></ul>
     <div id="undo-strip" hidden><button id="undo">撤销</button></div>
     <p id="save-error" hidden></p><button id="manage">管理全部</button>
   </main></body>`,
@@ -241,6 +241,36 @@ function assertUndoState(dom: JSDOM, visible: boolean): void {
   strictEqual(button?.disabled, !visible);
 }
 
+test("POPUP-011 source has no search and focuses the working management entry", async () => {
+  const dom = sourceFixture();
+  const document = dom.window.document;
+  strictEqual(document.querySelector("input, [role='searchbox']"), null);
+  const rpc = new RpcQueue();
+  queueStatus(rpc, "running", 9);
+  queueData(rpc, 7, [AUTHOR_ITEM], { authorCount: 12, tagCount: 3 });
+  let opened = 0;
+  const app = bootstrapPopup({
+    document,
+    window: dom.window as unknown as Window,
+    rpc,
+    storageChanges: { addListener() {} },
+    async openOptionsPage() {
+      opened += 1;
+    },
+  });
+  await settle();
+  strictEqual(document.activeElement?.id, "manage");
+  strictEqual(document.querySelector("#records-title")?.textContent, "最近屏蔽");
+  const page = rpc.queryRequests.find((request) => request.operation === "authors-page");
+  strictEqual(page?.input.search, "");
+  strictEqual(page?.input.limit, 5);
+  document.querySelector<HTMLButtonElement>("#manage")!.click();
+  await settle();
+  strictEqual(opened, 1);
+  app.dispose();
+  dom.window.close();
+});
+
 test("POPUP-010/AC-088 source uses a real hidden status dot with restrained static CSS", () => {
   const dom = sourceFixture();
   assertStatusView(dom, "checking", "正在检查…", "rgb(118, 126, 120)");
@@ -316,7 +346,7 @@ test("BUG-016 bootstrap requests only bounded summary and recent author data", a
   strictEqual("authors" in (rpc.queryRequests[0]?.input ?? {}), false);
 });
 
-test("BUG-016 recent/search preserves null aliases, platform links, and initial focus", async () => {
+test("POPUP-011 recent records preserve null aliases, platform links, and management focus", async () => {
   const dom = fixture();
   const rpc = new RpcQueue();
   const zhihu = {
@@ -332,7 +362,7 @@ test("BUG-016 recent/search preserves null aliases, platform links, and initial 
   bootstrap(dom, rpc);
   await settle();
 
-  strictEqual(dom.window.document.activeElement?.id, "search");
+  strictEqual(dom.window.document.activeElement?.id, "manage");
   const link = dom.window.document.querySelector<HTMLAnchorElement>("#records a.author-name");
   strictEqual(link?.href, "https://www.zhihu.com/people/author%2Fwith%20%3Fquery%23fragment%25");
   strictEqual(
@@ -340,28 +370,15 @@ test("BUG-016 recent/search preserves null aliases, platform links, and initial 
     "YouTube Author",
   );
 
-  queueData(rpc, 4, [youtube], { authorCount: 2, tagCount: 2 });
-  const search = dom.window.document.querySelector<HTMLInputElement>("#search")!;
-  search.value = "watch";
-  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  await settle();
-  const page = rpc.queryRequests.at(-1);
-  strictEqual(page?.operation, "authors-page");
-  strictEqual(page?.input.limit, 50);
-  strictEqual(page?.input.search, "watch");
-  strictEqual(dom.window.document.querySelectorAll("#records a.author-name").length, 0);
-  strictEqual(
-    dom.window.document.querySelector("#records span.author-name")?.textContent,
-    "YouTube Author",
-  );
+  strictEqual(dom.window.document.querySelector("#search"), null);
 });
 
-test("BUG-016 rapid search input never lets an older query overwrite the latest search", async () => {
+test("POPUP-011 overlapping recent refreshes never apply an older result", async () => {
   const dom = fixture();
   const rpc = new RpcQueue();
   queueStatus(rpc);
   queueData(rpc, 1, [AUTHOR_ITEM]);
-  bootstrap(dom, rpc);
+  const app = bootstrap(dom, rpc);
   await settle();
 
   const oldSummary = deferred<BlacklistQueryResponse>();
@@ -383,15 +400,12 @@ test("BUG-016 rapid search input never lets an older query overwrite the latest 
     [{ ...AUTHOR_ITEM, author: { ...AUTHOR, userId: "new", authorName: "New result" } }],
     { authorCount: 2 },
   );
-  const search = dom.window.document.querySelector<HTMLInputElement>("#search")!;
-  search.value = "old";
-  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  search.value = "new";
-  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  const first = app.refresh();
+  const second = app.refresh();
   oldSummary.resolve(
     createBlacklistQueryResponse("summary", true, { revision: 1, authorCount: 2, tagCount: 1 }),
   );
-  await settle();
+  await Promise.all([first, second]);
 
   strictEqual(
     dom.window.document.querySelector("#records")?.textContent?.includes("Old result"),
@@ -551,7 +565,7 @@ test("BUG-016 delayed removal starts undo only after its delta commits", async (
   assertUndoState(dom, false);
 });
 
-test("BUG-016 restore delta coordinates locally, clears undo, and restores search focus", async () => {
+test("POPUP-011 restore delta coordinates locally, clears undo, and restores management focus", async () => {
   const dom = fixture();
   installFakeClock(dom);
   const rpc = new RpcQueue();
@@ -589,7 +603,7 @@ test("BUG-016 restore delta coordinates locally, clears undo, and restores searc
     dom.window.document.querySelector("#records")?.textContent?.includes("Author One"),
     true,
   );
-  strictEqual(dom.window.document.activeElement?.id, "search");
+  strictEqual(dom.window.document.activeElement?.id, "manage");
 });
 
 test("BUG-016 an older pending removal delta cannot overwrite a newer revision refresh", async () => {

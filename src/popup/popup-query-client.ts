@@ -1,5 +1,4 @@
 import {
-  BLACKLIST_QUERY_PAGE_SIZE,
   createBlacklistQueryRequest,
   type BlacklistAuthorListItemDto,
   type BlacklistQueryError,
@@ -38,14 +37,13 @@ async function querySummary(
 async function queryAuthors(
   rpc: StrictBlacklistRpcClient,
   summary: BlacklistSummaryDto,
-  query: string,
 ): Promise<readonly BlacklistAuthorListItemDto[]> {
   const response = await rpc.query(
     createBlacklistQueryRequest("authors-page", {
       revision: summary.revision,
       cursor: null,
-      limit: query ? BLACKLIST_QUERY_PAGE_SIZE : POPUP_RECENT_LIMIT,
-      search: query,
+      limit: POPUP_RECENT_LIMIT,
+      search: "",
       searchScope: "author-or-tag",
       tagId: null,
       platformId: null,
@@ -61,23 +59,21 @@ async function queryAuthors(
 
 async function queryOnce(
   rpc: StrictBlacklistRpcClient,
-  query: string,
   minimumRevision: number,
 ): Promise<PopupQueryData> {
   const summary = await querySummary(rpc, minimumRevision);
-  const items = await queryAuthors(rpc, summary, query);
+  const items = await queryAuthors(rpc, summary);
   return { summary, items };
 }
 
 export async function queryPopupData(
   rpc: StrictBlacklistRpcClient,
-  query: string,
   minimumRevision: number,
 ): Promise<PopupQueryData> {
   try {
-    return await queryOnce(rpc, query, minimumRevision);
+    return await queryOnce(rpc, minimumRevision);
   } catch (error) {
     if (!(error instanceof PopupQueryError) || error.code !== "stale-cursor") throw error;
-    return queryOnce(rpc, query, minimumRevision);
+    return queryOnce(rpc, minimumRevision);
   }
 }

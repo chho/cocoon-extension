@@ -1,8 +1,6 @@
-import {
-  BLACKLIST_QUERY_PAGE_SIZE,
-  MAX_BLACKLIST_QUERY_CODE_POINTS,
-  type BlacklistAuthorListItemDto,
-  type BlacklistSummaryDto,
+import type {
+  BlacklistAuthorListItemDto,
+  BlacklistSummaryDto,
 } from "../core/blacklist-query-rpc-contract.ts";
 import type { BlacklistAuthorDto, CurrentPageStatus } from "../core/blacklist-rpc-contract.ts";
 import {
@@ -15,7 +13,7 @@ import {
   createPopupRevisionCoordinator,
   type PopupRevisionCoordinator,
 } from "./popup-revision-coordinator.ts";
-import { focusPopupSearch, renderPopupRecordList } from "./record-list-view.ts";
+import { renderPopupRecordList } from "./record-list-view.ts";
 import { createPopupUndoController, type PopupUndoController } from "./undo-controller.ts";
 
 export interface PopupAppDependencies {
@@ -39,8 +37,6 @@ interface PopupElements {
   readonly connectionError: HTMLElement;
   readonly authorTotal: HTMLElement;
   readonly tagTotal: HTMLElement;
-  readonly search: HTMLInputElement;
-  readonly recordsTitle: HTMLElement;
   readonly dataMessage: HTMLElement;
   readonly records: HTMLUListElement;
   readonly undoStrip: HTMLElement;
@@ -73,8 +69,6 @@ function popupElements(document: Document): PopupElements {
     connectionError: requiredElement(document, "#connection-error"),
     authorTotal: requiredElement(document, "#author-total"),
     tagTotal: requiredElement(document, "#tag-total"),
-    search: requiredElement(document, "#search"),
-    recordsTitle: requiredElement(document, "#records-title"),
     dataMessage: requiredElement(document, "#data-message"),
     records: requiredElement(document, "#records"),
     undoStrip: requiredElement(document, "#undo-strip"),
@@ -89,23 +83,8 @@ function showPopupSaveError(element: HTMLElement, message = "更改未保存，�
   element.hidden = false;
 }
 
-function normalizedSearch(input: HTMLInputElement): string {
-  const bounded = Array.from(input.value).slice(0, MAX_BLACKLIST_QUERY_CODE_POINTS).join("");
-  if (bounded !== input.value) input.value = bounded;
-  return bounded.trim();
-}
-
 function sameAuthor(left: BlacklistAuthorDto, right: BlacklistAuthorDto): boolean {
   return left.platformId === right.platformId && left.userId === right.userId;
-}
-
-function itemMatchesSearch(item: BlacklistAuthorListItemDto, search: string): boolean {
-  if (!search) return true;
-  const normalized = search.toLocaleLowerCase("zh-CN");
-  return (
-    item.author.authorName.toLocaleLowerCase("zh-CN").includes(normalized) ||
-    item.tag.name.toLocaleLowerCase("zh-CN").includes(normalized)
-  );
 }
 
 async function initializeStatus(
@@ -143,15 +122,14 @@ class PopupAppController implements PopupApp {
       () => this.hideExpiredUndo(),
     );
     this.revisions = createPopupRevisionCoordinator({
-      getQuery: () => normalizedSearch(this.elements.search),
       hasData: () => this.summary !== null,
-      load: (query, minimumRevision) => queryPopupData(dependencies.rpc, query, minimumRevision),
+      load: (minimumRevision) => queryPopupData(dependencies.rpc, minimumRevision),
       apply: (data) => this.applyQueryData(data),
       fail: () => this.showUnreadableStorage(),
     });
     this.elements.undoButton.disabled = true;
     this.bindEvents();
-    focusPopupSearch(this.elements.search);
+    this.elements.manageButton.focus({ preventScroll: true });
     void initializeStatus(dependencies.rpc, (status, count) => this.setStatus(status, count));
     void this.refresh();
   }
@@ -184,12 +162,9 @@ class PopupAppController implements PopupApp {
     if (!this.summary) return;
     this.elements.authorTotal.textContent = String(this.summary.authorCount);
     this.elements.tagTotal.textContent = String(this.summary.tagCount);
-    const query = normalizedSearch(this.elements.search);
-    this.elements.recordsTitle.textContent = query ? "搜索结果" : "最近屏蔽";
     renderPopupRecordList({
       list: this.elements.records,
       items: this.items,
-      queryActive: Boolean(query),
       writesEnabled: this.writesEnabled,
       onRemove: (author, button) => {
         void this.removeAuthor(author, button);
@@ -298,13 +273,11 @@ class PopupAppController implements PopupApp {
   }
 
   private coordinateRestoredItem(item: BlacklistAuthorListItemDto | null): void {
-    const query = normalizedSearch(this.elements.search);
-    if (!item || !itemMatchesSearch(item, query)) return;
+    if (!item) return;
     const withoutDuplicate = this.items.filter(
       (candidate) => !sameAuthor(candidate.author, item.author),
     );
-    const limit = query ? BLACKLIST_QUERY_PAGE_SIZE : POPUP_RECENT_LIMIT;
-    this.items = [item, ...withoutDuplicate].slice(0, limit);
+    this.items = [item, ...withoutDuplicate].slice(0, POPUP_RECENT_LIMIT);
   }
 
   private async restoreRemovedAuthor(): Promise<void> {
@@ -337,7 +310,7 @@ class PopupAppController implements PopupApp {
       this.coordinateRestoredItem(restoredItem);
       this.renderData();
     }
-    focusPopupSearch(this.elements.search);
+    this.elements.manageButton.focus({ preventScroll: true });
     void this.revisions.request(data.revision ?? 0);
   }
 
@@ -350,15 +323,6 @@ class PopupAppController implements PopupApp {
     }
   }
 
-  private handleSearchInput(): void {
-    normalizedSearch(this.elements.search);
-    this.elements.recordsTitle.textContent = this.elements.search.value.trim()
-      ? "搜索结果"
-      : "最近屏蔽";
-    this.elements.records.replaceChildren();
-    void this.refresh();
-  }
-
   private handleStorageChange(changes: Record<string, unknown>, areaName: string): void {
     const signal = parseBlacklistRevisionChange(changes, areaName);
     if (!signal || signal.revision <= (this.summary?.revision ?? -1)) return;
@@ -366,7 +330,6 @@ class PopupAppController implements PopupApp {
   }
 
   private bindEvents(): void {
-    this.elements.search.addEventListener("input", () => this.handleSearchInput());
     this.elements.undoButton.addEventListener("click", () => {
       void this.restoreRemovedAuthor();
     });

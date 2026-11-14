@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 
 import type { BlacklistAuthorDto } from "../core/blacklist-rpc-contract.ts";
 import type { AuthorListItem } from "../ui/blacklist-list-values.ts";
-import { focusPopupSearch, renderPopupRecordList } from "./record-list-view.ts";
+import { renderPopupRecordList } from "./record-list-view.ts";
 import { POPUP_UNDO_DURATION_MS, createPopupUndoController } from "./undo-controller.ts";
 
 const INTERNAL_USER_ID = "private-user-token";
@@ -123,11 +123,10 @@ test("POPUP-005 failed restore attempts keep the exact pending record coherent",
 });
 
 test("PROFILE-001/AC-086 record rendering links author names to encoded Zhihu profiles", () => {
-  const dom = new JSDOM("<input id='search'><ul id='records'></ul>");
+  const dom = new JSDOM("<ul id='records'></ul>");
   const document = dom.window.document;
   const list = document.querySelector<HTMLUListElement>("#records");
-  const search = document.querySelector<HTMLInputElement>("#search");
-  if (!list || !search) {
+  if (!list) {
     throw new Error("test fixture is incomplete");
   }
   const author = record();
@@ -139,7 +138,6 @@ test("PROFILE-001/AC-086 record rendering links author names to encoded Zhihu pr
   renderPopupRecordList({
     list,
     items: [item],
-    queryActive: false,
     writesEnabled: true,
     onRemove(value) {
       removed = value;
@@ -160,9 +158,6 @@ test("PROFILE-001/AC-086 record rendering links author names to encoded Zhihu pr
   strictEqual(button?.getAttribute("aria-label"), "解除屏蔽 Visible Author");
   button?.click();
   strictEqual(removed, author);
-
-  focusPopupSearch(search);
-  strictEqual(document.activeElement, search);
 });
 
 test("POPUP-009 malformed/unreadable state can render records read-only", () => {
@@ -179,7 +174,6 @@ test("POPUP-009 malformed/unreadable state can render records read-only", () => 
         tag: { tagId: INTERNAL_TAG_ID, name: "Reading", isDefault: false },
       },
     ],
-    queryActive: false,
     writesEnabled: false,
     onRemove() {
       throw new Error("disabled write action must not run");
@@ -188,7 +182,7 @@ test("POPUP-009 malformed/unreadable state can render records read-only", () => 
   strictEqual(list.querySelector<HTMLButtonElement>("button")?.disabled, true);
 });
 
-test("POPUP-004 record rendering distinguishes recent and search empty states", () => {
+test("POPUP-011 empty recent list retains its explicit empty state", () => {
   const dom = new JSDOM("<ul id='records'></ul>");
   const list = dom.window.document.querySelector<HTMLUListElement>("#records");
   if (!list) {
@@ -200,8 +194,6 @@ test("POPUP-004 record rendering distinguishes recent and search empty states", 
     writesEnabled: true,
     onRemove() {},
   } as const;
-  renderPopupRecordList({ ...base, queryActive: false });
+  renderPopupRecordList(base);
   strictEqual(list.textContent, "暂无最近屏蔽记录");
-  renderPopupRecordList({ ...base, queryActive: true });
-  strictEqual(list.textContent, "没有匹配的本地记录");
 });

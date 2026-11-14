@@ -1,6 +1,11 @@
 :root {
   color-scheme: light;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   color: #202622;
   background: #fbfcfa;
   font-synthesis: none;
@@ -22,17 +27,12 @@ body {
   overflow-y: auto;
 }
 
-button,
-input {
-  font: inherit;
-}
-
 button {
+  font: inherit;
   color: inherit;
 }
 
 button:focus-visible,
-input:focus-visible,
 a:focus-visible {
   outline: 2px solid #63766a;
   outline-offset: 2px;
@@ -145,21 +145,6 @@ h2 {
   letter-spacing: 0.08em;
 }
 
-input[type="search"] {
-  width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid #d9ded9;
-  border-radius: 5px;
-  color: #202622;
-  background: #f3f5f2;
-  font-size: 13px;
-}
-
-input[type="search"]::placeholder {
-  color: #7d857f;
-}
-
 .data-message,
 .empty {
   padding: 18px 4px;
@@ -267,18 +252,6 @@ input[type="search"]::placeholder {
 
 .manage:hover {
   background: #f3f5f2;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

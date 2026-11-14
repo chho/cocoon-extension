@@ -1,15 +1,21 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cocoon</title>
   </head>
   <body>
     <main>
       <header class="popup-header">
         <h1>Cocoon</h1>
-        <p id="page-status" class="status" data-state="checking" aria-label="页面状态：正在检查…" aria-live="polite">
+        <p
+          id="page-status"
+          class="status"
+          data-state="checking"
+          aria-label="页面状态：正在检查…"
+          aria-live="polite"
+        >
           <span class="status-dot" aria-hidden="true"></span>
           <span id="page-status-text">正在检查…</span>
         </p>
@@ -28,8 +34,6 @@
 
       <section class="records-section" aria-labelledby="records-title">
         <h2 id="records-title">最近屏蔽</h2>
-        <label class="visually-hidden" for="search">搜索作者或标签</label>
-        <input id="search" type="search" autocomplete="off" placeholder="搜索作者或标签" aria-controls="records">
         <p id="data-message" class="data-message" role="status">正在读取本地数据…</p>
         <ul id="records" class="records" aria-live="polite"></ul>
       </section>

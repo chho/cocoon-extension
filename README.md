@@ -52,7 +52,7 @@ No dashboard to configure before browsing. No cloud account. No decorative noise
 
 - Shows whether Cocoon is running on the current page.
 - Displays the exact number of cards and comments hidden during the current page session.
-- Provides quick local search across authors and tags.
+- Shows the five most recently blocked authors; search and filtering stay in the full management page.
 - Supports one-click removal with an eight-second undo window.
 
 ### In the management page
